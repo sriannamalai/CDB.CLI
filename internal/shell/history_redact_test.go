@@ -101,6 +101,38 @@ func TestHistoryRedactsCredentialsInTypedLines(t *testing.T) {
 			line: "ls /movies --limit 3",
 			want: "ls /movies --limit 3",
 		},
+		// A schemeless "user:pass@host" is only a credential where a command
+		// takes a URL. An option value that happens to have the same shape --
+		// a start key, a document id, a field name -- belongs to a command
+		// that never sees a server address, and rewriting it would silently
+		// change what the operator re-runs.
+		{
+			name: "an option value shaped like a credential is stored verbatim",
+			line: "ls /db --start a:b@c",
+			want: "ls /db --start a:b@c",
+		},
+		{
+			name: "a document id shaped like a credential is stored verbatim",
+			line: "cat /db/a:b@c",
+			want: "cat /db/a:b@c",
+		},
+		{
+			name: "a schemeless credential to cp is redacted",
+			line: "cp /movies admin:hunter2@remote.example.com:5984",
+			want: "cp /movies remote.example.com:5984",
+		},
+		{
+			name: "a schemeless credential to profiles add is redacted",
+			line: "profiles add prod admin:hunter2@db.example.com",
+			want: "profiles add prod db.example.com",
+		},
+		// A full URL carries its own evidence, so it is redacted whatever the
+		// command is.
+		{
+			name: "a URL with credentials is redacted under any command",
+			line: "find /db https://admin:hunter2@db.example.com",
+			want: "find /db https://db.example.com",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

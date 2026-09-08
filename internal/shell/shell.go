@@ -71,6 +71,7 @@ func (h *filteredHistory) Write(line string) (int, error) {
 // are recognisably a server URL are touched: a document id that merely
 // contains an "@" must survive intact.
 func redactLine(line string) string {
+	schemeless := takesServerAddress(line)
 	var b strings.Builder
 	b.Grow(len(line))
 	start := -1
@@ -82,7 +83,7 @@ func redactLine(line string) string {
 			continue
 		}
 		if start >= 0 {
-			b.WriteString(redactToken(line[start:i]))
+			b.WriteString(redactToken(line[start:i], schemeless))
 			start = -1
 		}
 		if i < len(line) {
@@ -92,17 +93,44 @@ func redactLine(line string) string {
 	return b.String()
 }
 
+// urlCommands are the commands whose arguments can be a server address typed
+// without a scheme. Only there is "user:pass@host" read as a credential: under
+// any other command a token of that shape is a start key, a document id or a
+// field value, and rewriting it would change the command the operator re-runs.
+var urlCommands = map[string]bool{
+	"connect":   true,
+	"replicate": true,
+	"cp":        true,
+}
+
+// takesServerAddress reports whether the line's command is one that accepts a
+// server address or a profile, and so may carry a schemeless credential.
+func takesServerAddress(line string) bool {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return false
+	}
+	if urlCommands[fields[0]] {
+		return true
+	}
+	// "profiles" only touches a URL in its "add" subcommand; "profiles remove
+	// prod" and "profiles list" take names.
+	return fields[0] == "profiles" && len(fields) > 1 && fields[1] == "add"
+}
+
 func isLineSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
 // redactToken strips the userinfo from one word of a command line, leaving
-// anything that is not a credential-carrying URL exactly as it was.
-func redactToken(tok string) string {
+// anything that is not a credential-carrying URL exactly as it was. schemeless
+// says whether a "user:pass@host" without a scheme counts as a credential here;
+// see takesServerAddress.
+func redactToken(tok string, schemeless bool) string {
 	// Shell quoting is part of the raw line. Analyse and rewrite the quoted
 	// text, then put the quotes back, so 'https://admin:pw@host' is treated
 	// exactly like the bare form and a quoted JSON argument is judged on its
 	// JSON rather than on a stray trailing quote.
 	open, body, closing := splitQuotes(tok)
-	if !carriesUserinfo(body) {
+	if !carriesUserinfo(body, schemeless) {
 		return tok
 	}
 	return open + couch.RedactURL(body) + closing
@@ -134,8 +162,10 @@ var userPattern = regexp.MustCompile(`^[A-Za-z0-9._~%+-]+$`)
 // carriesUserinfo reports whether tok is a URL, or a schemeless
 // "user:pass@host", whose authority holds userinfo. Both forms require the
 // host half to look like a host: everything else is an argument that merely
-// contains an "@".
-func carriesUserinfo(tok string) bool {
+// contains an "@". A token carrying a scheme is judged on its own evidence
+// whatever the command is; the schemeless form is only read as a credential
+// when schemeless is set.
+func carriesUserinfo(tok string, schemeless bool) bool {
 	if i := strings.Index(tok, "://"); i >= 0 {
 		authority := tok[i+3:]
 		if j := strings.IndexAny(authority, "/?#"); j >= 0 {
@@ -144,7 +174,7 @@ func carriesUserinfo(tok string) bool {
 		at := strings.LastIndex(authority, "@")
 		return at > 0 && hostPattern.MatchString(authority[at+1:])
 	}
-	return schemelessCredential(tok)
+	return schemeless && schemelessCredential(tok)
 }
 
 // schemelessCredential recognises "user:pass@host", which url.Parse reads as a
