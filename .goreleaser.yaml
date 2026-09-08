@@ -1,0 +1,92 @@
+version: 2
+
+project_name: cdb
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  # macOS needs cgo for the Keychain credential backend. Verified: with
+  # CGO_ENABLED=0 the keychain backend disappears from
+  # keyring.AvailableBackends() and secrets fall back to an encrypted file.
+  # This build runs on a macOS runner, which can produce both arm64 and amd64.
+  - id: cdb-darwin
+    main: ./cmd/cdb
+    binary: cdb
+    env:
+      - CGO_ENABLED=1
+    goos: [darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  # Linux (secret-service, kwallet) and Windows (wincred) backends are pure Go,
+  # so those builds stay static.
+  - id: cdb-static
+    main: ./cmd/cdb
+    binary: cdb
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    ids: [cdb-darwin, cdb-static]
+    name_template: "cdb_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+homebrew_casks:
+  - name: cdb
+    repository:
+      owner: sriannamalai
+      name: homebrew-tap
+    homepage: "https://github.com/sriannamalai/CDB.CLI"
+    description: "Interactive CouchDB command line client"
+    license: "Apache-2.0"
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cdb"]
+          end
+
+scoops:
+  - name: cdb
+    repository:
+      owner: sriannamalai
+      name: scoop-bucket
+    homepage: "https://github.com/sriannamalai/CDB.CLI"
+    description: "Interactive CouchDB command line client"
+    license: "Apache-2.0"
+
+release:
+  draft: false
+  prerelease: auto

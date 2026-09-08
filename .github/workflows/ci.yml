@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      couchdb:
+        image: couchdb:3.5
+        env:
+          COUCHDB_USER: admin
+          COUCHDB_PASSWORD: password
+        ports:
+          - 5984:5984
+        options: >-
+          --health-cmd "curl -fsS http://localhost:5984/_up || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: true
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Create system databases
+        run: |
+          curl -fsS -X PUT http://admin:password@localhost:5984/_users
+          curl -fsS -X PUT http://admin:password@localhost:5984/_replicator
+
+      - name: Unit and integration tests
+        env:
+          CDB_TEST_URL: http://localhost:5984/
+          CDB_TEST_USER: admin
+          CDB_TEST_PASSWORD: password
+          CDB_KEYRING_BACKEND: file
+        run: go test ./... -race -count=1
+
+      - name: End-to-end smoke test
+        env:
+          CDB_URL: http://localhost:5984
+          CDB_USER: admin
+          CDB_PASSWORD: password
+        run: |
+          go build -o ./cdb ./cmd/cdb
+          ./cdb version
+          ./cdb mkdir /e2e
+          echo '{"name":"alice"}' | ./cdb put /e2e/alice
+          ./cdb cat /e2e/alice
+          ./cdb ls /e2e
+          ./cdb find /e2e '{"name":"alice"}'
+          printf 'attachment body' > /tmp/e2e.txt
+          ./cdb attach /e2e/alice /tmp/e2e.txt
+          ./cdb fetch /e2e/alice/e2e.txt /tmp/e2e.out
+          cmp /tmp/e2e.txt /tmp/e2e.out
+          ./cdb backup /e2e /tmp/e2e.cdb.gz
+          ./cdb restore /tmp/e2e.cdb.gz /e2e_copy --create
+          ./cdb info /e2e_copy
+          ./cdb rmdir /e2e --yes
+          ./cdb rmdir /e2e_copy --yes
+
+  build-matrix:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: true
+      - run: go build ./...
+      - run: go test ./internal/path/ ./internal/shell/ ./internal/config/ -count=1
+        env:
+          CDB_KEYRING_BACKEND: file

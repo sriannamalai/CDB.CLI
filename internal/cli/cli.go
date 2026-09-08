@@ -76,6 +76,14 @@ func NewRoot(reg *command.Registry, s *session.Session, build BuildInfo) *cobra.
 		}
 		root.AddCommand(newSubcommand(reg, c, s))
 	}
+
+	// Cobra normally adds this during ExecuteC. Adding it here as well means
+	// the tree NewRoot returns is the same tree Execute runs, which is what
+	// the completion tests inspect. InitDefaultCompletionCmd is a no-op when
+	// the command already exists, so calling it twice is safe. It must come
+	// after the subcommand loop: cobra skips it for a command with no
+	// subcommands.
+	root.InitDefaultCompletionCmd()
 	return root
 }
 
