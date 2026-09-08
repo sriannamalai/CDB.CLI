@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,6 +66,9 @@ func Backup() Command {
 				res, serr := backup.Scan(f)
 				if serr != nil {
 					f.Close()
+					if errors.Is(serr, backup.ErrNotADump) {
+						return nil, Usagef("backup", "%s is not a cdb dump, so --resume would overwrite it: pick another file, or remove --resume to start a new dump", file)
+					}
 					return nil, serr
 				}
 				if res.Complete {

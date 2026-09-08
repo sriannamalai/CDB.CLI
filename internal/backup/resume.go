@@ -47,6 +47,11 @@ func (c *countingReader) ReadByte() (byte, error) {
 	return b, err
 }
 
+// ErrNotADump means the file exists and is readable but was not written by
+// "cdb backup". Callers match on it to report the mistake as their own usage
+// error rather than passing this package's sentence through.
+var ErrNotADump = errors.New("is not a cdb dump")
+
 // Scan walks an existing dump file member by member and reports the last point
 // at which it can be safely resumed. A partially written trailing member is
 // ignored.
@@ -81,7 +86,11 @@ func Scan(f *os.File) (Resume, error) {
 	// record. Returning Resume{Offset: 0} for one would invite the caller to
 	// truncate an unrelated gzip file to nothing.
 	notADump := func() (Resume, error) {
-		return Resume{}, fmt.Errorf("backup: %s is not a cdb dump", f.Name())
+		// Wrapped rather than formatted in, so a caller can recognise this
+		// without matching on the sentence: naming the wrong file is a usage
+		// mistake, and the command that reports it is the one the operator
+		// ran, not this package.
+		return Resume{}, fmt.Errorf("%s %w", f.Name(), ErrNotADump)
 	}
 	first := true
 	for {

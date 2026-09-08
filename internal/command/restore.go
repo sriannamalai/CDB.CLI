@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -92,6 +93,11 @@ func Restore() Command {
 			// still has to surface those itself.
 			scan, err := backup.Scan(f)
 			if err != nil {
+				if errors.Is(err, backup.ErrNotADump) {
+					// Naming the wrong file is a usage mistake, so exit 2, and
+					// under the command the operator actually ran.
+					return nil, Usagef("restore", "%s is not a cdb dump: it was not written by \"cdb backup\"", file)
+				}
 				return nil, err
 			}
 			if !scan.Complete && !inv.Bool("partial") {

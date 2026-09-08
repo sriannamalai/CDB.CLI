@@ -3,6 +3,7 @@ package command
 import (
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -270,6 +271,15 @@ func TestRestoreRejectsAFileThatIsNotADump(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not a cdb dump") {
 		t.Errorf("error = %v, want it to say the file is not a dump", err)
+	}
+	// Naming the wrong file is a usage mistake (exit 2), not a command
+	// failure — and the command the operator ran was restore, not backup.
+	var ue *UsageError
+	if !errors.As(err, &ue) {
+		t.Errorf("error is %T, want a *UsageError so the front-ends exit 2", err)
+	}
+	if strings.Contains(err.Error(), "backup:") {
+		t.Errorf("error = %v, but the command the operator ran was restore", err)
 	}
 	if srv.Last("HEAD", "/target") != nil {
 		t.Error("restore touched the server before reading the dump")
