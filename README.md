@@ -336,6 +336,11 @@ curl -X PUT http://admin:password@localhost:15984/_replicator
 CDB_TEST_URL=http://localhost:15984/ go test ./... # plus integration tests
 ```
 
+The replication round-trip test needs the server to be able to dial itself: the
+container above publishes 5984 as 15984, so set
+`CDB_TEST_REPLICATION_URL=http://localhost:5984/` alongside `CDB_TEST_URL`. CI
+needs neither, because its service container reaches itself at the same address.
+
 The JWT integration test needs a server with the JWT handler enabled, which is
 not CouchDB's default. Configure one and restart it — the handler list is read
 at start-up and never re-read:
