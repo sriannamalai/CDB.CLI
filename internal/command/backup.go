@@ -141,7 +141,14 @@ $ cdb backup /movies movies.cdb.gz --resume`,
 				}
 			}()
 			for {
-				page, err := s.Client.Changes(ctx, t.Database, lastSeq, batch)
+				page, err := s.Client.Changes(ctx, t.Database, couch.ChangesOptions{
+					Since: lastSeq,
+					Limit: batch,
+					// A dump has to keep every leaf revision of a conflicted
+					// document, so backup reads the feed the wide way. tail
+					// reads the same feed with the default main_only.
+					Style: couch.StyleAllDocs,
+				})
 				if err != nil {
 					return nil, err
 				}

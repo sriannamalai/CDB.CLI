@@ -10,14 +10,84 @@ import (
 	"github.com/sriannamalai/CDB.CLI/internal/path"
 )
 
+// Feed styles for ChangesOptions.Style.
+const (
+	// StyleMainOnly returns one change per document — the winning revision.
+	// It is the zero value, and what "tail" wants.
+	StyleMainOnly = "main_only"
+	// StyleAllDocs returns every leaf revision of a changed document, so a
+	// conflicted document is not silently reduced to its winner. It is what
+	// "backup" wants.
+	StyleAllDocs = "all_docs"
+)
+
+// ChangesOptions configure a read of the changes feed. The zero value asks for
+// the whole feed from the beginning, one row per document.
+type ChangesOptions struct {
+	// Since is the update sequence to start from. "" means "0"; the server
+	// also accepts "now", which is where a follow starts by default.
+	Since string
+	// Limit bounds the normal feed. 0 reads to the end of it. The continuous
+	// feed ignores this: it has no end to bound.
+	Limit int
+	// Style is StyleMainOnly (the zero value) or StyleAllDocs.
+	Style string
+	// IncludeDocs asks the server for each changed document's body, which
+	// arrives in ChangeRow.Doc.
+	IncludeDocs bool
+	// Filter names a design-document filter as "ddoc/name", or is empty.
+	Filter string
+	// HeartbeatMS is how often the server sends a blank keep-alive line on the
+	// continuous feed. 0 sends none. The normal feed ignores it.
+	HeartbeatMS int
+}
+
+// changesQuery builds the query string for either feed. It is shared by
+// Changes and ChangesFollow so the two cannot drift on defaults.
+func (o ChangesOptions) changesQuery(continuous bool) url.Values {
+	q := url.Values{}
+	if continuous {
+		q.Set("feed", "continuous")
+	} else {
+		q.Set("feed", "normal")
+	}
+	style := o.Style
+	if style == "" {
+		style = StyleMainOnly
+	}
+	q.Set("style", style)
+	since := o.Since
+	if since == "" {
+		since = "0"
+	}
+	q.Set("since", since)
+	if !continuous && o.Limit > 0 {
+		q.Set("limit", strconv.Itoa(o.Limit))
+	}
+	if o.IncludeDocs {
+		q.Set("include_docs", "true")
+	}
+	if o.Filter != "" {
+		q.Set("filter", o.Filter)
+	}
+	if continuous && o.HeartbeatMS > 0 {
+		q.Set("heartbeat", strconv.Itoa(o.HeartbeatMS))
+	}
+	return q
+}
+
 // ChangeRow is one entry of the changes feed.
 type ChangeRow struct {
 	ID      string
 	Seq     string
 	Deleted bool
-	// Revs holds every leaf revision, because the feed is read with
-	// style=all_docs so conflicts are not lost.
+	// Revs holds every revision the row named. Under StyleAllDocs that is
+	// every leaf revision, so conflicts are not lost; under StyleMainOnly it
+	// holds exactly one.
 	Revs []string
+	// Doc is the changed document's body, set only when
+	// ChangesOptions.IncludeDocs is.
+	Doc json.RawMessage
 }
 
 // ChangesPage is one batch of the changes feed.
@@ -27,45 +97,45 @@ type ChangesPage struct {
 	Pending int64
 }
 
-// Changes reads one batch of the normal changes feed with style=all_docs.
+// changeLine is the wire shape of one entry, shared by both feeds: the normal
+// feed nests them under "results", the continuous feed writes one per line.
+type changeLine struct {
+	Seq     json.RawMessage `json:"seq"`
+	ID      string          `json:"id"`
+	Deleted bool            `json:"deleted"`
+	Changes []struct {
+		Rev string `json:"rev"`
+	} `json:"changes"`
+	Doc json.RawMessage `json:"doc"`
+}
+
+func (l changeLine) toRow() ChangeRow {
+	row := ChangeRow{ID: l.ID, Seq: seqString(l.Seq), Deleted: l.Deleted, Doc: l.Doc}
+	for _, ch := range l.Changes {
+		row.Revs = append(row.Revs, ch.Rev)
+	}
+	return row
+}
+
+// Changes reads one batch of the normal changes feed.
 //
-// CouchDB does not honour revs=true on _changes (verified on 3.5.2), so this
-// returns ids and leaf revisions only; use BulkGet to fetch full documents
-// including _revisions.
-func (c *Client) Changes(ctx context.Context, db, since string, limit int) (ChangesPage, error) {
-	q := url.Values{}
-	q.Set("feed", "normal")
-	q.Set("style", "all_docs")
-	if since == "" {
-		since = "0"
-	}
-	q.Set("since", since)
-	if limit > 0 {
-		q.Set("limit", strconv.Itoa(limit))
-	}
+// CouchDB does not honour revs=true on _changes (verified on 3.5.2), so a row
+// carries ids and revisions only; use BulkGet to fetch full documents
+// including _revisions. IncludeDocs asks for bodies, but they arrive without
+// _revisions for the same reason.
+func (c *Client) Changes(ctx context.Context, db string, opts ChangesOptions) (ChangesPage, error) {
 	var body struct {
-		Results []struct {
-			Seq     json.RawMessage `json:"seq"`
-			ID      string          `json:"id"`
-			Deleted bool            `json:"deleted"`
-			Changes []struct {
-				Rev string `json:"rev"`
-			} `json:"changes"`
-		} `json:"results"`
+		Results []changeLine    `json:"results"`
 		LastSeq json.RawMessage `json:"last_seq"`
 		Pending int64           `json:"pending"`
 	}
-	apiPath := "/" + path.Encode(db) + "/_changes?" + q.Encode()
+	apiPath := "/" + path.Encode(db) + "/_changes?" + opts.changesQuery(false).Encode()
 	if err := c.DoJSON(ctx, "GET", apiPath, nil, &body, "read", fmt.Sprintf("changes for %q", db)); err != nil {
 		return ChangesPage{}, err
 	}
 	page := ChangesPage{LastSeq: seqString(body.LastSeq), Pending: body.Pending}
 	for _, r := range body.Results {
-		row := ChangeRow{ID: r.ID, Seq: seqString(r.Seq), Deleted: r.Deleted}
-		for _, ch := range r.Changes {
-			row.Revs = append(row.Revs, ch.Rev)
-		}
-		page.Rows = append(page.Rows, row)
+		page.Rows = append(page.Rows, r.toRow())
 	}
 	return page, nil
 }

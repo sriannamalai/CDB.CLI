@@ -16,14 +16,18 @@ func TestChangesReadsIDsAndLeafRevs(t *testing.T) {
 		{"seq":"2-y","id":"b","deleted":true,"changes":[{"rev":"2-bb"},{"rev":"2-cc"}]}],
 		"last_seq":"2-y","pending":7}`)
 	c := newTestClient(t, srv)
-	page, err := c.Changes(context.Background(), "mydb", "0", 100)
+	// all_docs is no longer the hard-coded default, so backup's style is now
+	// asked for explicitly — which is the point of the options struct.
+	page, err := c.Changes(context.Background(), "mydb", ChangesOptions{
+		Since: "0", Limit: 100, Style: StyleAllDocs,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Rows) != 2 || page.LastSeq != "2-y" || page.Pending != 7 {
 		t.Fatalf("page = %+v", page)
 	}
-	if page.Rows[1].Deleted != true || len(page.Rows[1].Revs) != 2 {
+	if !page.Rows[1].Deleted || len(page.Rows[1].Revs) != 2 {
 		t.Errorf("row 1 = %+v", page.Rows[1])
 	}
 	req := srv.Last("GET", "/mydb/_changes")
@@ -32,6 +36,80 @@ func TestChangesReadsIDsAndLeafRevs(t *testing.T) {
 	}
 	if req.Query("feed") != "normal" {
 		t.Errorf("feed = %q, want normal", req.Query("feed"))
+	}
+}
+
+func TestChangesSendsEveryOption(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/_changes", 200, `{"results":[
+		{"seq":"1-x","id":"a","changes":[{"rev":"1-aa"}],"doc":{"_id":"a","n":1}},
+		{"seq":"2-y","id":"b","deleted":true,"changes":[{"rev":"2-bb"}]}],
+		"last_seq":"2-y","pending":7}`)
+	c := newTestClient(t, srv)
+
+	page, err := c.Changes(context.Background(), "mydb", ChangesOptions{
+		Since:       "1-x",
+		Limit:       50,
+		Style:       StyleAllDocs,
+		IncludeDocs: true,
+		Filter:      "app/by_type",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := srv.Last("GET", "/mydb/_changes")
+	if req == nil {
+		t.Fatal("no _changes request reached the server")
+	}
+	for _, tc := range []struct{ key, want string }{
+		{"feed", "normal"},
+		{"since", "1-x"},
+		{"limit", "50"},
+		{"style", "all_docs"},
+		{"include_docs", "true"},
+		{"filter", "app/by_type"},
+	} {
+		if got := req.Query(tc.key); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+	if req.Query("heartbeat") != "" {
+		t.Errorf("heartbeat = %q, want empty on the normal feed", req.Query("heartbeat"))
+	}
+	if len(page.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(page.Rows))
+	}
+	if page.Rows[0].Seq != "1-x" || page.Rows[0].Revs[0] != "1-aa" {
+		t.Errorf("row 0 = %+v", page.Rows[0])
+	}
+	if string(page.Rows[0].Doc) != `{"_id":"a","n":1}` {
+		t.Errorf("row 0 doc = %s", page.Rows[0].Doc)
+	}
+	if !page.Rows[1].Deleted {
+		t.Error("row 1 is not marked deleted")
+	}
+	if page.LastSeq != "2-y" || page.Pending != 7 {
+		t.Errorf("page = %+v", page)
+	}
+}
+
+func TestChangesDefaultsStyleAndSince(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/_changes", 200, `{"results":[],"last_seq":"0","pending":0}`)
+	c := newTestClient(t, srv)
+
+	if _, err := c.Changes(context.Background(), "mydb", ChangesOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	req := srv.Last("GET", "/mydb/_changes")
+	if got := req.Query("style"); got != "main_only" {
+		t.Errorf("style = %q, want main_only", got)
+	}
+	if got := req.Query("since"); got != "0" {
+		t.Errorf("since = %q, want 0", got)
+	}
+	if got := req.Query("limit"); got != "" {
+		t.Errorf("limit = %q, want empty when Limit is 0", got)
 	}
 }
 
