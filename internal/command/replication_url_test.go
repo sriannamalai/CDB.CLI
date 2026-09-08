@@ -203,3 +203,56 @@ func TestGuidedConnectTakesTheReplicationURLFromTheEnvironment(t *testing.T) {
 		t.Errorf("saved profile = %+v", p)
 	}
 }
+
+// Only the replication URL is layered onto the walk-through's answers. An
+// answer typed at a prompt is not the config file the CDB_* overrides exist to
+// beat: overriding the URL, user name or auth kind a second after the operator
+// typed them would be a silent contradiction of what they were just shown.
+func TestGuidedConnectDoesNotOverrideTheTypedAnswersFromTheEnvironment(t *testing.T) {
+	srv := couchtest.New(t)
+	other := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), map[string]string{
+		"CDB_URL":             other.URL(),
+		"CDB_USER":            "someone-else",
+		"CDB_PASSWORD":        "hunter2",
+		"CDB_REPLICATION_URL": "http://couchdb:5984",
+	})
+	s := newSession(t)
+	s.Prefs.Interactive = true
+	s.SetStdin(strings.NewReader(srv.URL() + "\nnone\nlocal\ny\n"))
+
+	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Client.URL(); got != srv.URL() {
+		t.Errorf("connected to %q, want the URL typed at the prompt %q", got, srv.URL())
+	}
+	if len(other.Requests()) != 0 {
+		t.Errorf("CDB_URL was dialled instead of the typed answer: %d requests", len(other.Requests()))
+	}
+	// The replication URL is the one key the walk-through never asks for, so it
+	// is the one key the environment may still supply.
+	if got := s.Client.ReplicationURL(); got != "http://couchdb:5984" {
+		t.Errorf("ReplicationURL() = %q, want the environment's value", got)
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("local")
+	if !ok {
+		t.Fatal("the guided walk-through saved no profile")
+	}
+	if p.URL != srv.URL() {
+		t.Errorf("saved url = %q, want the typed answer", p.URL)
+	}
+	if p.Auth != "none" {
+		t.Errorf("saved auth = %q, want the typed answer %q", p.Auth, "none")
+	}
+	if p.Username != "" {
+		t.Errorf("saved username = %q, want the typed answers to stand alone", p.Username)
+	}
+	if p.ReplicationURL != "http://couchdb:5984" {
+		t.Errorf("saved replication_url = %q", p.ReplicationURL)
+	}
+}

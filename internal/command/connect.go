@@ -436,15 +436,23 @@ Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 				if promptErr != nil {
 					return nil, promptErr
 				}
-				// The walk-through asks for a URL, an auth kind and a name; it
-				// does not ask for every profile key. Layer the environment
-				// and then the flags onto the answers, in the order
-				// openProfile uses, so that a first run — which is exactly
-				// when the walk-through appears — can still dial and save a
-				// replication URL nobody was prompted for.
-				p = config.LoadEnv(CurrentDeps().LookupEnv).Apply(p)
+				// The walk-through asks for a URL, an auth kind and a name,
+				// so those answers stand: the CDB_* overrides exist to beat
+				// the config file, not something the operator typed a second
+				// ago at a prompt they were just shown. The replication URL is
+				// the one key nobody is asked for, so it is the one key
+				// layered on here — CDB_REPLICATION_URL first, then the flag,
+				// the same order openProfile uses — and without it a first
+				// run, which is exactly when the walk-through appears, could
+				// never dial or save one.
+				if v := config.LoadEnv(CurrentDeps().LookupEnv).ReplicationURL; v != "" {
+					p.ReplicationURL = v
+				}
 				if s.Prefs.ReplicationURL != "" {
-					base, rerr := couch.NormaliseReplicationURL(s.Prefs.ReplicationURL)
+					p.ReplicationURL = s.Prefs.ReplicationURL
+				}
+				if p.ReplicationURL != "" {
+					base, rerr := couch.NormaliseReplicationURL(p.ReplicationURL)
 					if rerr != nil {
 						return nil, Usagef("connect", "%v", rerr)
 					}
