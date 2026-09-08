@@ -19,8 +19,15 @@ it reads one page and stops; with --follow it opens the continuous feed and
 keeps reading until you stop it, reconnecting on its own if the feed drops.
 
 --since takes an update sequence, which is what the paging hint and "info"
-report. It defaults to the beginning of the feed, or to "now" under --follow,
-so a follow shows what happens from the moment you start it.
+report. It defaults to the beginning of the feed, or to the database's current
+sequence under --follow, so a follow shows what happens from the moment you
+start it.
+
+A dropped feed is reopened from the last change it showed you, backing off 1s,
+2s, 4s, 8s, 16s and then every 30s, and saying so on stderr each time. A
+deleted database or a rejected token ends the command instead, and so does a
+single change larger than 4 MiB, which no reconnect could get past: re-run
+without --include-docs.
 
 A CouchDB update sequence is a long opaque string, so the table shows only its
 leading number followed by an ellipsis, which is the part worth reading; a

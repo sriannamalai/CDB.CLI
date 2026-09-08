@@ -235,6 +235,7 @@ cdb completion powershell | Out-String | Invoke-Expression
 | `cd`, `pwd`, `ls`, `info` | Move around and list databases, documents, views |
 | `cat`, `put`, `rm`, `edit` | Read and write documents |
 | `find`, `query` | Mango queries and map/reduce views |
+| `tail` | Watch a database's changes feed |
 | `mkdir`, `rmdir`, `cp` | Create and delete databases, copy documents |
 | `attach`, `fetch` | Upload and download attachments, streamed |
 | `conflicts`, `resolve` | Find and resolve conflicting revisions |
@@ -245,6 +246,27 @@ cdb completion powershell | Out-String | Invoke-Expression
 Destructive commands (`rm`, `rmdir`, `resolve`, `replications cancel`) ask
 before acting. Pass `--yes` to skip the prompt in scripts. `rmdir` also asks you
 to retype the database name.
+
+### Watching changes
+
+```
+cdb tail /mydb                       # the last 25 changes
+cdb tail /mydb --since 941-g1AAA…    # continue from a sequence
+cdb tail /mydb --follow              # keep reading; Ctrl-C to stop
+cdb tail /mydb --follow --json | jq  # one change per line, unbuffered
+```
+
+`tail` reads one page and stops unless `--follow` is given, in which case it
+opens CouchDB's continuous feed at the database's current sequence and keeps
+reading. A dropped feed is reconnected from the last change it showed you,
+backing off 1s, 2s, 4s, 8s, 16s and then every 30s, and saying so on stderr
+each time; a deleted database or a rejected token ends the command instead, and
+so does a single change larger than 4 MiB, which no reconnect could get past —
+re-run without `--include-docs`. `--include-docs` adds the changed document,
+`--filter ddoc/name` applies a design-document filter, and `--heartbeat` (with
+`--follow`) sets how often the server sends a keep-alive.
+
+CouchDB has no partition-scoped changes feed, so `tail` takes a database path.
 
 ### Replication and same-server jobs
 

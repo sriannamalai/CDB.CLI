@@ -1,10 +1,17 @@
 package command
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
 )
 
@@ -216,4 +223,351 @@ func TestTailIsRegistered(t *testing.T) {
 
 func asUsageError(err error, target **UsageError) bool {
 	return errors.As(err, target)
+}
+
+// followStartSeq is the update sequence the stub database reports. A follow
+// resolves "now" to it once, before its first request, and every reconnect
+// that has no change of its own to resume from goes back to it.
+const followStartSeq = "0-resolved"
+
+// followClock records the reconnect waits instead of sleeping through them, so
+// a follow test drives the documented schedule in no time at all. It is handed
+// to tailCommand per call rather than installed in a package variable: the
+// producer goroutine reads the sleeper for as long as it runs, and a package
+// variable one test restored while another test's producer was still going is
+// a data race under -race.
+type followClock struct {
+	mu    sync.Mutex
+	waits []time.Duration
+}
+
+// sleep records d and returns immediately, so the loop reconnects at once
+// unless the operator has interrupted, which is what a real wait reports too.
+func (c *followClock) sleep(ctx context.Context, d time.Duration) error {
+	c.mu.Lock()
+	c.waits = append(c.waits, d)
+	c.mu.Unlock()
+	return ctx.Err()
+}
+
+// recorded copies the waits under the lock, so a test may read them while the
+// producer goroutine is still running.
+func (c *followClock) recorded() []time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Duration(nil), c.waits...)
+}
+
+// followServer answers the continuous feed once per distinct "since" value:
+// the first connection, from the resolved start, delivers change 1 and then
+// ends the body, which is what a dropped feed looks like; the second delivers
+// change 2 and then blocks until the client goes away.
+func followServer(t *testing.T) *couchtest.Server {
+	t.Helper()
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb", 200, `{"db_name":"mydb","doc_count":2,"update_seq":"`+followStartSeq+`"}`)
+	srv.On("GET", "/mydb/_changes", func(w http.ResponseWriter, r *http.Request) {
+		write := writeFeed(w)
+		switch r.URL.Query().Get("since") {
+		case followStartSeq:
+			write(`{"seq":"1-x","id":"a","changes":[{"rev":"1-aa"}]}`)
+			// Returning ends the body: the feed has dropped.
+		case "1-x":
+			write(`{"seq":"2-y","id":"b","changes":[{"rev":"1-bb"}]}`)
+			<-r.Context().Done()
+		default:
+			<-r.Context().Done()
+		}
+	})
+	return srv
+}
+
+// writeFeed starts a continuous-feed response and returns a writer for one
+// change line, flushed so the client sees it as it is written.
+func writeFeed(w http.ResponseWriter) func(string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	f, _ := w.(http.Flusher)
+	return func(line string) {
+		_, _ = io.WriteString(w, line+"\n")
+		if f != nil {
+			f.Flush()
+		}
+	}
+}
+
+// drainStream reads a follow stream until Next reports an error or the end.
+// Every follow test must call it before returning, because an error from Next
+// is the only signal that the producer goroutine has exited; a test that
+// returned first would leave it writing to the session while the next test ran.
+//
+// Call it once per stream, and never after Next has already returned an error:
+// the producer reports its error exactly once, so a further read would block.
+func drainStream(st Stream) {
+	for {
+		if _, more, err := st.Next(); err != nil || !more {
+			return
+		}
+	}
+}
+
+// firstChangesRequest is the first request the follow made to the feed, which
+// is the one carrying the sequence it resolved before opening anything.
+func firstChangesRequest(t *testing.T, srv *couchtest.Server) *couchtest.Request {
+	t.Helper()
+	for _, req := range srv.Requests() {
+		if req.Path == "/mydb/_changes" {
+			return req
+		}
+	}
+	t.Fatal("the follow never opened the changes feed")
+	return nil
+}
+
+func TestTailFollowReconnectsFromTheLastSequence(t *testing.T) {
+	clock := &followClock{}
+	srv := followServer(t)
+	s := connected(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	res, err := invokeContext(ctx, tailCommand(clock.sleep), s, "/mydb", "--follow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := res.(Stream)
+	if !ok {
+		t.Fatalf("tail --follow returned %#v, want a Stream", res)
+	}
+	if !st.Live {
+		t.Error("tail --follow did not mark the stream Live")
+	}
+	if st.Hint != "" {
+		t.Errorf("hint = %q, want none on a follow", st.Hint)
+	}
+
+	// The cells carry the shortened sequence the table shows; the row JSON
+	// keeps the whole one, which is what --since takes.
+	for i, want := range []string{"1-x", "2-y"} {
+		row, more, err := st.Next()
+		if err != nil || !more {
+			t.Fatalf("row %d: more=%v err=%v", i, more, err)
+		}
+		if row.Cells[0] != shortSeq(want) {
+			t.Errorf("row %d seq cell = %q, want %q", i, row.Cells[0], shortSeq(want))
+		}
+		if got := string(row.JSON); !strings.Contains(got, `"seq":"`+want+`"`) {
+			t.Errorf("row %d JSON = %s, want the full sequence %q", i, got, want)
+		}
+	}
+	cancel()
+	if _, _, err := st.Next(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("after cancel, Next err = %v, want context.Canceled", err)
+	}
+
+	// A request reconnected from the sequence of the last change delivered.
+	found := false
+	for _, req := range srv.Requests() {
+		if req.Path == "/mydb/_changes" && req.Query("since") == "1-x" {
+			found = true
+			if req.Query("feed") != "continuous" {
+				t.Errorf("reconnect feed = %q, want continuous", req.Query("feed"))
+			}
+			if req.Query("heartbeat") != "30000" {
+				t.Errorf("reconnect heartbeat = %q, want 30000", req.Query("heartbeat"))
+			}
+		}
+	}
+	if !found {
+		t.Error("no request reconnected from sequence 1-x")
+	}
+	if got := clock.recorded(); len(got) == 0 || got[0] != time.Second {
+		t.Errorf("backoff waits = %v, want the first to be 1s", got)
+	}
+	if msg := s.Stderr.(*bytes.Buffer).String(); !strings.Contains(msg, `Lost the changes feed for "mydb"; reconnecting from 1-x in 1s.`) {
+		t.Errorf("stderr = %q, want the reconnect notice", msg)
+	}
+}
+
+func TestTailFollowResolvesNowBeforeItsFirstRequest(t *testing.T) {
+	clock := &followClock{}
+	srv := followServer(t)
+	s := connected(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	res, err := invokeContext(ctx, tailCommand(clock.sleep), s, "/mydb", "--follow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := res.(Stream)
+	if _, _, err := st.Next(); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	drainStream(st)
+
+	// "now" is resolved to the database's update sequence before anything is
+	// opened, so every reconnect has a fixed sequence to fall back to.
+	if got := firstChangesRequest(t, srv).Query("since"); got != followStartSeq {
+		t.Errorf("first since = %q, want the resolved start %q", got, followStartSeq)
+	}
+}
+
+func TestTailFollowKeepsAnExplicitSince(t *testing.T) {
+	clock := &followClock{}
+	srv := followServer(t)
+	s := connected(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// "1-x" is a sequence the stub answers, so reading one row is proof the
+	// feed was opened before the test looks at what it was opened with.
+	res, err := invokeContext(ctx, tailCommand(clock.sleep), s, "/mydb", "--follow", "--since", "1-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := res.(Stream)
+	if _, _, err := st.Next(); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	drainStream(st)
+
+	if got := firstChangesRequest(t, srv).Query("since"); got != "1-x" {
+		t.Errorf("first since = %q, want the sequence the operator gave", got)
+	}
+	// Nothing to resolve, so the database was never asked for its sequence.
+	if req := srv.Last("GET", "/mydb"); req != nil {
+		t.Error("a follow with --since still read the database info")
+	}
+}
+
+func TestTailFollowResumesFromTheResolvedStartWhenNothingArrived(t *testing.T) {
+	clock := &followClock{}
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb", 200, `{"db_name":"mydb","doc_count":0,"update_seq":"`+followStartSeq+`"}`)
+	var mu sync.Mutex
+	conns := 0
+	srv.On("GET", "/mydb/_changes", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		conns++
+		first := conns == 1
+		mu.Unlock()
+		write := writeFeed(w)
+		if first {
+			// Delivered nothing and dropped. The reconnect has no change of
+			// its own to resume from, and anything but the resolved start
+			// would lose whatever was written in between.
+			return
+		}
+		if r.URL.Query().Get("since") == followStartSeq {
+			write(`{"seq":"9-z","id":"resumed","changes":[{"rev":"1-aa"}]}`)
+		} else {
+			write(`{"seq":"9-z","id":"restarted","changes":[{"rev":"1-aa"}]}`)
+		}
+		<-r.Context().Done()
+	})
+	s := connected(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	res, err := invokeContext(ctx, tailCommand(clock.sleep), s, "/mydb", "--follow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := res.(Stream)
+	row, more, err := st.Next()
+	if err != nil || !more {
+		t.Fatalf("more=%v err=%v, want the change the reconnect read", more, err)
+	}
+	if row.Cells[1] != "resumed" {
+		t.Errorf("row id = %q: the reconnect asked for %q, not the resolved start %q",
+			row.Cells[1], "restarted", followStartSeq)
+	}
+	cancel()
+	drainStream(st)
+
+	if msg := s.Stderr.(*bytes.Buffer).String(); !strings.Contains(msg, `reconnecting from `+followStartSeq+` in 1s.`) {
+		t.Errorf("stderr = %q, want the notice to name the resolved start", msg)
+	}
+}
+
+func TestTailFollowEndsOnAFourZeroFour(t *testing.T) {
+	clock := &followClock{}
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb", 200, `{"db_name":"mydb","doc_count":0,"update_seq":"`+followStartSeq+`"}`)
+	srv.JSON("GET", "/mydb/_changes", 404, `{"error":"not_found","reason":"Database does not exist."}`)
+	s := connected(t, srv)
+
+	res, err := invoke(t, tailCommand(clock.sleep), s, "/mydb", "--follow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, more, err := res.(Stream).Next()
+	if more {
+		t.Fatal("a 404 produced a row")
+	}
+	ce, ok := couch.AsError(err)
+	if !ok || ce.Status != 404 {
+		t.Fatalf("Next err = %v, want a mapped 404", err)
+	}
+	if got := clock.recorded(); len(got) != 0 {
+		t.Errorf("a 404 was retried after %v; only 5xx and transport failures reconnect", got)
+	}
+}
+
+func TestTailFollowFailsWhenTheDatabaseIsGone(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb", 404, `{"error":"not_found","reason":"Database does not exist."}`)
+	s := connected(t, srv)
+
+	// The sequence is resolved before the feed opens, so a database that is
+	// not there fails the command outright rather than starting a stream that
+	// only reports it on the first read.
+	_, err := invoke(t, tailCommand((&followClock{}).sleep), s, "/mydb", "--follow")
+	ce, ok := couch.AsError(err)
+	if !ok || ce.Status != 404 {
+		t.Fatalf("err = %v, want a mapped 404", err)
+	}
+}
+
+// Which endings are the feed dropping and which are the end of the command.
+// The torn-body and over-long-line cases are the two ChangesFollow reports as
+// *Error rather than nil (Task 2), and they must be classified oppositely: a
+// torn body is worth reopening, an over-long change line never will be, and
+// retrying it would print a reconnect notice forever.
+func TestTailReconnectable(t *testing.T) {
+	const target = `changes for "mydb"`
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"clean end of body", nil, true},
+		{"torn body", couch.NewError(couch.StatusUnreachable, "network", "unexpected EOF", "read", target), true},
+		{"server error", couch.NewError(http.StatusInternalServerError, "internal_server_error", "", "read", target), true},
+		{"deleted database", couch.NewError(http.StatusNotFound, "not_found", "Database does not exist.", "read", target), false},
+		{"rejected token", couch.NewError(http.StatusUnauthorized, "unauthorized", "", "read", target), false},
+		{"over-long change line", couch.NewError(http.StatusRequestEntityTooLarge, "too_large", "a change was larger than the 4 MiB this feed can read; re-run without --include-docs", "read", target), false},
+		{"cancelled", context.Canceled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tailReconnectable(tc.err); got != tc.want {
+				t.Errorf("tailReconnectable(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTailBackoffSchedule(t *testing.T) {
+	want := []time.Duration{
+		1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		16 * time.Second, 30 * time.Second, 30 * time.Second,
+	}
+	for i, w := range want {
+		if got := tailBackoff(i); got != w {
+			t.Errorf("tailBackoff(%d) = %v, want %v", i, got, w)
+		}
+	}
 }

@@ -2,10 +2,10 @@ package command
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
@@ -32,8 +32,15 @@ it reads one page and stops; with --follow it opens the continuous feed and
 keeps reading until you stop it, reconnecting on its own if the feed drops.
 
 --since takes an update sequence, which is what the paging hint and "info"
-report. It defaults to the beginning of the feed, or to "now" under --follow,
-so a follow shows what happens from the moment you start it.
+report. It defaults to the beginning of the feed, or to the database's current
+sequence under --follow, so a follow shows what happens from the moment you
+start it.
+
+A dropped feed is reopened from the last change it showed you, backing off 1s,
+2s, 4s, 8s, 16s and then every 30s, and saying so on stderr each time. A
+deleted database or a rejected token ends the command instead, and so does a
+single change larger than 4 MiB, which no reconnect could get past: re-run
+without --include-docs.
 
 A CouchDB update sequence is a long opaque string, so the table shows only its
 leading number followed by an ellipsis, which is the part worth reading; a
@@ -45,7 +52,13 @@ in --since and answers it by replaying the feed from the beginning.
 CouchDB has no partition-scoped changes feed, so tail takes a database path.`
 
 // Tail returns the tail command.
-func Tail() Command {
+func Tail() Command { return tailCommand(tailSleep) }
+
+// tailCommand builds tail around a sleeper, which is how the reconnect backoff
+// is driven in tests without waiting out the real schedule. Injecting it here,
+// per command, rather than through a package variable keeps two tests from
+// writing the same sleeper while another test's follow goroutine reads it.
+func tailCommand(sleep tailSleeper) Command {
 	return Command{
 		Name:    "tail",
 		Summary: "Read a database's changes feed",
@@ -86,14 +99,14 @@ $ cdb tail /movies --follow`,
 				return nil, Usagef("tail", "%s is %s %s; tail takes a database path.", t.Path, t.Kind.Article(), t.Kind)
 			}
 			follow := inv.Bool("follow")
-			opts, err := tailOptions(inv, follow)
+			opts, err := tailOptions(ctx, s.Client, t.Database, inv, follow)
 			if err != nil {
 				return nil, err
 			}
 			includeDocs := opts.IncludeDocs
 			cols := tailColumns(includeDocs)
 			if follow {
-				return tailFollow(ctx, s, t, opts, cols, includeDocs)
+				return tailFollow(ctx, s, t, opts, cols, includeDocs, sleep)
 			}
 
 			page, err := s.Client.Changes(ctx, t.Database, opts)
@@ -123,9 +136,11 @@ $ cdb tail /movies --follow`,
 	}
 }
 
-// tailOptions validates the flags and builds the client options. Every failure
-// is a usage error, so a mistyped flag exits 2 rather than reaching the server.
-func tailOptions(inv Invocation, follow bool) (couch.ChangesOptions, error) {
+// tailOptions validates the flags and builds the client options. Every flag
+// failure is a usage error, so a mistyped flag exits 2 rather than reaching the
+// server; validation happens first, and only then does a follow ask the server
+// where "now" is.
+func tailOptions(ctx context.Context, c *couch.Client, db string, inv Invocation, follow bool) (couch.ChangesOptions, error) {
 	filter := inv.String("filter")
 	if filter != "" && strings.Count(filter, "/") != 1 {
 		return couch.ChangesOptions{}, Usagef("tail", "--filter takes a design document and a filter name, as \"app/by_type\".")
@@ -148,7 +163,22 @@ func tailOptions(inv Invocation, follow bool) (couch.ChangesOptions, error) {
 	if follow && since == "" {
 		// A follow shows what happens from now on. Starting at 0 would replay
 		// the whole database first, which is what the normal feed is for.
-		since = "now"
+		//
+		// "now" is resolved to a real sequence here, once, before anything is
+		// opened, and never sent to the feed itself: a connection that drops
+		// before it delivers a change has nothing of its own to resume from,
+		// and reopening at whatever "now" had become by then would silently
+		// skip every change written in between.
+		info, err := c.DatabaseInfo(ctx, db)
+		if err != nil {
+			return couch.ChangesOptions{}, err
+		}
+		since = info.UpdateSeq
+		if since == "" {
+			// A server that reported no sequence. "now" still beats 0, which
+			// would replay the whole database.
+			since = "now"
+		}
 	}
 	opts := couch.ChangesOptions{
 		Since: since,
@@ -222,9 +252,110 @@ func tailRow(r couch.ChangeRow, includeDocs bool) Row {
 	return Row{Cells: cells, JSON: mustJSON(payload)}
 }
 
-// tailFollow opens the continuous feed. Task 5 implements the reconnect loop;
-// until then this is unreachable in a released binary, and is an internal
-// error rather than a usage sentence so it can never read as advice.
-func tailFollow(ctx context.Context, s *session.Session, t path.Target, opts couch.ChangesOptions, cols []Column, includeDocs bool) (Result, error) {
-	return nil, errors.New("tail: --follow is wired in the next commit")
+// tailSleeper waits out one reconnect backoff, returning ctx.Err() if the
+// operator interrupts first. tailCommand takes one so tests can drive the
+// schedule without sleeping through it.
+type tailSleeper func(ctx context.Context, d time.Duration) error
+
+// tailSleep is the real wait.
+func tailSleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// tailBackoff is the documented reconnect schedule: 1s, 2s, 4s, 8s, 16s, then
+// 30s for every attempt after that. Retries are unbounded — a tail is meant to
+// be left running — so the wait stops growing rather than the attempts.
+func tailBackoff(attempt int) time.Duration {
+	schedule := []time.Duration{
+		1 * time.Second, 2 * time.Second, 4 * time.Second,
+		8 * time.Second, 16 * time.Second,
+	}
+	if attempt >= 0 && attempt < len(schedule) {
+		return schedule[attempt]
+	}
+	return 30 * time.Second
+}
+
+// tailReconnectable reports whether a finished follow should be reopened. A
+// body that simply ended (nil), a transport failure, and a 5xx are all the
+// feed dropping. A 4xx is not: a deleted database, a rejected token, or a
+// change too large for the feed to read will not fix itself, and retrying
+// forever would hide the reason behind a reconnect notice. Neither is a
+// cancelled context, which is not a *couch.Error at all.
+func tailReconnectable(err error) bool {
+	if err == nil {
+		return true
+	}
+	ce, ok := couch.AsError(err)
+	if !ok {
+		return false
+	}
+	return ce.Status == couch.StatusUnreachable || ce.Status >= 500
+}
+
+// tailFollow opens the continuous feed and keeps it open, reconnecting from
+// the last change it delivered, or from the sequence the follow started at if
+// it has not delivered one yet. It returns a Live stream, so each change is
+// written the moment it arrives instead of waiting for a full table page.
+func tailFollow(ctx context.Context, s *session.Session, t path.Target, opts couch.ChangesOptions, cols []Column, includeDocs bool, sleep tailSleeper) (Result, error) {
+	rows := make(chan couch.ChangeRow)
+	// Buffered, so the producer can report why it stopped and exit even if
+	// nothing is reading yet.
+	errc := make(chan error, 1)
+
+	go func() {
+		defer close(rows)
+		// tailOptions has already resolved this, so it is a real sequence and
+		// not "now": every reconnect that delivered nothing comes back here.
+		since := opts.Since
+		attempt := 0
+		for {
+			round := opts
+			round.Since = since
+			err := s.Client.ChangesFollow(ctx, t.Database, round, func(r couch.ChangeRow) error {
+				select {
+				case rows <- r:
+					since = r.Seq
+					// One change through means the feed is healthy again.
+					attempt = 0
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			})
+			// Ctrl-C wins over everything: the operator asked to stop, and the
+			// front-ends print nothing for a cancelled context.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				errc <- ctxErr
+				return
+			}
+			if !tailReconnectable(err) {
+				errc <- err
+				return
+			}
+			wait := tailBackoff(attempt)
+			attempt++
+			fmt.Fprintf(s.Stderr, "Lost the changes feed for %q; reconnecting from %s in %s.\n",
+				t.Database, since, wait)
+			if err := sleep(ctx, wait); err != nil {
+				errc <- err
+				return
+			}
+		}
+	}()
+
+	return Stream{Live: true, Columns: cols, Next: func() (Row, bool, error) {
+		r, ok := <-rows
+		if !ok {
+			return Row{}, false, <-errc
+		}
+		return tailRow(r, includeDocs), true, nil
+	}}, nil
 }
