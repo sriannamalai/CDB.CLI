@@ -24,6 +24,7 @@ Takes exactly 1 argument.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
+| `--diff-full` | bool | `false` | print each revision in full instead of a one-line diff |
 | `--keep` | string |  | revision to keep |
 
 ## Global flags

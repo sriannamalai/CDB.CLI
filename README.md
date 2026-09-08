@@ -264,7 +264,9 @@ cdb completion powershell | Out-String | Invoke-Expression
 
 Destructive commands (`rm`, `rmdir`, `resolve`, `replications cancel`) ask
 before acting. Pass `--yes` to skip the prompt in scripts. `rmdir` also asks you
-to retype the database name.
+to retype the database name. `resolve` shows how each conflicting revision
+differs from the current one before it asks which to keep; `--diff-full` prints
+each revision in full instead.
 
 ### Watching changes
 

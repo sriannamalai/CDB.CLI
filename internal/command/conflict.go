@@ -1,6 +1,7 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -149,6 +150,7 @@ Kept revision 1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb of /movies/conflicted and delet
 		Complete:    completePath,
 		Flags: func(fs *pflag.FlagSet) {
 			fs.String("keep", "", "revision to keep")
+			fs.Bool("diff-full", false, "print each revision in full instead of a one-line diff")
 		},
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
 			t, err := s.Resolve(inv.Arg(0))
@@ -158,7 +160,10 @@ Kept revision 1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb of /movies/conflicted and delet
 			if t.Kind != path.KindDocument && t.Kind != path.KindDesignDoc {
 				return nil, Usagef("resolve", "%s is %s %s; resolve works on one document", t.Path, t.Kind.Article(), t.Kind)
 			}
-			_, winner, conflicts, err := conflictRevisions(ctx, s, t)
+			if inv.Bool("diff-full") && inv.String("keep") != "" {
+				return nil, Usagef("resolve", "--diff-full shows the revisions before you choose one, so it has no effect with --keep.")
+			}
+			winnerBody, winner, conflicts, err := conflictRevisions(ctx, s, t)
 			if err != nil {
 				return nil, err
 			}
@@ -168,7 +173,7 @@ Kept revision 1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb of /movies/conflicted and delet
 			all := append([]string{winner}, conflicts...)
 			keep := inv.String("keep")
 			if keep == "" {
-				keep, err = chooseRevision(ctx, s, t, all)
+				keep, err = chooseRevision(ctx, s, t, winnerBody, all, inv.Bool("diff-full"))
 				if err != nil {
 					return nil, err
 				}
@@ -195,8 +200,11 @@ Kept revision 1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb of /movies/conflicted and delet
 	}
 }
 
-// chooseRevision shows each revision and asks which to keep.
-func chooseRevision(ctx context.Context, s *session.Session, t path.Target, revs []string) (string, error) {
+// chooseRevision shows how each revision differs from the current winner and
+// asks which to keep. An 80-character preview of each body, which is what 1.0
+// showed, tells the operator almost nothing when the revisions differ in one
+// field near the end of a long document.
+func chooseRevision(ctx context.Context, s *session.Session, t path.Target, winnerBody json.RawMessage, revs []string, diffFull bool) (string, error) {
 	if !s.Prefs.Interactive {
 		return "", Usagef("resolve", "%s has %d revisions; pass --keep <rev> to choose one", t.Path, len(revs))
 	}
@@ -209,7 +217,15 @@ func chooseRevision(ctx context.Context, s *session.Session, t path.Target, revs
 		if i == 0 {
 			role = "current"
 		}
-		fmt.Fprintf(s.Stdout, "%d) %s (%s)\n   %s\n", i+1, rev, role, summarise(body))
+		fmt.Fprintf(s.Stdout, "%d) %s (%s)\n", i+1, rev, role)
+		if diffFull {
+			fmt.Fprintln(s.Stdout, indentRevision(body))
+			// A blank line between bodies: without it the next "N) rev (role)"
+			// line runs straight on from the last closing brace.
+			fmt.Fprintln(s.Stdout)
+			continue
+		}
+		fmt.Fprintf(s.Stdout, "   %s\n", DiffRevisions(winnerBody, body, rev).Summary())
 	}
 	fmt.Fprintf(s.Stdout, "Keep which revision? [1-%d] ", len(revs))
 	line, err := s.Reader().ReadString('\n')
@@ -221,6 +237,18 @@ func chooseRevision(ctx context.Context, s *session.Session, t path.Target, revs
 		return "", Usagef("resolve", "expected a number between 1 and %d", len(revs))
 	}
 	return revs[n-1], nil
+}
+
+// indentRevision pretty-prints a revision two spaces in, so that under
+// --diff-full each body sits under the numbered line that names it. A body
+// that will not re-indent is printed as it came. It is separate from
+// indentJSON (document.go), which indents from column zero for the editor.
+func indentRevision(body json.RawMessage) string {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, body, "  ", "  "); err != nil {
+		return "  " + string(body)
+	}
+	return "  " + buf.String()
 }
 
 func contains(list []string, want string) bool {
