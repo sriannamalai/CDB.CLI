@@ -23,5 +23,10 @@ func Default() *Registry {
 	r.Register(Cp())
 	r.Register(Conflicts())
 	r.Register(Resolve())
+	r.Register(History())
+	r.Register(Clear())
+	r.Register(Exit())
+	// Help is registered last so that it sees every other command.
+	r.Register(Help(r))
 	return r
 }
