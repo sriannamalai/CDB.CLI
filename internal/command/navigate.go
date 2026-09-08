@@ -403,8 +403,8 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 	// "/db/_design/app/_view/" is not a resolvable path on its own, so trim the
 	// trailing _view/ and complete view names against the design document.
 	if trimmed := strings.TrimSuffix(dir, "_view/"); trimmed != dir {
-		base, err := path.Resolve(s.Path(), trimmed)
-		if err != nil || base.Kind != path.KindDesignDoc {
+		base, err := resolveDesignDoc(s.Path(), trimmed)
+		if err != nil {
 			return nil
 		}
 		return viewCandidates(ctx, s, base, partial, func(n string) string { return dir + path.Encode(n) })
@@ -412,7 +412,14 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 
 	base, err := path.Resolve(s.Path(), dir)
 	if err != nil {
-		return nil
+		// "/db/_partition/p1/_design/app/" does not resolve on its own — a
+		// design document is not partition-scoped — but it is the prefix of a
+		// partitioned view path, which does, so completion still has to reach
+		// the design document behind it.
+		base, err = resolveDesignDoc(s.Path(), dir)
+		if err != nil {
+			return nil
+		}
 	}
 	switch base.Kind {
 	case path.KindServer:
@@ -429,21 +436,40 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 		return out
 
 	case path.KindDatabase, path.KindPartition:
+		var out []Candidate
+		// A design document is not partition-scoped, so the partitioned
+		// _all_docs never returns one. The segment is offered explicitly, the
+		// same way _view is offered under a design document, so a partitioned
+		// view path can be completed from the partition down.
+		if base.Kind == path.KindPartition && partial != "_design" && strings.HasPrefix("_design", partial) {
+			out = append(out, Candidate{Value: join("_design"), Display: "_design", Tag: "views"})
+		}
+		// Inside a partition CouchDB's keys are the fully qualified ids
+		// ("p1:doc1") while the operator types the short form, so the key
+		// range is qualified on the way in and the prefix is stripped on the
+		// way out.
+		prefix := partial
+		if base.Partition != "" {
+			prefix = base.Partition + ":" + partial
+		}
 		page, err := s.Client.AllDocs(ctx, base.Database, couch.AllDocsOptions{
 			Partition:     base.Partition,
 			Limit:         completionPageSize,
-			StartKeyDocID: partial,
-			EndKeyDocID:   partial + idSentinel,
+			StartKeyDocID: prefix,
+			EndKeyDocID:   prefix + idSentinel,
 		})
 		if err != nil {
-			return nil
+			return out
 		}
-		var out []Candidate
 		for _, r := range page.Rows {
-			if !strings.HasPrefix(r.ID, partial) {
+			if !strings.HasPrefix(r.ID, prefix) {
 				continue
 			}
-			out = append(out, Candidate{Value: join(encodeDocID(r.ID)), Display: r.ID, Description: r.Rev, Tag: "documents"})
+			name := r.ID
+			if base.Partition != "" {
+				name = strings.TrimPrefix(name, base.Partition+":")
+			}
+			out = append(out, Candidate{Value: join(encodeDocID(name)), Display: name, Description: r.Rev, Tag: "documents"})
 		}
 		return out
 
@@ -484,6 +510,28 @@ func viewCandidates(ctx context.Context, s *session.Session, base path.Target, p
 		}
 	}
 	return out
+}
+
+// resolveDesignDoc resolves a path that names a design document, including the
+// partition-scoped prefix "/db/_partition/p1/_design/app". That prefix is not
+// a resolvable path — a design document is not partition-scoped — but it is
+// the prefix of "/db/_partition/p1/_design/app/_view/<name>", which is, so it
+// is resolved by asking for the view form and dropping the view.
+func resolveDesignDoc(cwd, p string) (path.Target, error) {
+	t, err := path.Resolve(cwd, p)
+	if err == nil {
+		if t.Kind != path.KindDesignDoc {
+			return path.Target{}, &path.Error{Input: p, Reason: "not a design document"}
+		}
+		return t, nil
+	}
+	probe, perr := path.Resolve(cwd, strings.TrimRight(p, "/")+"/_view/x")
+	if perr != nil || probe.Kind != path.KindView {
+		return path.Target{}, err
+	}
+	probe.Kind, probe.View = path.KindDesignDoc, ""
+	probe.Path = strings.TrimRight(p, "/")
+	return probe, nil
 }
 
 // encodeDocID escapes a document id for use as the tail of a virtual path. A

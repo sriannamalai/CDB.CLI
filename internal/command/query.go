@@ -322,6 +322,11 @@ $ cdb query /movies/_design/app/_view/by_year --reduce --group-level 1`,
 				Limit:       inv.Int("limit"),
 				Descending:  inv.Bool("descending"),
 				IncludeDocs: inv.Bool("include-docs"),
+				// A partitioned design document refuses an unpartitioned
+				// query outright ("`partition` parameter is mandatory for
+				// queries to this view"), so a view reached through a
+				// partition path has to carry the key.
+				Partition: t.Partition,
 			}
 			if raw := inv.String("key"); raw != "" {
 				opts.Key = json.RawMessage(raw)

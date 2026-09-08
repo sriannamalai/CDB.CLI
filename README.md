@@ -118,6 +118,22 @@ admin@localhost:5984:/movies> cat tt0111161 | .title
 "The Shawshank Redemption"
 ```
 
+Partitioned databases are addressed with a `_partition` segment:
+
+```
+cdb ls   /movies/_partition/2024                          # documents in the partition
+cdb cat  /movies/_partition/2024/shawshank                # the document 2024:shawshank
+cdb find /movies/_partition/2024 '{"rating":{"$gt":9}}'   # a partitioned Mango query
+cdb query /movies/_partition/2024/_design/app/_view/by_date
+```
+
+A document in partition `2024` has the id `2024:<rest>`, so
+`/movies/_partition/2024/shawshank` and `/movies/_partition/2024/2024:shawshank`
+name the same document. Design documents are not partition-scoped: read one at
+`/movies/_design/app`, and add `/_view/<name>` under a partition to run its view
+against that partition. `ls --start` inside a partition takes the fully
+qualified id, `2024:m`. `cd ..` out of a partition lands on the database.
+
 Press Tab at any point to complete command names, flags, database names,
 document ids, view names, and document field names sampled from the database.
 `history` lists the lines you have run; repeated and unparseable lines are not

@@ -99,14 +99,28 @@ func Clean(base, input string) (string, error) {
 		switch s {
 		case ".":
 		case "..":
-			if len(segs) > 0 {
-				segs = segs[:len(segs)-1]
-			}
+			segs = up(segs)
 		default:
 			segs = append(segs, s)
 		}
 	}
 	return "/" + strings.Join(segs, "/"), nil
+}
+
+// up applies one "..". It is not a plain pop: "_partition" is the separator
+// that introduces a partition key, not a directory of its own, so
+// "/db/_partition" names nothing and stepping up out of "/db/_partition/p1"
+// has to land on "/db". Popping textually would strand the shell on a path
+// that no longer resolves. Only ".." steps over the separator; a path typed
+// out as "/db/_partition" still gets the missing-key error.
+func up(segs []string) []string {
+	if len(segs) > 0 {
+		segs = segs[:len(segs)-1]
+	}
+	if len(segs) == 2 && segs[1] == "_partition" {
+		segs = segs[:1]
+	}
+	return segs
 }
 
 func split(p string) []string {

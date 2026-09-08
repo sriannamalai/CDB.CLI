@@ -79,3 +79,35 @@ func TestEncodeDecode(t *testing.T) {
 		t.Fatalf("Decode(%q) = %q, %v; want %q, nil", enc, dec, err, "a/b")
 	}
 }
+
+// "/mydb/_partition" names nothing — it is the separator in front of the
+// partition key, not a directory — so ".." out of a partition steps over it
+// and lands on the database. Textual popping alone would strand the shell on
+// an unresolvable path.
+func TestResolveUpOutOfAPartition(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, input, want string
+		kind                    Kind
+	}{
+		{"partition to database", "/mydb/_partition/p1", "..", "/mydb", KindDatabase},
+		{"document to partition", "/mydb/_partition/p1/doc1", "..", "/mydb/_partition/p1", KindPartition},
+		{"document to database", "/mydb/_partition/p1/doc1", "../..", "/mydb", KindDatabase},
+		{"partition to server", "/mydb/_partition/p1", "../..", "/", KindServer},
+		{"attachment to document", "/mydb/_partition/p1/doc1/a.png", "..", "/mydb/_partition/p1/doc1", KindDocument},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Resolve(tc.base, tc.input)
+			if err != nil {
+				t.Fatalf("Resolve(%q, %q) = %v", tc.base, tc.input, err)
+			}
+			if got.Path != tc.want || got.Kind != tc.kind {
+				t.Errorf("Resolve(%q, %q) = %q (%v), want %q (%v)", tc.base, tc.input, got.Path, got.Kind, tc.want, tc.kind)
+			}
+		})
+	}
+	// A path typed out in full still says what is wrong with it: only ".."
+	// steps over the separator.
+	if _, err := Resolve("/", "/mydb/_partition"); err == nil {
+		t.Error("Resolve(/mydb/_partition) = nil error, want the missing-key error")
+	}
+}
