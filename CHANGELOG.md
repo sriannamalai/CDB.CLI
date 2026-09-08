@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-08
+
+### Fixed
+
+- Shell history no longer rewrites an ordinary argument that happens to look
+  like `user:pass@host`. `ls /db --start a:b@c` is stored exactly as typed;
+  a credential without a scheme is only recognised under the commands that
+  take a server address (`connect`, `profiles add`, `replicate`, `cp`), and a
+  URL carrying a scheme is still redacted wherever it appears.
+- A missing attachment below a design document now says which design document
+  was searched — `Attachment "logo.png" was not found on design document
+  "app".` — instead of naming the database, so a mistyped view path is
+  recognisable for what it is.
+- A `401` from a connection with no credentials (`--anonymous`, or a profile
+  whose auth is `none`) now reads `The server requires credentials for … .
+  Connect with a username and password, or set CDB_USER and CDB_PASSWORD.`
+  rather than advising you to check a password you never supplied.
+- `edit` understands a quoted `$EDITOR` or `$VISUAL`, so an editor whose path
+  contains a space works: `EDITOR='"/Applications/My Editor/bin/ed" -w'`.
+- `put <path>` inside the shell now asks for a file, or an explicit `-`, rather
+  than silently reading the terminal to end-of-file and leaving the prompt
+  gone. One-shot use is unchanged: `echo … | cdb put /db/doc` still works.
+- Closing a connection releases its sockets. On an authenticated client the
+  close never reached the connection pool, so idle connections were held until
+  the process exited.
+- `restore` compares a complete dump's footer counts with what it actually
+  loaded and fails, naming both numbers, when they disagree — a dump that has
+  lost records no longer reports success.
+- `restore` bounds the memory one bulk write holds by the base64 size the
+  request really carries, and a single document whose attachments exceed that
+  bound now sends the remainder as separate uploads instead of building one
+  enormous request.
+
 ## [1.0.0] - 2026-09-08
 
 Initial release of `cdb`, a single-binary command line client for Apache
@@ -107,5 +140,6 @@ CouchDB 3.2 through 3.5.
   document, which bumps the document's revision from the one recorded in
   the dump.
 
-[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/sriannamalai/CDB.CLI/compare/dc010ee...v1.0.0
