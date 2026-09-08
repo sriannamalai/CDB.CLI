@@ -55,6 +55,20 @@ $ cdb find /movies '{"year":{"$gt":2010}}' --explain`,
 			if target.Database == "" {
 				return nil, Usagef("find", "find needs a database; cd into one or pass a path")
 			}
+			// splitFindArgs resolves the path and then uses only
+			// Target.Database, so without this a document path silently
+			// queried the whole database it lives in.
+			if target.Kind != path.KindDatabase && target.Kind != path.KindPartition {
+				// Spec section 10.2 fixes the sentence for the document case,
+				// including the "cat" suggestion. It does not fit the others:
+				// a view is not one document, and "cat" does not read one.
+				if target.Kind == path.KindDocument {
+					return nil, Usagef("find", "%s is %s %s; find queries a database or a partition. Use %q to read one document.",
+						target.Path, target.Kind.Article(), target.Kind, "cat "+target.Path)
+				}
+				return nil, Usagef("find", "%s is %s %s; find queries a database or a partition.",
+					target.Path, target.Kind.Article(), target.Kind)
+			}
 			selector, err := resolveSelector(s, selectorArg)
 			if err != nil {
 				return nil, err
