@@ -247,7 +247,7 @@ func Resolve(base, input string) (Target, error) {
 		// the form "p1:<rest>". There is no partition-scoped document
 		// endpoint, so the partition lives in the id and the request base
 		// does not carry it.
-		t.DocID = partitionDocID(t.Partition, rest[0])
+		t.DocID = PartitionDocID(t.Partition, rest[0])
 		switch len(rest) {
 		case 1:
 			t.Kind = KindDocument
@@ -301,13 +301,27 @@ func Resolve(base, input string) (Target, error) {
 	}
 }
 
-// partitionDocID applies CouchDB's partitioned-document convention. A segment
-// that already begins with "<key>:" is used as it is, so that
-// /db/_partition/p1/doc1 and /db/_partition/p1/p1:doc1 name the same document
-// and a path built by pasting an id straight out of "ls" works.
-func partitionDocID(key, seg string) string {
+// PartitionDocID applies CouchDB's partitioned-document convention: a document
+// in partition p1 has an id of the form "p1:<rest>". A segment that already
+// begins with "<key>:" is used as it is, so that /db/_partition/p1/doc1 and
+// /db/_partition/p1/p1:doc1 name the same document and a path built by pasting
+// an id straight out of "ls" works.
+//
+// It is exported because the convention is not only Resolve's: tab completion
+// builds the same qualified id to bound a key range with, and one definition
+// is what keeps the two agreeing about an id the operator typed either way.
+func PartitionDocID(key, seg string) string {
 	if strings.HasPrefix(seg, key+":") {
 		return seg
 	}
 	return key + ":" + seg
+}
+
+// TrimPartition reverses PartitionDocID: it returns the short form of an id
+// inside partition key, and an id that does not belong to that partition
+// unchanged. CouchDB's keys are the qualified ids while the operator types and
+// reads the short ones, so everything that displays an id from inside a
+// partition goes through it.
+func TrimPartition(key, id string) string {
+	return strings.TrimPrefix(id, key+":")
 }

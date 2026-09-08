@@ -163,6 +163,22 @@ func TestCompletePathInsideAPartitionStripsTheKey(t *testing.T) {
 	}
 }
 
+// A partitioned id pasted out of "ls" already carries its "p1:" prefix, and
+// the path grammar accepts it as the same document the short form names. The
+// key range completion asks for has to follow that rule too, or the one form
+// an operator is most likely to paste completes to nothing.
+func TestCompletePathInsideAPartitionAcceptsAQualifiedID(t *testing.T) {
+	srv := partitionServer(t)
+	s := connected(t, srv)
+	got := CompletePath(t.Context(), s, nil, "/pdb/_partition/p1/p1:doc")
+	if len(got) != 2 || got[0].Value != "/pdb/_partition/p1/doc1" || got[0].Display != "doc1" {
+		t.Fatalf("candidates = %+v", got)
+	}
+	if q := srv.Last("GET", "/pdb/_partition/p1/_all_docs").Query("startkey_docid"); q != "p1:doc" {
+		t.Errorf("startkey_docid = %q, want p1:doc rather than a doubled prefix", q)
+	}
+}
+
 func TestCompletePathOffersDesignInsideAPartition(t *testing.T) {
 	srv := partitionServer(t)
 	s := connected(t, srv)

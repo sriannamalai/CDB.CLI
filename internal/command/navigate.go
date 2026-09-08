@@ -458,10 +458,12 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 		// Inside a partition CouchDB's keys are the fully qualified ids
 		// ("p1:doc1") while the operator types the short form, so the key
 		// range is qualified on the way in and the prefix is stripped on the
-		// way out.
+		// way out. Both halves go through path's own helpers, which is what
+		// makes an id pasted with its prefix already on it complete to the
+		// same document the short form names.
 		prefix := partial
 		if base.Partition != "" {
-			prefix = base.Partition + ":" + partial
+			prefix = path.PartitionDocID(base.Partition, partial)
 		}
 		page, err := s.Client.AllDocs(ctx, base.Database, couch.AllDocsOptions{
 			Partition:     base.Partition,
@@ -478,7 +480,7 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 			}
 			name := r.ID
 			if base.Partition != "" {
-				name = strings.TrimPrefix(name, base.Partition+":")
+				name = path.TrimPartition(base.Partition, name)
 			}
 			out = append(out, Candidate{Value: join(encodeDocID(name)), Display: name, Description: r.Rev, Tag: "documents"})
 		}

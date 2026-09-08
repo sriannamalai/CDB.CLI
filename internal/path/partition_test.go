@@ -121,3 +121,42 @@ func TestResolveNamedSegmentAfterAChainOfDotDots(t *testing.T) {
 		})
 	}
 }
+
+// PartitionDocID and TrimPartition are the two halves of CouchDB's
+// "<key>:<id>" convention, and they are exported so that the completion code
+// in internal/command builds and strips the prefix exactly the way Resolve
+// does. The pair round-trips: trimming what the builder produced gives the
+// short form back.
+func TestPartitionDocID(t *testing.T) {
+	for _, tc := range []struct{ name, key, seg, want string }{
+		{"short form gains the prefix", "p1", "doc1", "p1:doc1"},
+		{"a qualified id is used as it is", "p1", "p1:doc1", "p1:doc1"},
+		{"another partition's prefix is not a prefix of this one", "p1", "p2:doc1", "p1:p2:doc1"},
+		{"an empty segment still names the partition", "p1", "", "p1:"},
+		{"a key with a colon in it", "a:b", "doc1", "a:b:doc1"},
+		{"a decoded key keeps its spaces", "a b", "doc1", "a b:doc1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PartitionDocID(tc.key, tc.seg); got != tc.want {
+				t.Errorf("PartitionDocID(%q, %q) = %q, want %q", tc.key, tc.seg, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTrimPartition(t *testing.T) {
+	for _, tc := range []struct{ name, key, id, want string }{
+		{"the prefix comes off", "p1", "p1:doc1", "doc1"},
+		{"an id of another partition is left alone", "p1", "p2:doc1", "p2:doc1"},
+		{"an unqualified id is left alone", "p1", "doc1", "doc1"},
+		{"only the first prefix comes off", "p1", "p1:p1:doc1", "p1:doc1"},
+		{"a key with a colon in it", "a:b", "a:b:doc1", "doc1"},
+		{"the round trip", "p1", PartitionDocID("p1", "doc1"), "doc1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := TrimPartition(tc.key, tc.id); got != tc.want {
+				t.Errorf("TrimPartition(%q, %q) = %q, want %q", tc.key, tc.id, got, tc.want)
+			}
+		})
+	}
+}
