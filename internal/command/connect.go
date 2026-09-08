@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -214,9 +215,18 @@ func dial(ctx context.Context, s *session.Session, profile config.Profile, attac
 	}
 	// Spec 6.1: the connection is verified with GET /_session, which is what
 	// proves the credentials were accepted; GET / answers for anyone.
-	if _, err := cc.Session(ctx); err != nil {
+	sess, err := cc.Session(ctx)
+	if err != nil {
 		_ = cc.Close()
 		return connection{}, err
+	}
+	// A server with no admins, or a JWT it declines to honour, answers
+	// GET /_session with "name": null and a 200. Asking for authentication and
+	// silently getting none is a failure, not a connection.
+	if sess.Name == "" && profile.Auth != string(couch.AuthNone) {
+		_ = cc.Close()
+		return connection{}, couch.NewError(http.StatusUnauthorized, "unauthorized",
+			"Login succeeded anonymously; check the username.", "authenticate", "server "+cc.Host())
 	}
 	if !supportedVersion(info.Version) {
 		fmt.Fprintf(s.Stderr, "warning: this server reports CouchDB %s; cdb supports 3.2 through 3.5.\n", info.Version)
@@ -226,6 +236,15 @@ func dial(ctx context.Context, s *session.Session, profile config.Profile, attac
 	}
 	s.Attach(cc, attachAs)
 	return connection{Profile: profile, Secret: secret, Info: info}, nil
+}
+
+// validAuthKind reports whether s is one of the three kinds couch.New acts on.
+func validAuthKind(s string) bool {
+	switch couch.AuthKind(s) {
+	case couch.AuthSession, couch.AuthJWT, couch.AuthNone:
+		return true
+	}
+	return false
 }
 
 // supportedVersion reports whether v is CouchDB 3.2 through 3.5.
@@ -410,9 +429,20 @@ func promptForProfile(s *session.Session) (config.Profile, string, error) {
 	if err != nil {
 		return config.Profile{}, "", err
 	}
-	auth, err := ask("Authentication (session, jwt, none)", "session")
-	if err != nil {
-		return config.Profile{}, "", err
+	// Re-ask until the answer is one cdb understands. couch.New ignores an
+	// auth kind it does not recognise, so accepting "sesion" here would build
+	// an unauthenticated client, skip the username and secret questions, and
+	// offer to save a profile that can never log in.
+	var auth string
+	for {
+		auth, err = ask("Authentication (session, jwt, none)", "session")
+		if err != nil {
+			return config.Profile{}, "", err
+		}
+		if validAuthKind(auth) {
+			break
+		}
+		fmt.Fprintf(s.Stdout, "%q is not an authentication kind; expected session, jwt or none.\n", auth)
 	}
 	name, err := ask("Profile name", "local")
 	if err != nil {

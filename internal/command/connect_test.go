@@ -640,6 +640,79 @@ func TestConnectGuidedPromptSavesAfterVerifying(t *testing.T) {
 	}
 }
 
+func TestConnectGuidedPromptReAsksForAnUnknownAuthKind(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), nil)
+	// URL, a typo'd auth kind, then a valid one, profile name, save.
+	s, out := guidedSession(srv.URL() + "\nsesion\nnone\nlocal\ny\n")
+
+	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
+		t.Fatalf("guided connect: %v (output: %s)", err, out.String())
+	}
+	if !strings.Contains(out.String(), "session, jwt or none") {
+		t.Errorf("the walk-through did not name the valid authentication kinds:\n%s", out.String())
+	}
+	if n := strings.Count(out.String(), "Authentication ("); n != 2 {
+		t.Errorf("asked for the authentication kind %d times, want 2 (one rejected, one accepted)", n)
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("local")
+	if !ok {
+		t.Fatalf("profiles = %v, want one named local", back.Profiles)
+	}
+	if p.Auth != "none" {
+		t.Errorf("saved auth = %q, want the corrected answer \"none\" rather than the typo", p.Auth)
+	}
+}
+
+func TestConnectRejectsAnAnonymousLoginWhenAuthWasAskedFor(t *testing.T) {
+	srv := couchtest.New(t)
+	// A server with no admins answers 200 with a null user name.
+	srv.JSON("GET", "/_session", 200, `{"ok":true,"userCtx":{"name":null,"roles":[]},"info":{"authenticated":"default","authentication_handlers":["cookie","default"]}}`)
+	path := withDeps(t, config.Defaults(), nil)
+	// URL, auth kind, profile name, username, password, save.
+	s, out := guidedSession(srv.URL() + "\nsession\nlocal\nadmin\ns3cret\ny\n")
+
+	_, err := Connect().Run(context.Background(), s, Invocation{})
+	if err == nil {
+		t.Fatalf("connect reported success for a login that was silently anonymous (output: %s)", out.String())
+	}
+	if !strings.Contains(err.Error(), "anonymously") {
+		t.Errorf("error = %q, want it to say the login was anonymous", err)
+	}
+	if s.Connected() {
+		t.Error("the session holds a client after an anonymous login")
+	}
+	back, loadErr := config.Load(path)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(back.Profiles) != 0 {
+		t.Errorf("profiles = %v, want none saved for a profile that cannot log in", back.Profiles)
+	}
+	if names, _ := CurrentDeps().Secrets.List(); len(names) != 0 {
+		t.Errorf("secrets = %v, want none saved", names)
+	}
+}
+
+func TestConnectAllowsAnAnonymousLoginWhenAuthIsNone(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_session", 200, `{"ok":true,"userCtx":{"name":null,"roles":[]},"info":{"authenticated":"default"}}`)
+	withDeps(t, config.Defaults(), nil)
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	// An unauthenticated connection is exactly what "none" asked for.
+	if _, err := Connect().Run(context.Background(), s, Invocation{Args: []string{srv.URL()}}); err != nil {
+		t.Fatalf("connect to an admin-party server with auth none: %v", err)
+	}
+	if !s.Connected() {
+		t.Fatal("not connected")
+	}
+}
+
 // withBrokenKeyring installs deps whose keyring refuses to open, the way a
 // machine with no usable backend behaves.
 func withBrokenKeyring(t *testing.T, cfg *config.Config, env map[string]string) string {
@@ -742,6 +815,44 @@ func TestConnectSaveFailsAndWritesNothingWhenTheKeyringCannotOpen(t *testing.T) 
 	}
 	if len(back.Profiles) != 0 {
 		t.Errorf("profiles = %v, want no half-saved profile whose secret was dropped", back.Profiles)
+	}
+}
+
+func TestOpenConnectsAndRecordsTheProfile(t *testing.T) {
+	srv := couchtest.New(t)
+	cfg := config.Defaults()
+	cfg.Default = "local"
+	cfg.SetProfile(config.Profile{Name: "local", URL: srv.URL(), Auth: "none"})
+	withDeps(t, cfg, nil)
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	if err := Open(context.Background(), s, ""); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if !s.Connected() {
+		t.Fatal("Open returned nil but attached no client")
+	}
+	if s.Profile != "local" {
+		t.Errorf("session profile = %q, want local", s.Profile)
+	}
+	if s.Client.URL() != srv.URL() {
+		t.Errorf("client URL = %q, want %q", s.Client.URL(), srv.URL())
+	}
+	if srv.Last("GET", "/_session") == nil {
+		t.Error("Open did not verify the connection with GET /_session")
+	}
+}
+
+func TestOpenWithNoSavedProfileIsAUsageError(t *testing.T) {
+	withDeps(t, config.Defaults(), nil)
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	err := Open(context.Background(), s, "")
+	if _, ok := err.(*UsageError); !ok {
+		t.Fatalf("err = %#v, want *UsageError", err)
+	}
+	if s.Connected() {
+		t.Error("Open attached a client despite returning an error")
 	}
 }
 
