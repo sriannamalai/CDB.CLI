@@ -25,6 +25,7 @@ Takes exactly 2 arguments.
 | `--batch` | int | `200` | documents per checkpoint |
 | `--resume` | bool | `false` | continue an interrupted dump |
 | `--since` | string |  | start from this update sequence |
+| `--tombstones` | bool | `false` | dump deleted documents as tombstones too |
 
 ## Global flags
 

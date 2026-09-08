@@ -40,6 +40,7 @@ $ cdb backup /movies movies.cdb.gz --resume`,
 			fs.Bool("resume", false, "continue an interrupted dump")
 			fs.String("since", "", "start from this update sequence")
 			fs.Int("batch", backupBatchSize, "documents per checkpoint")
+			fs.Bool("tombstones", false, "dump deleted documents as tombstones too")
 		},
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
 			t, err := s.Resolve(inv.Arg(0))
@@ -55,8 +56,10 @@ $ cdb backup /movies movies.cdb.gz --resume`,
 				batch = backupBatchSize
 			}
 
+			tombstones := inv.Bool("tombstones")
+
 			since := inv.String("since")
-			var docs, atts, written int64
+			var docs, deleted, atts, written int64
 			var f *os.File
 			// needHeader stays true for a dump that starts from nothing. Scan
 			// refuses a file whose first member is not a header, so a resume
@@ -71,10 +74,28 @@ $ cdb backup /movies movies.cdb.gz --resume`,
 				res, serr := backup.Scan(f)
 				if serr != nil {
 					f.Close()
+					var ve *backup.VersionError
+					if errors.As(serr, &ve) {
+						return nil, Usagef("backup", "%s was written by a newer cdb (dump format %s); upgrade cdb to read it.", file, ve.Version)
+					}
 					if errors.Is(serr, backup.ErrNotADump) {
 						return nil, Usagef("backup", "%s is not a cdb dump, so --resume would overwrite it: pick another file, or remove --resume to start a new dump", file)
 					}
 					return nil, serr
+				}
+				// A dump is either a record of deletions or it is not; the two
+				// halves of a mixed file would disagree about what the absence
+				// of a tombstone means. res.Offset is 0 only for a file with no
+				// header at all, which is a dump starting from nothing.
+				//
+				// Checked here, before res.Complete and before Truncate: a
+				// refused resume must not have already changed the file.
+				if res.Offset > 0 && res.Tombstones != tombstones {
+					f.Close()
+					if res.Tombstones {
+						return nil, Usagef("backup", "%s was written with tombstones; resume it with --tombstones, or start a new dump.", file)
+					}
+					return nil, Usagef("backup", "%s was written without tombstones; resume it without --tombstones, or start a new dump.", file)
 				}
 				if res.Complete {
 					f.Close()
@@ -94,7 +115,7 @@ $ cdb backup /movies movies.cdb.gz --resume`,
 					since = res.Seq
 				}
 				needHeader = res.Offset == 0
-				docs, atts, written = res.Docs, res.Attachments, res.Bytes
+				docs, deleted, atts, written = res.Docs, res.Deleted, res.Attachments, res.Bytes
 				fmt.Fprintf(s.Stderr, "Resuming %s from sequence %s (%d documents, %s already written).\n", file, sinceLabel(since), docs, humanBytes(written))
 			} else {
 				f, err = os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -121,10 +142,12 @@ $ cdb backup /movies movies.cdb.gz --resume`,
 					return nil, err
 				}
 				if err := w.WriteHeader(backup.Header{
+					Version:     backup.FormatVersion,
 					DB:          t.Database,
 					Server:      server.Version,
 					Started:     time.Now().UTC().Format(time.RFC3339),
 					Partitioned: info.Partitioned,
+					Tombstones:  tombstones,
 				}); err != nil {
 					return nil, err
 				}
@@ -158,9 +181,12 @@ $ cdb backup /movies movies.cdb.gz --resume`,
 				}
 				refs := make([]couch.BulkRef, 0, len(page.Rows))
 				for _, row := range page.Rows {
-					// Tombstones are deliberately not carried: a dump holds
-					// only live documents.
-					if row.Deleted {
+					// A deleted row's leaf revisions go into the same
+					// _bulk_get as the live ones; CouchDB answers with
+					// {"_id":…,"_rev":…,"_deleted":true,"_revisions":{…}},
+					// which is an ordinary doc record. Without --tombstones a
+					// dump holds only live documents, as in 1.0.
+					if row.Deleted && !tombstones {
 						continue
 					}
 					for _, rev := range row.Revs {
@@ -191,6 +217,9 @@ $ cdb backup /movies movies.cdb.gz --resume`,
 						return nil, err
 					}
 					docs++
+					if backup.IsTombstone(stripped) {
+						deleted++
+					}
 					written += int64(len(stripped))
 					for _, name := range attachments {
 						n, err := writeAttachment(ctx, s, w, t.Database, id, rev, name)
@@ -215,13 +244,18 @@ $ cdb backup /movies movies.cdb.gz --resume`,
 				}
 			}
 
-			if err := w.WriteFooter(backup.Footer{Docs: docs, Attachments: atts, LastSeq: lastSeq}); err != nil {
+			if err := w.WriteFooter(backup.Footer{Docs: docs, Deleted: deleted, Attachments: atts, LastSeq: lastSeq}); err != nil {
 				return nil, err
 			}
 			if err := w.Close(); err != nil {
 				return nil, err
 			}
-			return Message{Text: fmt.Sprintf("Wrote %d document(s), %d attachment(s) and %s from %q to %s (sequence %s).", docs, atts, humanBytes(written), t.Database, file, lastSeq)}, nil
+			text := fmt.Sprintf("Wrote %d document(s)", docs)
+			if deleted > 0 {
+				text += fmt.Sprintf(" (%d of them deletions)", deleted)
+			}
+			text += fmt.Sprintf(", %d attachment(s) and %s from %q to %s (sequence %s).", atts, humanBytes(written), t.Database, file, lastSeq)
+			return Message{Text: text}, nil
 		},
 	}
 }
