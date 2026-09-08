@@ -105,3 +105,6 @@ scoops:
 release:
   draft: false
   prerelease: auto
+  # Re-running the release workflow (for example after enabling the tap
+  # token) must not fail on assets that the first run already uploaded.
+  replace_existing_artifacts: true
