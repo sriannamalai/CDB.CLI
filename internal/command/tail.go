@@ -36,10 +36,11 @@ report. It defaults to the beginning of the feed, or to "now" under --follow,
 so a follow shows what happens from the moment you start it.
 
 A CouchDB update sequence is a long opaque string, so the table shows only its
-leading number, which is the part worth reading; a sequence that number cannot
-be taken from is shown whole. The full value is what --json prints and what
---since takes, so copy it from --json or from the paging hint, never from the
-table.
+leading number followed by an ellipsis, which is the part worth reading; a
+sequence that number cannot be taken from is shown whole, unmarked. The full
+value is what --json prints and what --since takes, so copy it from --json or
+from the paging hint and never from the table: CouchDB accepts a bare number
+in --since and answers it by replaying the feed from the beginning.
 
 CouchDB has no partition-scoped changes feed, so tail takes a database path.`
 
@@ -51,9 +52,9 @@ func Tail() Command {
 		Example: `$ cdb tail /movies --limit 3
  SEQ | ID        | REV                                | DELETED
 -----+-----------+------------------------------------+---------
- 3   | tt0211915 | 1-967a00dff5e02add41819138abb3284d | false
- 4   | tt2543164 | 2-7051cbe5c8faecd085a3fa619e6e6337 | false
- 5   | tt0245429 | 3-825cb35de44c433bfb2df415563a19de | true
+ 3-… | tt0211915 | 1-967a00dff5e02add41819138abb3284d | false
+ 4-… | tt2543164 | 2-7051cbe5c8faecd085a3fa619e6e6337 | false
+ 5-… | tt0245429 | 3-825cb35de44c433bfb2df415563a19de | true
 more changes: tail /movies --since "5-g1AAAAFV"
 Sequences are shortened in the table; use --json for the full value and --since.
 
@@ -177,11 +178,18 @@ func tailColumns(includeDocs bool) []Column {
 // shortSeq is a sequence as the table shows it: the number CouchDB puts before
 // the opaque body, which is the only part of it a person reads. A whole
 // sequence is around a hundred characters and would crowd every other column
-// off the line. Anything not shaped "<digits>-<rest>" is returned whole rather
-// than guessed at, and Row.JSON always keeps the full value.
+// off the line.
+//
+// A truncated cell keeps the "-" and gains an ellipsis, because CouchDB 3
+// accepts a bare integer in --since and answers it by replaying the feed from
+// the beginning: a cell reading "25" would look like a sequence an operator
+// could paste back, and would silently hand them the whole database. "25-…"
+// cannot be mistaken for one. Anything not shaped "<digits>-<something>" is
+// returned whole and unmarked, because nothing was dropped from it, and
+// Row.JSON always keeps the full value either way.
 func shortSeq(seq string) string {
 	i := strings.IndexByte(seq, '-')
-	if i <= 0 {
+	if i <= 0 || i == len(seq)-1 {
 		return seq
 	}
 	for _, c := range []byte(seq[:i]) {
@@ -189,7 +197,7 @@ func shortSeq(seq string) string {
 			return seq
 		}
 	}
-	return seq[:i]
+	return seq[:i+1] + "…"
 }
 
 // tailRow renders one change. Row.JSON is the machine-readable contract:

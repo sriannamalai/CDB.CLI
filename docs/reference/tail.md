@@ -23,10 +23,11 @@ report. It defaults to the beginning of the feed, or to "now" under --follow,
 so a follow shows what happens from the moment you start it.
 
 A CouchDB update sequence is a long opaque string, so the table shows only its
-leading number, which is the part worth reading; a sequence that number cannot
-be taken from is shown whole. The full value is what --json prints and what
---since takes, so copy it from --json or from the paging hint, never from the
-table.
+leading number followed by an ellipsis, which is the part worth reading; a
+sequence that number cannot be taken from is shown whole, unmarked. The full
+value is what --json prints and what --since takes, so copy it from --json or
+from the paging hint and never from the table: CouchDB accepts a bare number
+in --since and answers it by replaying the feed from the beginning.
 
 CouchDB has no partition-scoped changes feed, so tail takes a database path.
 
@@ -66,9 +67,9 @@ Takes at most 1 argument.
 $ cdb tail /movies --limit 3
  SEQ | ID        | REV                                | DELETED
 -----+-----------+------------------------------------+---------
- 3   | tt0211915 | 1-967a00dff5e02add41819138abb3284d | false
- 4   | tt2543164 | 2-7051cbe5c8faecd085a3fa619e6e6337 | false
- 5   | tt0245429 | 3-825cb35de44c433bfb2df415563a19de | true
+ 3-… | tt0211915 | 1-967a00dff5e02add41819138abb3284d | false
+ 4-… | tt2543164 | 2-7051cbe5c8faecd085a3fa619e6e6337 | false
+ 5-… | tt0245429 | 3-825cb35de44c433bfb2df415563a19de | true
 more changes: tail /movies --since "5-g1AAAAFV"
 Sequences are shortened in the table; use --json for the full value and --since.
 

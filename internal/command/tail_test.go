@@ -53,8 +53,9 @@ func TestTailReadsTheNormalFeed(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("got %d rows, want 2", len(rows))
 	}
-	// The cell is the sequence's numeric prefix; the JSON keeps it whole.
-	if got := rows[0].Cells; got[0] != "1" || got[1] != "a" || got[2] != "1-aa" || got[3] != "false" {
+	// The cell is the sequence's numeric prefix, marked as truncated; the
+	// JSON keeps it whole.
+	if got := rows[0].Cells; got[0] != "1-…" || got[1] != "a" || got[2] != "1-aa" || got[3] != "false" {
 		t.Errorf("row 0 cells = %v", got)
 	}
 	if got := string(rows[0].JSON); !strings.Contains(got, `"seq":"1-x"`) {
@@ -170,10 +171,14 @@ func TestTailShortensTheSequenceInTheTable(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("got %d rows, want 2", len(rows))
 	}
-	if got := rows[0].Cells[0]; got != "25" {
-		t.Errorf("seq cell = %q, want the numeric prefix %q", got, "25")
+	// The marker matters: CouchDB accepts a bare integer in --since and
+	// answers it by replaying the whole feed, so a cell that looked like a
+	// usable sequence would be a trap.
+	if got := rows[0].Cells[0]; got != "25-…" {
+		t.Errorf("seq cell = %q, want the marked prefix %q", got, "25-…")
 	}
-	// A sequence with no "-" has no prefix to take, so it is shown whole.
+	// A sequence with no "-" has no prefix to take, so it is shown whole and
+	// carries no marker, because nothing was dropped.
 	if got := rows[1].Cells[0]; got != "7" {
 		t.Errorf("seq cell = %q, want %q", got, "7")
 	}
@@ -184,6 +189,18 @@ func TestTailShortensTheSequenceInTheTable(t *testing.T) {
 	want := "more changes: tail /mydb --since \"" + long + "\"\n" + tailSeqHint
 	if st.Hint != want {
 		t.Errorf("hint = %q, want %q", st.Hint, want)
+	}
+}
+
+func TestTailPassesTheFilterThrough(t *testing.T) {
+	srv := tailServer(t)
+	s := connected(t, srv)
+
+	if _, err := invoke(t, Tail(), s, "/mydb", "--filter", "app/by_type"); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.Last("GET", "/mydb/_changes").Query("filter"); got != "app/by_type" {
+		t.Errorf("filter = %q, want %q", got, "app/by_type")
 	}
 }
 
