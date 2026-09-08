@@ -142,15 +142,39 @@ func hostFromTarget(target string) string {
 	return fields[len(fields)-1]
 }
 
-// userAndHost pulls a user name and host out of `user "admin" at host:port`,
-// tolerating targets that carry neither.
+// userAndHost pulls a user name and host out of a `user "admin" at
+// host:port` target — the only shape doDecode, GetRev and
+// sessionTransport.login build for a 401. Any other target (a document, a
+// database, a bare server) falls back to the generic form already used for
+// connect's `server host:port` target: "the configured user" for the name,
+// and whatever hostFromTarget can find for the host. Falling back this way,
+// rather than reading the target's first quoted string, matters: a document
+// or database target's quoted string is not a user name, and treating it as
+// one would put a document id in a "Login failed for ..." sentence.
 func userAndHost(target string) (string, string) {
-	q := splitQuoted(target)
-	user := "the configured user"
-	if len(q.quoted) > 0 && q.quoted[0] != "" {
-		user = q.quoted[0]
+	if name, host, ok := parseUserAtHost(target); ok {
+		return name, host
 	}
-	return user, hostFromTarget(target)
+	return "the configured user", hostFromTarget(target)
+}
+
+// parseUserAtHost recognises exactly `user "<name>" at <host>`.
+func parseUserAtHost(target string) (name, host string, ok bool) {
+	const prefix = `user "`
+	if !strings.HasPrefix(target, prefix) {
+		return "", "", false
+	}
+	rest := target[len(prefix):]
+	sep := strings.Index(rest, `" at `)
+	if sep < 0 {
+		return "", "", false
+	}
+	name = rest[:sep]
+	host = rest[sep+len(`" at `):]
+	if name == "" || host == "" || strings.ContainsAny(host, ` "`) {
+		return "", "", false
+	}
+	return name, host, true
 }
 
 func capitalise(s string) string {

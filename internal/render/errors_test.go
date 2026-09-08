@@ -1,11 +1,15 @@
 package render
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
+	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
 )
 
 func TestErrorMessage(t *testing.T) {
@@ -56,6 +60,25 @@ func TestErrorMessage(t *testing.T) {
 			err:  couch.NewError(404, "not_found", "Database does not exist.", "list", `documents in "nosuchdb"`),
 			want: `Database "nosuchdb" does not exist. "ls /" lists databases.`,
 		},
+		{
+			// A document target's quoted string is a document id, not a user
+			// name. Before userAndHost required the "user ... at ..." shape,
+			// this target rendered "Login failed for doc1 at ...". Reachable
+			// today only if some future caller mis-targets a 401; doDecode,
+			// GetRev and sessionTransport.login all now build the proper
+			// user-and-host target instead.
+			name: "401 with a document-shaped target never uses the document id as the user",
+			err:  couch.NewError(401, "unauthorized", "Name or password is incorrect.", "read", `document "doc1" in "mydb"`),
+			want: `Login failed for the configured user at "mydb". Check the password with "profiles" or "connect".`,
+		},
+		{
+			// A bare server target has no quoted string at all, so the old
+			// code already fell back to "the configured user" here; this pins
+			// that the strict parse keeps doing so.
+			name: "401 with a server-shaped target falls back to the generic user",
+			err:  couch.NewError(401, "unauthorized", "Name or password is incorrect.", "read", "server localhost:5984"),
+			want: `Login failed for the configured user at localhost:5984. Check the password with "profiles" or "connect".`,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,5 +125,36 @@ func TestErrorMessageNeverLeaksACredential(t *testing.T) {
 	}
 	if !strings.Contains(got, "localhost:5984") {
 		t.Errorf("ErrorMessage = %q, want it to name the host", got)
+	}
+}
+
+// TestErrorMessageForAnUnauthorizedGetRevNamesTheRealUser is the end-to-end
+// regression for the GetRev finding: put, rm, cp and attach all call GetRev
+// for optimistic concurrency, and under jwt/none auth there is no session
+// transport to retry a 401 first, so a HEAD can answer 401 directly. Before
+// GetRev built the same user-and-host target doDecode does, this rendered
+// "Login failed for doc1 at ..." — the document id, not the user.
+func TestErrorMessageForAnUnauthorizedGetRevNamesTheRealUser(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.On("HEAD", "/mydb/doc1", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	c, err := couch.New(couch.Config{URL: srv.URL(), Auth: couch.AuthJWT, Username: "admin", Secret: "sometoken"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	_, err = c.GetRev(context.Background(), "mydb", "doc1")
+	if err == nil {
+		t.Fatal("GetRev returned no error for a 401")
+	}
+	got := ErrorMessage(err, false)
+	want := fmt.Sprintf(`Login failed for admin at %s. Check the password with "profiles" or "connect".`, c.Host())
+	if got != want {
+		t.Errorf("ErrorMessage = %q,\n           want %q", got, want)
+	}
+	if strings.Contains(got, "doc1") {
+		t.Errorf("ErrorMessage = %q, the document id must not appear as the user", got)
 	}
 }

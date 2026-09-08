@@ -87,6 +87,15 @@ func (c *Client) GetRev(ctx context.Context, db, docID string) (string, error) {
 	if res.StatusCode >= 400 {
 		// A HEAD has no body to read a reason out of, so the status text stands
 		// in for one.
+		if res.StatusCode == http.StatusUnauthorized {
+			// put, rm, cp and attach all call GetRev for optimistic concurrency,
+			// and under jwt/none auth there is no session transport to retry a
+			// 401 first, so this is reachable directly. It needs the same
+			// user-and-host target as doDecode's 401, not the document target,
+			// so the rendered sentence names the real user rather than the
+			// document being read.
+			return "", NewError(res.StatusCode, "unauthorized", http.StatusText(res.StatusCode), "read", unauthorizedTarget(c.cfg.Username, c.host))
+		}
 		return "", NewError(res.StatusCode, nameForStatus(res.StatusCode), http.StatusText(res.StatusCode), "read", docTarget(db, docID))
 	}
 	return strings.Trim(res.Header.Get("ETag"), `"`), nil

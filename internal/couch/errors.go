@@ -115,6 +115,13 @@ func NewError(status int, name, reason, op, target string) *Error {
 	return &Error{Status: status, Name: name, Reason: reason, Op: op, Target: target}
 }
 
+// unauthorizedTarget builds the target every 401 carries: enough for the
+// operator-facing message (internal/render's plainSentence) to name the real
+// user and host, instead of whatever the caller's own operation was about.
+func unauthorizedTarget(username, host string) string {
+	return fmt.Sprintf("user %q at %s", username, host)
+}
+
 func isDNSError(err error) bool {
 	var d *net.DNSError
 	return errors.As(err, &d)

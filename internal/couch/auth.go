@@ -56,7 +56,7 @@ func (t *sessionTransport) login(ctx context.Context) error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return loginError(res, fmt.Sprintf("user %q at %s", t.username, hostOf(t.baseURL)))
+		return loginError(res, unauthorizedTarget(t.username, hostOf(t.baseURL)))
 	}
 	t.authed = true
 	return nil
