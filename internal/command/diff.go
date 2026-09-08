@@ -79,16 +79,19 @@ func DiffRevisions(winner, other json.RawMessage, rev string) RevisionDiff {
 	for _, field := range sorted {
 		wv, inW := w[field]
 		ov, inO := o[field]
-		ws, os := diffValue(field, wv), diffValue(field, ov)
+		// Compare on the whole value and render from the summary: two values
+		// that agree only for their first few dozen runes are different
+		// values, and resolve deletes the revision the operator does not keep.
+		if inW && inO && diffKey(field, wv) == diffKey(field, ov) {
+			continue
+		}
 		switch {
-		case inW && inO && ws == os:
-			// Identical; nothing to report.
 		case inW && inO:
-			d.Changes = append(d.Changes, FieldChange{Field: field, Kind: ChangeChanged, Winner: ws, Other: os})
+			d.Changes = append(d.Changes, FieldChange{Field: field, Kind: ChangeChanged, Winner: diffValue(field, wv), Other: diffValue(field, ov)})
 		case inO:
-			d.Changes = append(d.Changes, FieldChange{Field: field, Kind: ChangeAdded, Other: os})
+			d.Changes = append(d.Changes, FieldChange{Field: field, Kind: ChangeAdded, Other: diffValue(field, ov)})
 		default:
-			d.Changes = append(d.Changes, FieldChange{Field: field, Kind: ChangeRemoved, Winner: ws})
+			d.Changes = append(d.Changes, FieldChange{Field: field, Kind: ChangeRemoved, Winner: diffValue(field, wv)})
 		}
 	}
 	return d
@@ -133,9 +136,27 @@ func decodeObject(body json.RawMessage) (map[string]any, bool) {
 	return m, true
 }
 
-// diffValue summarises one field value. _attachments is rendered by count: its
-// stubs carry digests and lengths that say nothing an operator choosing a
-// revision needs.
+// diffKey renders one field value as the whole text two revisions are compared
+// on: the marshalled form, so key order and whitespace do not register, and the
+// attachment count for _attachments, whose stubs carry digests and lengths that
+// change without the attachments changing.
+func diffKey(field string, v any) string {
+	if field == "_attachments" {
+		if atts, ok := v.(map[string]any); ok {
+			return fmt.Sprintf("%d attachment(s)", len(atts))
+		}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		// Unreachable: every value here was decoded from JSON, so it is a
+		// map, slice, string, float64, bool or nil.
+		return "\x00unmarshallable"
+	}
+	return string(b)
+}
+
+// diffValue summarises one field value for display, shortening it to fit one
+// line of the chooser. It is never the comparison: see diffKey.
 func diffValue(field string, v any) string {
 	if v == nil {
 		return ""

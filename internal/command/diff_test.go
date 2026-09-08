@@ -56,6 +56,20 @@ func TestDiffRevisions(t *testing.T) {
 			summary: "added: _attachments 1 attachment(s)",
 		},
 		{
+			// The chooser deletes the revision that is not kept, so a
+			// difference past the end of the summary must still be reported.
+			name:    "a value differing past the summary is still changed",
+			winner:  `{"note":"the same first forty characters here, then ALPHA"}`,
+			other:   `{"note":"the same first forty characters here, then OMEGA"}`,
+			summary: `changed: note "the same first forty characters here, … → "the same first forty characters here, …`,
+		},
+		{
+			name:    "a long value identical past the summary is unchanged",
+			winner:  `{"note":"the same first forty characters here, then ALPHA"}`,
+			other:   `{"note":"the same first forty characters here, then ALPHA"}`,
+			summary: "no differences from the current revision",
+		},
+		{
 			name:    "a non-object revision stays selectable",
 			winner:  `{"a":1}`,
 			other:   `[1,2,3]`,
