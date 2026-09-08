@@ -89,6 +89,11 @@ $ cdb replicate /movies https://user:secret@backup.example.com/movies --continuo
 			fs.String("id", "", "document id for the replication job")
 		},
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+			// Before anything is resolved or written: a filter CouchDB will
+			// refuse is the operator's typo, and the same typo tail refuses.
+			if err := checkFilter("replicate", inv.String("filter")); err != nil {
+				return nil, err
+			}
 			replicationURL, err := replicationBase(s, "replicate")
 			if err != nil {
 				return nil, err

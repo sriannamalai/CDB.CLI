@@ -102,6 +102,46 @@ func TestReplicateRejectsANonDatabasePath(t *testing.T) {
 	}
 }
 
+// The same shapes tail refuses, refused here: CouchDB answers a filter that is
+// not "<design>/<name>" with a 400, and a mistyped flag reported as a server
+// error exits 1 with the server's words instead of 2 with cdb's.
+func TestReplicateRejectsAMalformedFilter(t *testing.T) {
+	for _, filter := range []string{"byname", "app/", "/by_type", "app/by_type/extra"} {
+		t.Run(filter, func(t *testing.T) {
+			srv := couchtest.New(t)
+			srv.JSON("POST", "/_replicator", 201, `{"ok":true,"id":"job1","rev":"1-a"}`)
+			s := connected(t, srv)
+			_, err := invoke(t, Replicate(), s, "/src", "/dst", "--filter", filter)
+			var ue *UsageError
+			if !errors.As(err, &ue) {
+				t.Fatalf("err = %v, want a UsageError", err)
+			}
+			if want := `--filter takes a design document and a filter name, as "app/by_type".`; !strings.Contains(ue.Error(), want) {
+				t.Errorf("message = %q, want it to contain %q", ue.Error(), want)
+			}
+			if ue.Command != "replicate" {
+				t.Errorf("Command = %q, want replicate", ue.Command)
+			}
+			if srv.Last("POST", "/_replicator") != nil {
+				t.Error("the replication document was written despite the bad filter")
+			}
+		})
+	}
+}
+
+func TestReplicatePassesAWellFormedFilterThrough(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/_replicator", 201, `{"ok":true,"id":"job1","rev":"1-a"}`)
+	s := connected(t, srv)
+	if _, err := invoke(t, Replicate(), s, "/src", "/dst", "--filter", "app/by_type"); err != nil {
+		t.Fatal(err)
+	}
+	req := srv.Last("POST", "/_replicator")
+	if req == nil || !strings.Contains(string(req.Body), `"filter":"app/by_type"`) {
+		t.Errorf("replication document = %s", req.Body)
+	}
+}
+
 func TestReplicationsList(t *testing.T) {
 	srv := couchtest.New(t)
 	srv.JSON("GET", "/_scheduler/docs", 200, `{"total_rows":1,"offset":0,"docs":[
