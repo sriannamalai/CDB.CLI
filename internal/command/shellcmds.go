@@ -42,9 +42,14 @@ func helpJSON(c Command) json.RawMessage {
 // Help returns the help command, which lists the registry it is built from.
 func Help(reg *Registry) Command {
 	return Command{
-		Name:      "help",
-		Aliases:   []string{"?"},
-		Summary:   "List commands, or explain one command",
+		Name:    "help",
+		Aliases: []string{"?"},
+		Summary: "List commands, or explain one command",
+		Example: `admin@localhost:5984:/> help
+admin@localhost:5984:/> help ls
+ls [path]
+  List databases, documents, or the parts of a design document
+  aliases: list`,
 		Usage:     "[command]",
 		MinArgs:   0,
 		MaxArgs:   1,
@@ -73,6 +78,9 @@ func Help(reg *Registry) Command {
 				}
 				if c.Details != "" {
 					text += "\n\n" + c.Details
+				}
+				if c.Example != "" {
+					text += "\n\nExamples:\n" + c.Example
 				}
 				if c.Flags != nil {
 					fs := reg.NewFlagSet(c)
@@ -103,8 +111,13 @@ func Help(reg *Registry) Command {
 // before shell.New swaps it out with Registry.Replace.
 func HistoryFrom(lines func() []string) Command {
 	return Command{
-		Name:      "history",
-		Summary:   "Show the command history",
+		Name:    "history",
+		Summary: "Show the command history",
+		Example: `admin@localhost:5984:/> history
+ N | LINE
+---+-----------------
+ 1 | cd /movies
+ 2 | ls --limit 2`,
 		ShellOnly: true,
 		MinArgs:   0,
 		MaxArgs:   0,
@@ -137,6 +150,7 @@ func Clear() Command {
 	return Command{
 		Name:      "clear",
 		Summary:   "Clear the screen",
+		Example:   `admin@localhost:5984:/> clear`,
 		ShellOnly: true,
 		MinArgs:   0,
 		MaxArgs:   0,
@@ -154,6 +168,7 @@ func Exit() Command {
 		Name:      "exit",
 		Aliases:   []string{"quit"},
 		Summary:   "Leave the shell",
+		Example:   `admin@localhost:5984:/> exit`,
 		ShellOnly: true,
 		MinArgs:   0,
 		MaxArgs:   0,

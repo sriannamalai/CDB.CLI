@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -162,5 +163,26 @@ func TestJSONObjectUsesLowerCaseKeys(t *testing.T) {
 func TestDefaultRegistryHasPwd(t *testing.T) {
 	if _, ok := Default().Lookup("pwd"); !ok {
 		t.Error("Default() has no pwd command")
+	}
+}
+
+// TestEveryCommandHasSummaryAndExample keeps the generated reference pages and
+// the two help front-ends honest: a command with no summary or no worked
+// example documents itself as a blank line.
+func TestEveryCommandHasSummaryAndExample(t *testing.T) {
+	for _, c := range Default().All() {
+		if c.Summary == "" {
+			t.Errorf("command %q has no Summary", c.Name)
+		}
+		if c.ShellOnly {
+			continue
+		}
+		if c.Example == "" {
+			t.Errorf("command %q has no Example", c.Name)
+			continue
+		}
+		if strings.TrimSpace(c.Example) != c.Example {
+			t.Errorf("command %q: Example has leading or trailing whitespace", c.Name)
+		}
 	}
 }

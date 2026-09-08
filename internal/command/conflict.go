@@ -16,8 +16,15 @@ import (
 // Conflicts returns the conflicts command.
 func Conflicts() Command {
 	return Command{
-		Name:        "conflicts",
-		Summary:     "List conflicted documents, or the conflicting revisions of one document",
+		Name:    "conflicts",
+		Summary: "List conflicted documents, or the conflicting revisions of one document",
+		Example: `$ cdb conflicts /movies
+ ID         | REV                                | CONFLICTS
+------------+------------------------------------+-----------
+ conflicted | 1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb |         2
+resolve one with: resolve <path>
+
+$ cdb conflicts /movies/conflicted`,
 		Usage:       "[path]",
 		MinArgs:     0,
 		MaxArgs:     1,
@@ -130,8 +137,10 @@ func conflictRows(ctx context.Context, s *session.Session, t path.Target, winner
 // Resolve returns the resolve command.
 func Resolve() Command {
 	return Command{
-		Name:        "resolve",
-		Summary:     "Keep one revision of a conflicted document and delete the rest",
+		Name:    "resolve",
+		Summary: "Keep one revision of a conflicted document and delete the rest",
+		Example: `$ cdb resolve /movies/conflicted --keep 1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --yes
+Kept revision 1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb of /movies/conflicted and deleted 2 other revision(s).`,
 		Usage:       "<doc-path>",
 		MinArgs:     1,
 		MaxArgs:     1,

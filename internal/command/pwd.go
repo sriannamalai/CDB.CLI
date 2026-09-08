@@ -11,6 +11,8 @@ func Pwd() Command {
 	return Command{
 		Name:    "pwd",
 		Summary: "Print the current path",
+		Example: `admin@localhost:5984:/movies> pwd
+/movies`,
 		Usage:   "",
 		MinArgs: 0,
 		MaxArgs: 0,

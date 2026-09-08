@@ -17,8 +17,12 @@ import (
 // Cd returns the cd command.
 func Cd() Command {
 	return Command{
-		Name:        "cd",
-		Summary:     "Change the current path",
+		Name:    "cd",
+		Summary: "Change the current path",
+		Example: `admin@localhost:5984:/> cd /movies
+admin@localhost:5984:/movies> cd ..
+admin@localhost:5984:/> cd movies/_design/app
+admin@localhost:5984:/movies/_design/app>`,
 		Usage:       "[path]",
 		MinArgs:     0,
 		MaxArgs:     1,
@@ -109,9 +113,24 @@ func hasMember(doc json.RawMessage, field, key string) bool {
 // Ls returns the ls command.
 func Ls() Command {
 	return Command{
-		Name:        "ls",
-		Aliases:     []string{"list"},
-		Summary:     "List databases, documents, or the parts of a design document",
+		Name:    "ls",
+		Aliases: []string{"list"},
+		Summary: "List databases, documents, or the parts of a design document",
+		Example: `$ cdb ls /
+ NAME        | DOCS |     SIZE | PARTITIONED
+-------------+------+----------+-------------
+ _replicator |    0 | 124.4 KB | false
+ _users      |    1 |  20.3 KB | false
+ movies      |    2 |  24.4 KB | false
+
+$ cdb ls /movies --limit 2
+ ID          | REV
+-------------+------------------------------------
+ _design/app | 2-38f0b8babb35aaf96420b30d54bd4ca1
+ tt0211915   | 1-fe587ae7ef952dbac249a78f49bb51e6
+more documents: ls /movies --start "tt0245429"
+
+$ cdb ls /movies --start tt0245429 --fields title,year`,
 		Usage:       "[path]",
 		MinArgs:     0,
 		MaxArgs:     1,
@@ -271,8 +290,21 @@ func lsDesignDoc(ctx context.Context, s *session.Session, t path.Target) (Result
 // Info returns the info command.
 func Info() Command {
 	return Command{
-		Name:        "info",
-		Summary:     "Show server or database information",
+		Name:    "info",
+		Summary: "Show server or database information",
+		Example: `$ cdb info /movies
+ FIELD       | VALUE
+-------------+-------------
+ name        | movies
+ documents   | 2
+ deleted     | 0
+ disk size   | 24.4 KB
+ data size   | 87 B
+ partitioned | false
+ shards      | 2
+ replicas    | 1
+
+$ cdb info /`,
 		Usage:       "[path]",
 		MinArgs:     0,
 		MaxArgs:     1,

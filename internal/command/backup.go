@@ -24,8 +24,13 @@ const backupBatchSize = 200
 // Backup returns the backup command.
 func Backup() Command {
 	return Command{
-		Name:        "backup",
-		Summary:     "Write a database, with attachments, to a dump file",
+		Name:    "backup",
+		Summary: "Write a database, with attachments, to a dump file",
+		Example: `$ cdb backup /movies movies.cdb.gz
+5 documents, 1 attachments, 1.1 KB...
+Wrote 5 document(s), 1 attachment(s) and 1.1 KB from "movies" to movies.cdb.gz (sequence 7-g1AAAACLeJzLYWBgYM...).
+
+$ cdb backup /movies movies.cdb.gz --resume`,
 		Usage:       "<db-path> <file>",
 		MinArgs:     2,
 		MaxArgs:     2,

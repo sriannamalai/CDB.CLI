@@ -366,6 +366,11 @@ func Connect() Command {
 	return Command{
 		Name:    "connect",
 		Summary: "Open a connection to a server",
+		Example: `$ cdb connect --save --as local http://admin:password@localhost:5984/
+Connected to CouchDB 3.5.2 at localhost:5984 as admin.
+
+$ cdb connect local
+Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 		Usage:   "[profile | url]",
 		MinArgs: 0,
 		MaxArgs: 1,
@@ -670,6 +675,16 @@ func Profiles() Command {
 	return Command{
 		Name:    "profiles",
 		Summary: "List, add, remove and default saved profiles",
+		Example: `$ cdb profiles add local http://admin:password@localhost:5984/
+Saved profile "local" for http://localhost:5984/. Run "cdb connect local" to use it.
+
+$ cdb profiles list
+ NAME  | URL                    | AUTH    | DEFAULT
+-------+------------------------+---------+---------
+ local | http://localhost:5984/ | session | yes
+
+$ cdb profiles default local
+Default profile is now "local".`,
 		Usage:   "[list | add <name> <url> | remove <name> | default <name>]",
 		MinArgs: 0,
 		MaxArgs: 3,
@@ -794,8 +809,16 @@ func Profiles() Command {
 // SessionCmd returns the session command.
 func SessionCmd() Command {
 	return Command{
-		Name:        "session",
-		Summary:     "Show the current user, roles and server version",
+		Name:    "session",
+		Summary: "Show the current user, roles and server version",
+		Example: `$ cdb session
+ FIELD   | VALUE
+---------+-----------------------
+ server  | http://localhost:5984
+ user    | admin
+ roles   | _admin
+ auth    | cookie
+ version | 3.5.2`,
 		Usage:       "",
 		MinArgs:     0,
 		MaxArgs:     0,

@@ -109,6 +109,7 @@ func newSubcommand(reg *command.Registry, c command.Command, s *session.Session)
 		Aliases:            c.Aliases,
 		Short:              c.Summary,
 		Long:               long,
+		Example:            c.Example,
 		SilenceUsage:       true,
 		SilenceErrors:      true,
 		DisableFlagParsing: false,

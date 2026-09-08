@@ -15,8 +15,15 @@ import (
 // Find returns the find command.
 func Find() Command {
 	return Command{
-		Name:        "find",
-		Summary:     "Run a Mango query",
+		Name:    "find",
+		Summary: "Run a Mango query",
+		Example: `$ cdb find /movies '{"year":{"$gt":2010}}' --fields title,year
+ ID | DOCUMENT
+----+---------------------------------
+    | {"title":"Arrival","year":2016}
+
+$ cdb find /movies '{"year":{"$gt":2000}}' --sort year:desc --limit 3
+$ cdb find /movies '{"year":{"$gt":2010}}' --explain`,
 		Usage:       "[path] [selector-json]",
 		MinArgs:     0,
 		MaxArgs:     2,
@@ -277,8 +284,17 @@ func summarise(doc json.RawMessage) string {
 // Query returns the query command.
 func Query() Command {
 	return Command{
-		Name:        "query",
-		Summary:     "Run a map/reduce view",
+		Name:    "query",
+		Summary: "Run a map/reduce view",
+		Example: `$ cdb query /movies/_design/app/_view/by_year --limit 3
+ KEY  | ID        | VALUE
+------+-----------+-----------------
+ 2001 | tt0211915 | "Amelie"
+ 2001 | tt0245429 | "Spirited Away"
+ 2016 | tt2543164 | "Arrival"
+
+$ cdb query /movies/_design/app/_view/by_year --startkey 2010 --endkey 2020
+$ cdb query /movies/_design/app/_view/by_year --reduce --group-level 1`,
 		Usage:       "<view-path>",
 		MinArgs:     1,
 		MaxArgs:     1,

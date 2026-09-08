@@ -20,8 +20,19 @@ import (
 // Cat returns the cat command.
 func Cat() Command {
 	return Command{
-		Name:        "cat",
-		Summary:     "Print a document or an attachment",
+		Name:    "cat",
+		Summary: "Print a document or an attachment",
+		Example: `$ cdb cat /movies/tt0211915
+{
+  "_id": "tt0211915",
+  "_rev": "1-fe587ae7ef952dbac249a78f49bb51e6",
+  "title": "Amelie",
+  "year": 2001,
+  "rating": 8.3
+}
+
+$ cdb cat /movies/conflicted --conflicts
+$ cdb cat /movies/tt0211915/poster.txt > poster.txt`,
 		Usage:       "<path>",
 		MinArgs:     1,
 		MaxArgs:     1,
@@ -71,8 +82,13 @@ func catAttachment(ctx context.Context, s *session.Session, t path.Target, rev s
 // Put returns the put command.
 func Put() Command {
 	return Command{
-		Name:        "put",
-		Summary:     "Create or update a document from a file or standard input",
+		Name:    "put",
+		Summary: "Create or update a document from a file or standard input",
+		Example: `$ echo '{"title":"Amelie","year":2001,"rating":8.3}' | cdb put /movies/tt0211915
+Wrote /movies/tt0211915 at revision 1-fe587ae7ef952dbac249a78f49bb51e6.
+
+$ cdb put /movies/_design/app ddoc.json
+Wrote /movies/_design/app at revision 1-1285d46491b0e663da91773703a00996.`,
 		Usage:       "<path> [file]",
 		MinArgs:     1,
 		MaxArgs:     2,
@@ -154,8 +170,13 @@ func normaliseDoc(raw []byte) (json.RawMessage, string, error) {
 // Rm returns the rm command.
 func Rm() Command {
 	return Command{
-		Name:        "rm",
-		Summary:     "Delete a document or an attachment",
+		Name:    "rm",
+		Summary: "Delete a document or an attachment",
+		Example: `$ cdb rm /movies/tt0211915-copy --yes
+Deleted /movies/tt0211915-copy. The tombstone revision is 2-42584260d2245a1e54d90e26b349154c.
+
+$ cdb rm /movies/tt0211915/poster.txt --yes
+Deleted poster.txt. tt0211915 is now at revision 3-8a9d317e2f0198d879b64162545127b8.`,
 		Usage:       "<path>",
 		MinArgs:     1,
 		MaxArgs:     1,
@@ -261,8 +282,10 @@ func withRev(doc json.RawMessage, rev string) (json.RawMessage, error) {
 // Edit returns the edit command.
 func Edit() Command {
 	return Command{
-		Name:        "edit",
-		Summary:     "Open a document in $EDITOR and save the result",
+		Name:    "edit",
+		Summary: "Open a document in $EDITOR and save the result",
+		Example: `$ EDITOR=vim cdb edit /movies/tt0211915
+Wrote /movies/tt0211915 at revision 4-ceb91fedc93490095c3780efe46bfa19.`,
 		Usage:       "<path>",
 		MinArgs:     1,
 		MaxArgs:     1,

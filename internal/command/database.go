@@ -15,8 +15,12 @@ import (
 // Mkdir returns the mkdir command.
 func Mkdir() Command {
 	return Command{
-		Name:        "mkdir",
-		Summary:     "Create a database",
+		Name:    "mkdir",
+		Summary: "Create a database",
+		Example: `$ cdb mkdir /movies
+Created database "movies".
+
+$ cdb mkdir /events --partitioned --q 4`,
 		Usage:       "<path>",
 		MinArgs:     1,
 		MaxArgs:     1,
@@ -48,8 +52,10 @@ func Mkdir() Command {
 // Rmdir returns the rmdir command.
 func Rmdir() Command {
 	return Command{
-		Name:        "rmdir",
-		Summary:     "Delete a database and everything in it",
+		Name:    "rmdir",
+		Summary: "Delete a database and everything in it",
+		Example: `$ cdb rmdir /movies-copy --yes
+Deleted database "movies-copy".`,
 		Usage:       "<path>",
 		MinArgs:     1,
 		MaxArgs:     1,
@@ -92,8 +98,13 @@ func Rmdir() Command {
 // databases start a one-shot replication.
 func Cp() Command {
 	return Command{
-		Name:        "cp",
-		Summary:     "Copy a document, or replicate one database into another",
+		Name:    "cp",
+		Summary: "Copy a document, or replicate one database into another",
+		Example: `$ cdb cp /movies/tt0211915 /movies/tt0211915-copy
+Copied /movies/tt0211915 to /movies/tt0211915-copy at revision 1-5a1da49eff1181cb80527cce17097f40.
+
+$ cdb cp /movies /movies-archive
+Started replication ccaace0a9e8a2ddf328eaf46210031fc from /movies to /movies-archive. Run "cdb replications" to watch it.`,
 		Usage:       "<source> <destination>",
 		MinArgs:     2,
 		MaxArgs:     2,

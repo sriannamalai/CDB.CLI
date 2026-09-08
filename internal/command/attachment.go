@@ -16,8 +16,12 @@ import (
 // Attach returns the attach command.
 func Attach() Command {
 	return Command{
-		Name:        "attach",
-		Summary:     "Upload a file as an attachment",
+		Name:    "attach",
+		Summary: "Upload a file as an attachment",
+		Example: `$ cdb attach /movies/tt0211915 ./poster.txt
+Attached poster.txt (17 B) to /movies/tt0211915. The document is now at revision 5-ac866d9c221230c601e098ecae4e1c4d.
+
+$ cdb attach /movies/tt0211915 ./cover.bin --name cover.png --content-type image/png`,
 		Usage:       "<doc-path> <file>",
 		MinArgs:     2,
 		MaxArgs:     2,
@@ -71,8 +75,12 @@ func Attach() Command {
 // Fetch returns the fetch command.
 func Fetch() Command {
 	return Command{
-		Name:        "fetch",
-		Summary:     "Download an attachment",
+		Name:    "fetch",
+		Summary: "Download an attachment",
+		Example: `$ cdb fetch /movies/tt0211915/poster.txt
+Wrote poster.txt (17 B) from /movies/tt0211915/poster.txt.
+
+$ cdb fetch /movies/tt0211915/poster.txt /tmp/poster.txt --force`,
 		Usage:       "<attachment-path> [out-file]",
 		MinArgs:     1,
 		MaxArgs:     2,

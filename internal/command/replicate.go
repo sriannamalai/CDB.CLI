@@ -45,8 +45,12 @@ unless --yes is given.
 // Replicate returns the replicate command.
 func Replicate() Command {
 	return Command{
-		Name:        "replicate",
-		Summary:     "Start a replication between two databases",
+		Name:    "replicate",
+		Summary: "Start a replication between two databases",
+		Example: `$ cdb replicate /movies /movies-backup --create-target --id movies-job
+Started replication movies-job from http://localhost:5984/movies to http://localhost:5984/movies-backup. Run "cdb replications" to watch it.
+
+$ cdb replicate /movies https://user:secret@backup.example.com/movies --continuous`,
 		Usage:       "<source> <target>",
 		Details:     replicateDetails,
 		MinArgs:     2,
@@ -89,8 +93,16 @@ func Replicate() Command {
 // Replications returns the replications command.
 func Replications() Command {
 	return Command{
-		Name:        "replications",
-		Summary:     "List, inspect and cancel replications",
+		Name:    "replications",
+		Summary: "List, inspect and cancel replications",
+		Example: `$ cdb replications
+ ID         | STATE   | SOURCE                             | TARGET
+------------+---------+------------------------------------+------------------------------------------
+ movies-job | running | http://localhost:5984/movies/      | http://localhost:5984/movies-backup/
+
+$ cdb replications show movies-job
+$ cdb replications cancel movies-job --yes
+Cancelled replication "movies-job".`,
 		Usage:       "[list | show ID | cancel ID]",
 		Details:     replicationsDetails,
 		MinArgs:     0,

@@ -104,6 +104,11 @@ type Command struct {
 	// <command>", under the one-line summary. It is where a command documents
 	// a caveat that does not fit on the summary line.
 	Details string
+	// Example is a short shell transcript shown under "Examples" by
+	// "help <command>" in the shell and by "cdb <command> --help". It is
+	// multi-line, unindented, and every command that is not ShellOnly has one:
+	// see TestEveryCommandHasSummaryAndExample.
+	Example string
 	// Flags declares the command's flags on a fresh flag set.
 	Flags   func(*pflag.FlagSet)
 	MinArgs int

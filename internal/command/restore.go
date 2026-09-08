@@ -58,8 +58,13 @@ type largeAttachment struct {
 // Restore returns the restore command.
 func Restore() Command {
 	return Command{
-		Name:        "restore",
-		Summary:     "Load a dump file into a database",
+		Name:    "restore",
+		Summary: "Load a dump file into a database",
+		Example: `$ cdb restore movies.cdb.gz /movies-copy --create
+5 documents, 1 attachments, 1.1 KB...
+Restored 5 document(s), 1 attachment(s) and 1.1 KB into "movies-copy".
+
+$ cdb restore movies.cdb.gz /movies --merge`,
 		Usage:       "<file> <db-path>",
 		MinArgs:     2,
 		MaxArgs:     2,
