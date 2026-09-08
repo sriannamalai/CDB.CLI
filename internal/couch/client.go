@@ -29,6 +29,12 @@ type Config struct {
 	InsecureTLS bool
 	CAFile      string
 	UserAgent   string
+	// ReplicationURL is the address the server should use to reach itself when
+	// cdb writes a replication endpoint. Empty means "use URL", which is what
+	// cdb 1.0 always did. It is a server address, never a database one, and it
+	// never carries credentials: those travel in the replication document's
+	// per-endpoint auth object.
+	ReplicationURL string
 }
 
 // Client talks to one CouchDB server over net/http. Every request it makes —
@@ -47,7 +53,10 @@ type Client struct {
 	// safe is base with the userinfo stripped. Everything operator-visible —
 	// Client.URL, error targets — uses this one.
 	safe string
-	host string
+	// replication is the validated, slash-trimmed ReplicationURL, or "" when
+	// none was configured. It never carries userinfo, so it is safe to print.
+	replication string
+	host        string
 }
 
 // New builds a client. It performs no network I/O; call Ping to verify.
@@ -78,6 +87,11 @@ func New(cfg Config) (*Client, error) {
 	redacted := *u
 	redacted.User = nil
 	safe := strings.TrimRight(redacted.String(), "/")
+
+	replication, err := normaliseReplicationURL(cfg.ReplicationURL)
+	if err != nil {
+		return nil, err
+	}
 
 	tr, err := newTransport(cfg)
 	if err != nil {
@@ -111,7 +125,7 @@ func New(cfg Config) (*Client, error) {
 	if ua == "" {
 		ua = "cdb"
 	}
-	return &Client{hc: hc, cfg: cfg, userAgent: ua, base: base, safe: safe, host: u.Host}, nil
+	return &Client{hc: hc, cfg: cfg, userAgent: ua, base: base, safe: safe, replication: replication, host: u.Host}, nil
 }
 
 // anonymous reports whether the client sends no credentials at all: no session
@@ -231,4 +245,38 @@ func (c *Client) doDecode(req *http.Request, out any, op, target string) error {
 		return Wrap(err, op, target)
 	}
 	return nil
+}
+
+// normaliseReplicationURL validates the address the server is told to call
+// itself on, and trims its trailing slash.
+//
+// The messages never echo the value: what the operator typed may hold the very
+// userinfo the second case refuses, and an error message is one of the places
+// a secret must never reach.
+func normaliseReplicationURL(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", errors.New("The replication URL must be an absolute http or https URL.")
+	}
+	if u.User != nil {
+		return "", errors.New("The replication URL must not contain a user name or password; cdb sends the profile's credentials in the replication document instead.")
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return "", errors.New("The replication URL must be a bare server address, with no query string or fragment.")
+	}
+	return strings.TrimRight(u.String(), "/"), nil
+}
+
+// ReplicationURL is the address the server is told to call itself on when cdb
+// writes a replication endpoint: the configured override when there is one,
+// otherwise the client's own URL. Validation guarantees it carries no
+// credentials, so it is safe to print, log, or put in a Result.
+func (c *Client) ReplicationURL() string {
+	if c.replication != "" {
+		return c.replication
+	}
+	return c.safe
 }

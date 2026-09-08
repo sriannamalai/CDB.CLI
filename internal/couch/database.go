@@ -306,13 +306,18 @@ func (c *Client) DestroyDatabase(ctx context.Context, db string) error {
 // full URL; CouchDB's per-endpoint auth object lets that URL stay free of an
 // embedded password, unlike putting the credentials in the URL itself.
 //
+// The URL is ReplicationURL, not the client URL: the server dials this address
+// itself, and the two disagree whenever cdb reaches CouchDB by an address
+// CouchDB does not know itself by — a published container port, a tunnel, a
+// reverse proxy.
+//
 // The returned map is for request bodies only — session auth puts the
 // plaintext password under "auth", and JWT puts the bearer token under
 // "headers" — and must never be rendered, logged, or surfaced in a
 // command.Result. It is handed straight to DoJSON, which marshals it as part
 // of the replicator document and nowhere else.
 func (c *Client) ReplicationEndpoint(db string) map[string]any {
-	endpoint := map[string]any{"url": c.safe + "/" + path.Encode(db)}
+	endpoint := map[string]any{"url": c.ReplicationURL() + "/" + path.Encode(db)}
 	switch c.cfg.Auth {
 	case AuthSession:
 		endpoint["auth"] = map[string]any{"basic": map[string]any{
