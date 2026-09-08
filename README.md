@@ -28,6 +28,10 @@ go install github.com/sriannamalai/CDB.CLI/cmd/cdb@latest
 Or download a binary from the [releases page](https://github.com/sriannamalai/CDB.CLI/releases)
 and verify it against `checksums.txt`.
 
+The Homebrew and Scoop lines above will work once the tap and bucket are
+published; until then, release binaries are available from the GitHub
+Releases page.
+
 ## Quickstart
 
 `cdb` starts the interactive shell only when both stdin and stdout are a
