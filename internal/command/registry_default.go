@@ -7,5 +7,8 @@ func Default() *Registry {
 	r.Register(Connect())
 	r.Register(Profiles())
 	r.Register(SessionCmd())
+	r.Register(Cd())
+	r.Register(Ls())
+	r.Register(Info())
 	return r
 }
