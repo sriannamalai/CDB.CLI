@@ -42,7 +42,7 @@ func (d *Deps) SecretStore() (config.Secrets, error) {
 		// A ConnectionError, not a plain one: nothing ran, and the fix is in
 		// the connection rather than the command, so this exits 3 alongside the
 		// keyring read failure in openProfile.
-		return nil, Connectionf(d.secretsErr, "Could not open the system keyring: %v. Set CDB_PASSWORD or CDB_TOKEN to connect without saving.", d.secretsErr)
+		return nil, Connectionf(d.secretsErr, "Could not open the system keyring: %s. Set CDB_PASSWORD or CDB_TOKEN to connect without saving.", trimSentence(d.secretsErr))
 	}
 	return nil, errors.New("no secret store is configured")
 }
@@ -72,7 +72,17 @@ func CurrentDeps() *Deps {
 	return deps
 }
 
+// promptPassphrase supplies the encrypted file keyring's passphrase.
+//
+// CDB_KEYRING_PASSPHRASE is consulted first. Without it the file backend is
+// unusable outside a terminal — term.ReadPassword can only fail on a pipe —
+// so a script or a CI run that stores a profile's password had no way to
+// complete, and now that a failed store is fatal rather than a warning, that
+// would be a hard stop rather than a nuisance.
 func promptPassphrase(prompt string) (string, error) {
+	if v := os.Getenv("CDB_KEYRING_PASSPHRASE"); v != "" {
+		return v, nil
+	}
 	fmt.Fprint(os.Stderr, prompt+": ")
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
@@ -217,8 +227,8 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 			// Swallowing it leaves secret empty, the login 401s, and the
 			// operator is told their password is wrong when it was never read.
 			return connection{}, Connectionf(err,
-				"Could not read the password for profile %q from the system keyring: %v. Set CDB_PASSWORD to bypass it.",
-				profileName, err)
+				"Could not read the password for profile %q from the system keyring: %s. The passphrase or the keychain permission may be wrong; set CDB_PASSWORD to bypass it.",
+				profileName, trimSentence(err))
 		}
 	}
 
@@ -408,7 +418,7 @@ func Connect() Command {
 // saveConnection writes the live connection to the config file under name, and
 // its secret to the keyring, then records the profile on the session.
 func saveConnection(s *session.Session, name string, conn connection) error {
-	if _, err := storeProfile(s, name, conn.Profile, conn.Secret); err != nil {
+	if _, err := storeProfile(name, conn.Profile, conn.Secret); err != nil {
 		return err
 	}
 	s.Profile = name
@@ -421,7 +431,7 @@ func saveConnection(s *session.Session, name string, conn connection) error {
 // carried in the URL's userinfo — that moves into the keyring too, leaving a
 // profile that reconnects the same way. It returns the profile as stored, so a
 // caller can report a URL that is known to carry no credentials.
-func storeProfile(s *session.Session, name string, profile config.Profile, secret string) (config.Profile, error) {
+func storeProfile(name string, profile config.Profile, secret string) (config.Profile, error) {
 	cfg, err := loadConfig()
 	if err != nil {
 		return config.Profile{}, err
@@ -446,6 +456,17 @@ func storeProfile(s *session.Session, name string, profile config.Profile, secre
 			return config.Profile{}, err
 		}
 	}
+	// The secret goes in first, and a failure to store it stops the save. A
+	// profile in config.toml whose password never reached the keyring is a
+	// profile that reports success and then fails on the next run — which is
+	// exactly what the comment above exists to prevent, and a warning does not
+	// prevent it. Writing the secret before the profile means a failure here
+	// leaves config.toml untouched rather than half-added.
+	if store != nil {
+		if err := store.Set(name, secret); err != nil {
+			return config.Profile{}, fmt.Errorf("could not save the password for profile %q in the system keyring: %s. The profile was not saved; set CDB_PASSWORD to connect without the keyring", name, trimSentence(err))
+		}
+	}
 	profile.Name = name
 	cfg.SetProfile(profile)
 	if cfg.Default == "" {
@@ -454,12 +475,14 @@ func storeProfile(s *session.Session, name string, profile config.Profile, secre
 	if err := cfg.Save(CurrentDeps().ConfigPath); err != nil {
 		return config.Profile{}, err
 	}
-	if store != nil {
-		if err := store.Set(name, secret); err != nil {
-			fmt.Fprintf(s.Stderr, "warning: could not save the secret in the keyring: %v\n", err)
-		}
-	}
 	return profile, nil
+}
+
+// trimSentence renders a wrapped error for embedding mid-sentence. Library
+// errors are inconsistent about a trailing period, and one that has it turns
+// "…: reason. Set CDB_PASSWORD…" into "…: reason.. Set CDB_PASSWORD…".
+func trimSentence(err error) string {
+	return strings.TrimRight(err.Error(), ". ")
 }
 
 // profileNameFor derives a profile name from a server URL when the operator
@@ -697,7 +720,7 @@ func Profiles() Command {
 				// out, so neither the config file nor the message below can
 				// hold a password: it is the same write path "connect --save"
 				// uses, deliberately, rather than a second one to keep in step.
-				stored, err := storeProfile(s, name, config.Profile{Name: name, URL: serverURL, Auth: "session"}, "")
+				stored, err := storeProfile(name, config.Profile{Name: name, URL: serverURL, Auth: "session"}, "")
 				if err != nil {
 					return nil, err
 				}

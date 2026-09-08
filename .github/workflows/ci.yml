@@ -53,6 +53,10 @@ jobs:
           CDB_USER: admin
           CDB_PASSWORD: password
           CDB_KEYRING_BACKEND: file
+          # The file keyring cannot prompt for a passphrase on a runner with no
+          # terminal, and storing a profile's password is a hard failure. This
+          # is a throwaway keyring in a throwaway home directory.
+          CDB_KEYRING_PASSPHRASE: ci-throwaway
         run: |
           go build -o ./cdb ./cmd/cdb
           ./cdb version

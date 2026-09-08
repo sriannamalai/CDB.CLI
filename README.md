@@ -176,7 +176,14 @@ an encrypted file under the config directory when none of those is available
 
 For scripts and CI, these environment variables override the file and skip
 the keychain entirely: `CDB_PROFILE`, `CDB_URL`, `CDB_USER`, `CDB_PASSWORD`,
-`CDB_TOKEN`, `CDB_INSECURE_TLS`.
+`CDB_TOKEN`, `CDB_INSECURE_TLS`. An explicit `--profile` or `--url` on the
+command line wins over `CDB_PROFILE`/`CDB_URL`, which in turn win over the
+config file.
+
+Two more control the keychain itself: `CDB_KEYRING_BACKEND` forces one
+backend (`file` is what CI uses), and `CDB_KEYRING_PASSPHRASE` supplies the
+encrypted file backend's passphrase, which otherwise can only be typed at a
+terminal.
 
 Fetched attachment files (`cdb fetch`) are created with permissions `0600`.
 
