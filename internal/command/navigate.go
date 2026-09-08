@@ -325,11 +325,22 @@ $ cdb info /`,
 					return nil, err
 				}
 				add("url", s.Client.URL())
-				// Only when it differs, so the common case stays uncluttered.
-				// Validation guarantees the value carries no credentials, so
-				// it is safe to render.
-				if r := s.Client.ReplicationURL(); r != s.Client.URL() {
-					add("replication url", r)
+				// The per-invocation value first, the way replicate and cp
+				// read it: in the shell a --replication-url typed after the
+				// connection never reaches the client, and info has to report
+				// the address the next replication would actually write.
+				// Only shown when it differs, so the common case stays
+				// uncluttered; validation guarantees it carries no
+				// credentials, so it is safe to render.
+				repl, err := replicationBase(s, "info")
+				if err != nil {
+					return nil, err
+				}
+				if repl == "" {
+					repl = s.Client.ReplicationURL()
+				}
+				if repl != s.Client.URL() {
+					add("replication url", repl)
 				}
 				add("version", si.Version)
 				add("vendor", si.Vendor)

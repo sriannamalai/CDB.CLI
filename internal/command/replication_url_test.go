@@ -3,6 +3,7 @@ package command
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -125,6 +126,66 @@ func TestInfoShowsTheReplicationURLOnlyWhenItDiffers(t *testing.T) {
 	}
 	if !found {
 		t.Error("info / did not show the configured replication url")
+	}
+}
+
+// In the shell the connection is made once, at startup, so a
+// --replication-url set on a later line lives only in the preferences. "info
+// /" reports the address the next replication would write, which means it has
+// to read the preference first, exactly as replicate and cp do.
+func TestInfoPrefersThePerInvocationReplicationURL(t *testing.T) {
+	srv := couchtest.New(t)
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "local", URL: srv.URL(), Auth: "none", ReplicationURL: "http://from-file:5984"})
+	withDeps(t, cfg, nil)
+
+	s := newSession(t)
+	if err := Open(context.Background(), s, "local"); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Detach()
+	s.Prefs.ReplicationURL = "http://from-flag:5984"
+
+	res, err := invoke(t, Info(), s, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, row := range res.(Rows).Items {
+		if row.Cells[0] == "replication url" {
+			found = true
+			if row.Cells[1] != "http://from-flag:5984" {
+				t.Errorf("replication url row = %v, want the per-invocation value", row.Cells)
+			}
+		}
+	}
+	if !found {
+		t.Error("info / did not show a replication url")
+	}
+}
+
+// A replication URL the operator typed is held to the same rules here as
+// everywhere else, and the complaint never echoes what was typed.
+func TestInfoRefusesAReplicationURLWithCredentials(t *testing.T) {
+	srv := couchtest.New(t)
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "local", URL: srv.URL(), Auth: "none"})
+	withDeps(t, cfg, nil)
+
+	s := newSession(t)
+	if err := Open(context.Background(), s, "local"); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Detach()
+	s.Prefs.ReplicationURL = "http://admin:hunter2@couchdb:5984"
+
+	_, err := invoke(t, Info(), s, "/")
+	var ue *UsageError
+	if err == nil || !errors.As(err, &ue) {
+		t.Fatalf("err = %v, want a UsageError", err)
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("the error echoed the credential: %v", err)
 	}
 }
 
