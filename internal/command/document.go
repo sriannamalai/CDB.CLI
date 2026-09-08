@@ -57,15 +57,15 @@ func Cat() Command {
 	}
 }
 
-// catAttachment is replaced with a streamed implementation in Task 13. Until
-// then it prints the document the attachment hangs off, which at least tells
-// the operator the attachment's content type and length.
+// catAttachment streams an attachment straight to the renderer. The bytes go
+// out raw: no JSON rendering, no highlighting, and nothing buffered, so cat on
+// a binary attachment is safe to pipe.
 func catAttachment(ctx context.Context, s *session.Session, t path.Target, rev string) (Result, error) {
-	body, _, err := s.Client.GetDocument(ctx, t.Database, t.DocID, couch.GetOptions{Rev: rev})
+	att, err := s.Client.GetAttachment(ctx, t.Database, t.DocID, t.Attachment, rev)
 	if err != nil {
 		return nil, err
 	}
-	return Document{JSON: body}, nil
+	return Raw{Reader: &closeAfterRead{rc: att.Content}, ContentType: att.ContentType, Name: t.Attachment}, nil
 }
 
 // Put returns the put command.
@@ -162,19 +162,14 @@ func Rm() Command {
 				return nil, err
 			}
 			switch t.Kind {
-			case path.KindDocument, path.KindDesignDoc:
-			case path.KindAttachment:
-				// Stand-in: Client.DeleteAttachment does not exist yet. Task 13
-				// removes this case and deletes the attachment after the same
-				// rev lookup and confirmation the document path uses. Refusing
-				// here, before the prompt, keeps cdb from asking a question it
-				// cannot act on.
-				return nil, Usagef("rm", "deleting attachments is added in a later step; delete the document instead")
+			case path.KindDocument, path.KindDesignDoc, path.KindAttachment:
 			case path.KindDatabase:
 				return nil, Usagef("rm", "%s is a database; use \"rmdir\" to delete it.", t.Path)
 			default:
 				return nil, Usagef("rm", "%s is a %s; only documents and attachments can be deleted.", t.Path, t.Kind)
 			}
+			// An attachment is deleted at the revision of the document that
+			// carries it, so both branches look the rev up the same way.
 			rev := inv.String("rev")
 			if rev == "" {
 				rev, err = s.Client.GetRev(ctx, t.Database, t.DocID)
@@ -184,6 +179,13 @@ func Rm() Command {
 			}
 			if err := Confirm(s, fmt.Sprintf("Delete %s at revision %s?", t.Path, rev)); err != nil {
 				return nil, err
+			}
+			if t.Kind == path.KindAttachment {
+				newRev, err := s.Client.DeleteAttachment(ctx, t.Database, t.DocID, t.Attachment, rev)
+				if err != nil {
+					return nil, err
+				}
+				return Message{Text: fmt.Sprintf("Deleted %s. %s is now at revision %s.", t.Attachment, t.DocID, newRev)}, nil
 			}
 			newRev, err := s.Client.DeleteDocument(ctx, t.Database, t.DocID, rev)
 			if err != nil {
