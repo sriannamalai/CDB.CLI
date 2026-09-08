@@ -59,12 +59,51 @@ func verifyTarget(ctx context.Context, s *session.Session, t path.Target) error 
 		return nil
 	default:
 		// Documents, design documents, views and attachments all hang off a
-		// document, so reading it settles both whether the database exists and
-		// whether the path within it does. A 404 from here carries CouchDB's own
-		// reason, which is a better message than a database check could give.
-		_, _, err := s.Client.GetDocument(ctx, t.Database, t.DocID, couch.GetOptions{})
-		return err
+		// document, so reading it settles whether the database and the document
+		// exist. A view and an attachment live inside that document rather than
+		// at a URL of their own, so the last segment is checked against the
+		// fetched body: without that, cd would accept any view or attachment
+		// name at all.
+		body, _, err := s.Client.GetDocument(ctx, t.Database, t.DocID, couch.GetOptions{})
+		if err != nil {
+			return err
+		}
+		switch t.Kind {
+		case path.KindView:
+			if !hasMember(body, "views", t.View) {
+				return couch.NewError(404, "not_found",
+					fmt.Sprintf("Design document %q defines no view %q.", t.DocID, t.View),
+					"read", fmt.Sprintf("view %q in %q", t.View, t.Database))
+			}
+		case path.KindAttachment:
+			if !hasMember(body, "_attachments", t.Attachment) {
+				return couch.NewError(404, "not_found",
+					fmt.Sprintf("Document %q has no attachment %q.", t.DocID, t.Attachment),
+					"read", fmt.Sprintf("attachment %q in %q", t.Attachment, t.Database))
+			}
+		}
+		return nil
 	}
+}
+
+// hasMember reports whether doc's top-level field is an object holding key. It
+// is how cd checks a view against a design document's "views" and an attachment
+// against a document's "_attachments".
+func hasMember(doc json.RawMessage, field, key string) bool {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &top); err != nil {
+		return false
+	}
+	raw, ok := top[field]
+	if !ok {
+		return false
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return false
+	}
+	_, ok = members[key]
+	return ok
 }
 
 // Ls returns the ls command.

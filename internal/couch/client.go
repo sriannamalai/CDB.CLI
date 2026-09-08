@@ -145,6 +145,18 @@ func (c *Client) DoJSON(ctx context.Context, method, apiPath string, body any, o
 	if err != nil {
 		return Wrap(err, op, target)
 	}
+	return c.doDecode(req, out, op, target)
+}
+
+// doDecode performs a prepared request and decodes a JSON response into out,
+// which may be nil to discard the body. A non-2xx response is decoded as a
+// CouchDB error and returned as *Error.
+//
+// Every request cdb makes outside Kivik ends here: DoJSON builds the common
+// case, and the methods that need a header or a body Kivik cannot express
+// (PutDocument, DeleteDocument, CopyDocument) prepare their own request and
+// call this directly.
+func (c *Client) doDecode(req *http.Request, out any, op, target string) error {
 	res, err := c.hc.Do(req)
 	if err != nil {
 		return Wrap(err, op, target)

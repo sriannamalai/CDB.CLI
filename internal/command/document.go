@@ -194,6 +194,59 @@ func Rm() Command {
 	}
 }
 
+// maxEditAttempts caps edit's write-conflict retry loop. Three tries is enough
+// to get past a document somebody else happened to save at the same moment,
+// and small enough that --yes cannot turn a busy document into a spin.
+const maxEditAttempts = 3
+
+// withRev replaces the top-level "_rev" of a JSON object with rev and leaves
+// every other byte alone: key order, number literals, and any nested object
+// that has a "_rev" of its own all survive. A document with no top-level
+// "_rev" comes back unchanged, and the revision then travels in the query
+// string instead of the body.
+//
+// Rebuilding the object through a map would be shorter and wrong: Go marshals
+// map keys in sorted order, so the operator's document would come back
+// reordered on every conflict retry.
+func withRev(doc json.RawMessage, rev string) (json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(doc))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok != json.Delim('{') {
+		return nil, fmt.Errorf("the document is not a JSON object")
+	}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		// InputOffset sits between the key and its colon here, and just past
+		// the value once it has been decoded, which brackets the span to swap.
+		start := dec.InputOffset()
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		if key != "_rev" {
+			continue
+		}
+		end := dec.InputOffset()
+		quoted, err := json.Marshal(rev)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]byte, 0, len(doc)+len(quoted))
+		out = append(out, doc[:start]...)
+		out = append(out, ':')
+		out = append(out, quoted...)
+		out = append(out, doc[end:]...)
+		return out, nil
+	}
+	return doc, nil
+}
+
 // Edit returns the edit command.
 func Edit() Command {
 	return Command{
@@ -220,39 +273,46 @@ func Edit() Command {
 			if err != nil {
 				return nil, err
 			}
-			for {
-				edited, changed, err := editBuffer(editor, body)
-				if err != nil {
-					return nil, err
-				}
-				if !changed {
-					return Message{Text: "No changes; nothing was written."}, nil
-				}
-				doc, bodyRev, err := normaliseDoc(edited)
-				if err != nil {
-					return nil, err
-				}
-				use := rev
-				if bodyRev != "" {
-					use = bodyRev
-				}
-				newRev, err := s.Client.PutDocument(ctx, t.Database, t.DocID, doc, use)
+			edited, changed, err := editBuffer(editor, body)
+			if err != nil {
+				return nil, err
+			}
+			if !changed {
+				return Message{Text: "No changes; nothing was written."}, nil
+			}
+			doc, bodyRev, err := normaliseDoc(edited)
+			if err != nil {
+				return nil, err
+			}
+			if bodyRev != "" {
+				rev = bodyRev
+			}
+			// On a conflict the edited buffer is what the operator wants kept,
+			// so the retry moves it onto the newest revision rather than
+			// reopening the editor on the server's copy, which would throw the
+			// edits away. The cap keeps --yes from spinning against a document
+			// somebody else is writing to in a loop.
+			for attempt := 1; ; attempt++ {
+				newRev, err := s.Client.PutDocument(ctx, t.Database, t.DocID, doc, rev)
 				if err == nil {
 					return Message{Text: fmt.Sprintf("Wrote %s at revision %s.", t.Path, newRev)}, nil
 				}
 				ce, ok := couch.AsError(err)
-				if !ok || ce.Status != 409 {
+				if !ok || ce.Status != 409 || attempt >= maxEditAttempts {
 					return nil, err
 				}
 				fmt.Fprintf(s.Stdout, "%s was changed by someone else while you were editing.\n", t.Path)
-				if cerr := Confirm(s, "Reload the latest version and reapply your edits?"); cerr != nil {
+				if cerr := Confirm(s, "Reapply your edits on top of the latest revision?"); cerr != nil {
 					return nil, err
 				}
-				latest, latestRev, gerr := s.Client.GetDocument(ctx, t.Database, t.DocID, couch.GetOptions{})
+				latestRev, gerr := s.Client.GetRev(ctx, t.Database, t.DocID)
 				if gerr != nil {
 					return nil, gerr
 				}
-				body, rev = latest, latestRev
+				if doc, err = withRev(doc, latestRev); err != nil {
+					return nil, err
+				}
+				rev = latestRev
 			}
 		},
 	}

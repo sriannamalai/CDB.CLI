@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -149,32 +148,4 @@ func (c *Client) CopyDocument(ctx context.Context, db, srcID, dstID, dstRev stri
 		return "", err
 	}
 	return out.Rev, nil
-}
-
-// doDecode performs a prepared request and decodes a JSON response.
-func (c *Client) doDecode(req *http.Request, out any, op, target string) error {
-	res, err := c.HTTP().Do(req)
-	if err != nil {
-		return Wrap(err, op, target)
-	}
-	defer res.Body.Close()
-	if res.StatusCode >= 400 {
-		var e struct {
-			Error  string `json:"error"`
-			Reason string `json:"reason"`
-		}
-		_ = json.NewDecoder(res.Body).Decode(&e)
-		if e.Error == "" {
-			e.Error = nameForStatus(res.StatusCode)
-		}
-		return NewError(res.StatusCode, e.Error, e.Reason, op, target)
-	}
-	if out == nil {
-		_, _ = io.Copy(io.Discard, res.Body)
-		return nil
-	}
-	if err := json.NewDecoder(res.Body).Decode(out); err != nil {
-		return Wrap(err, op, target)
-	}
-	return nil
 }

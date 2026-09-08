@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
 )
 
@@ -285,15 +286,26 @@ func TestRmIsMarkedDestructive(t *testing.T) {
 }
 
 // editorScript writes an executable stub editor that runs body against the
-// file it is given, and points $EDITOR at it.
-func editorScript(t *testing.T, body string) {
+// file it is given, and points $EDITOR at it. It returns a func reporting how
+// many times the editor was launched.
+func editorScript(t *testing.T, body string) func() int {
 	t.Helper()
-	name := filepath.Join(t.TempDir(), "editor.sh")
-	if err := os.WriteFile(name, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "editor.sh")
+	log := filepath.Join(dir, "runs")
+	script := "#!/bin/sh\necho run >> " + log + "\n" + body + "\n"
+	if err := os.WriteFile(name, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", name)
+	return func() int {
+		b, err := os.ReadFile(log)
+		if err != nil {
+			return 0
+		}
+		return strings.Count(string(b), "run\n")
+	}
 }
 
 func TestEditWritesTheEditedDocument(t *testing.T) {
@@ -339,28 +351,36 @@ func TestEditWritesNothingWhenTheEditorSavesNoChange(t *testing.T) {
 	}
 }
 
-func TestEditRetriesAfterAConflict(t *testing.T) {
-	srv := couchtest.New(t)
-	srv.JSONSeq("GET", "/mydb/doc1", 200,
-		`{"_id":"doc1","_rev":"1-a","n":1}`,
-		`{"_id":"doc1","_rev":"2-someone-else","n":99}`)
+// conflictingPUT answers the first n PUTs with a 409 and every later one with
+// a 201 naming okRev.
+func conflictingPUT(srv *couchtest.Server, n int, okRev string) {
 	var mu sync.Mutex
 	var puts int
 	srv.On("PUT", "/mydb/doc1", func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		puts++
-		first := puts == 1
+		conflict := puts <= n
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if first {
+		if conflict {
 			w.WriteHeader(409)
 			_, _ = w.Write([]byte(`{"error":"conflict","reason":"Document update conflict."}`))
 			return
 		}
 		w.WriteHeader(201)
-		_, _ = w.Write([]byte(`{"ok":true,"id":"doc1","rev":"3-c"}`))
+		_, _ = w.Write([]byte(`{"ok":true,"id":"doc1","rev":"` + okRev + `"}`))
 	})
-	editorScript(t, `printf '{"_id":"doc1","n":2}' > "$1"`)
+}
+
+func TestEditRetriesAfterAConflict(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/doc1", 200, `{"_id":"doc1","_rev":"1-a","n":1}`)
+	srv.On("HEAD", "/mydb/doc1", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("ETag", `"2-someone-else"`)
+		w.WriteHeader(200)
+	})
+	conflictingPUT(srv, 1, "3-c")
+	runs := editorScript(t, `printf '{"_id":"doc1","_rev":"1-a","edited":"mine"}' > "$1"`)
 	s := connected(t, srv)
 	s.SetPath("/mydb")
 	s.SetStdin(strings.NewReader("y\n"))
@@ -373,8 +393,54 @@ func TestEditRetriesAfterAConflict(t *testing.T) {
 	if msg, ok := res.(Message); !ok || !strings.Contains(msg.Text, "3-c") {
 		t.Errorf("result = %#v, want the second write's rev", res)
 	}
-	if got := srv.Last("PUT", "/mydb/doc1").Query("rev"); got != "2-someone-else" {
+	retry := srv.Last("PUT", "/mydb/doc1")
+	if got := retry.Query("rev"); got != "2-someone-else" {
 		t.Errorf("retry rev = %q, want the reloaded revision", got)
+	}
+	// The point of the reload is to reapply the operator's work, not to throw
+	// it away and write the server's copy back.
+	if !strings.Contains(string(retry.Body), `"edited":"mine"`) {
+		t.Errorf("retry body = %s, want the edited field to survive", retry.Body)
+	}
+	if strings.Contains(string(retry.Body), `"1-a"`) {
+		t.Errorf("retry body = %s, still carries the stale _rev", retry.Body)
+	}
+	// The editor runs once: the retry reuses the buffer it produced instead of
+	// reopening the editor on the server's copy.
+	if n := runs(); n != 1 {
+		t.Errorf("the editor ran %d times, want 1", n)
+	}
+}
+
+func TestEditStopsRetryingAfterThreeConflicts(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/doc1", 200, `{"_id":"doc1","_rev":"1-a","n":1}`)
+	srv.On("HEAD", "/mydb/doc1", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("ETag", `"9-busy"`)
+		w.WriteHeader(200)
+	})
+	conflictingPUT(srv, 100, "never")
+	editorScript(t, `printf '{"_id":"doc1","edited":"mine"}' > "$1"`)
+	s := connected(t, srv)
+	s.SetPath("/mydb")
+	// --yes answers every reload prompt, so only the attempt cap can stop this.
+	s.Prefs.Yes = true
+	s.Stdout = &bytes.Buffer{}
+	_, err := invoke(t, Edit(), s, "doc1")
+	if err == nil {
+		t.Fatal("edit reported success against a permanently conflicted document")
+	}
+	if e, ok := couch.AsError(err); !ok || e.Status != 409 {
+		t.Fatalf("err = %#v, want the 409 to surface", err)
+	}
+	puts := 0
+	for _, r := range srv.Requests() {
+		if r.Method == "PUT" {
+			puts++
+		}
+	}
+	if puts != 3 {
+		t.Errorf("edit made %d PUTs, want it to stop after 3", puts)
 	}
 }
 
@@ -394,6 +460,45 @@ func TestEditGivesUpWhenTheReloadIsDeclined(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "conflict") {
 		t.Errorf("error = %v, want the conflict to surface", err)
+	}
+	if srv.Last("HEAD", "/mydb/doc1") != nil {
+		t.Error("edit reloaded the revision even though the operator declined")
+	}
+}
+
+func TestWithRevReplacesOnlyTheRevision(t *testing.T) {
+	got, err := withRev([]byte(`{"_id":"doc1","_rev":"1-a","n":12345678901234567890,"z":1}`), "2-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"_id":"doc1","_rev":"2-b","n":12345678901234567890,"z":1}`
+	if string(got) != want {
+		t.Errorf("withRev = %s\nwant      %s", got, want)
+	}
+}
+
+func TestWithRevAddsNothingWhenTheBodyHasNoRev(t *testing.T) {
+	src := []byte(`{"_id":"doc1","n":1}`)
+	got, err := withRev(src, "2-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The query parameter carries the revision in this case; adding a _rev the
+	// operator did not write would be a surprise.
+	if string(got) != string(src) {
+		t.Errorf("withRev = %s, want it unchanged", got)
+	}
+}
+
+func TestWithRevIgnoresANestedRev(t *testing.T) {
+	src := []byte(`{"_id":"doc1","meta":{"_rev":"keep-me"},"_rev":"1-a"}`)
+	got, err := withRev(src, "2-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"_id":"doc1","meta":{"_rev":"keep-me"},"_rev":"2-b"}`
+	if string(got) != want {
+		t.Errorf("withRev = %s\nwant      %s", got, want)
 	}
 }
 

@@ -189,6 +189,54 @@ func TestCdVerifiesADocumentExists(t *testing.T) {
 	}
 }
 
+func TestCdVerifiesAViewExists(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/_design/app", 200,
+		`{"_id":"_design/app","_rev":"1-a","views":{"by_name":{"map":"function(d){}"}}}`)
+	s := connected(t, srv)
+	if _, err := invoke(t, Cd(), s, "/mydb/_design/app/_view/by_name"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Path() != "/mydb/_design/app/_view/by_name" {
+		t.Errorf("Path() = %q", s.Path())
+	}
+	// The design document exists, so only a check of the views object itself
+	// can catch this.
+	_, err := invoke(t, Cd(), s, "/mydb/_design/app/_view/nope")
+	if err == nil {
+		t.Fatal("cd to a missing view returned no error")
+	}
+	if e, ok := couch.AsError(err); !ok || e.Status != 404 {
+		t.Fatalf("err = %#v, want a 404 couch.Error", err)
+	}
+	if !strings.Contains(err.Error(), "nope") {
+		t.Errorf("error = %v, want it to name the view", err)
+	}
+}
+
+func TestCdVerifiesAnAttachmentExists(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/doc1", 200,
+		`{"_id":"doc1","_rev":"1-a","_attachments":{"logo.png":{"content_type":"image/png","stub":true}}}`)
+	s := connected(t, srv)
+	if _, err := invoke(t, Cd(), s, "/mydb/doc1/logo.png"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Path() != "/mydb/doc1/logo.png" {
+		t.Errorf("Path() = %q", s.Path())
+	}
+	_, err := invoke(t, Cd(), s, "/mydb/doc1/missing.txt")
+	if err == nil {
+		t.Fatal("cd to a missing attachment returned no error")
+	}
+	if e, ok := couch.AsError(err); !ok || e.Status != 404 {
+		t.Fatalf("err = %#v, want a 404 couch.Error", err)
+	}
+	if !strings.Contains(err.Error(), "missing.txt") {
+		t.Errorf("error = %v, want it to name the attachment", err)
+	}
+}
+
 func TestCdWithNoArgumentGoesToRoot(t *testing.T) {
 	srv := couchtest.New(t)
 	s := connected(t, srv)
