@@ -86,7 +86,7 @@ func Put() Command {
 			if t.Kind != path.KindDocument && t.Kind != path.KindDesignDoc {
 				return nil, Usagef("put", "%s is %s %s, not a document", t.Path, t.Kind.Article(), t.Kind)
 			}
-			raw, err := readDocSource(s, inv.Arg(1))
+			raw, err := readDocSource(s, "put", inv.Arg(1))
 			if err != nil {
 				return nil, err
 			}
@@ -118,9 +118,18 @@ func Put() Command {
 	}
 }
 
-// readDocSource reads the document body from a file, or from stdin when the
-// file argument is absent or "-".
-func readDocSource(s *session.Session, file string) ([]byte, error) {
+// readDocSource reads the document body from a file, or from standard input
+// when the file argument is "-".
+//
+// An absent argument means standard input only outside the shell, where it is
+// the redirection the operator set up. Inside the shell standard input is the
+// terminal they are typing at, and reading it drained the line editor to EOF:
+// the prompt disappeared and Ctrl-D was the only way back. There it has to be
+// asked for.
+func readDocSource(s *session.Session, cmd, file string) ([]byte, error) {
+	if file == "" && s.Prefs.Interactive {
+		return nil, Usagef(cmd, "needs a file, or - to read from standard input")
+	}
 	if file == "" || file == "-" {
 		return io.ReadAll(s.Reader())
 	}

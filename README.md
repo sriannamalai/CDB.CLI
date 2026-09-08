@@ -133,6 +133,10 @@ cdb replicate movies https://backup.example.com/movies --continuous
 cdb replications
 ```
 
+`put <path>` reads standard input when there is no file argument, which is what
+a pipeline wants. Inside the shell standard input is the terminal, so there
+`put` needs either a file or an explicit `-`.
+
 Exit codes: `0` success, `1` command error, `2` usage error, `3` connection or
 authentication error, `130` interrupted.
 
