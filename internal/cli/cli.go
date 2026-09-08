@@ -125,6 +125,11 @@ func newSubcommand(reg *command.Registry, c command.Command, s *session.Session)
 					return err
 				}
 			}
+			// --path is applied last, and deliberately after the connection:
+			// session.Attach resets the current path to "/" for the new
+			// server, so a path applied before the lazy auto-connect above
+			// would be silently thrown away.
+			applyPathFlag(cc, s)
 			inv := command.Invocation{
 				Args:   args,
 				Flags:  cc.Flags(),
@@ -164,7 +169,13 @@ func applyGlobalFlags(c *cobra.Command, s *session.Session) {
 	if v, err := flags.GetString("pager"); err == nil && v != "" {
 		s.Prefs.Pager = v
 	}
-	if v, err := flags.GetString("path"); err == nil && v != "" {
+}
+
+// applyPathFlag sets the session's current path from --path. It is separate
+// from applyGlobalFlags because it must run after any auto-connect: see the
+// call site in newSubcommand.
+func applyPathFlag(c *cobra.Command, s *session.Session) {
+	if v, err := c.Flags().GetString("path"); err == nil && v != "" {
 		s.SetPath(v)
 	}
 }
