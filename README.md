@@ -9,8 +9,13 @@ subcommands for scripts.
 Homebrew:
 
 ```
-brew install --cask sriannamalai/tap/cdb
+brew tap sriannamalai/tap
+brew trust sriannamalai/tap
+brew install --cask cdb
 ```
+
+Homebrew 6 refuses to load casks from third-party taps until the tap is
+trusted, and `brew trust` records that decision in `~/.homebrew/trust.json`.
 
 Scoop:
 
