@@ -39,6 +39,7 @@ before it acts, unless `--yes` is given.
 | [`rm`](rm.md) |  | Delete a document or an attachment | destructive |
 | [`rmdir`](rmdir.md) |  | Delete a database and everything in it | destructive |
 | [`session`](session.md) |  | Show the current user, roles and server version |  |
+| [`tail`](tail.md) |  | Read a database's changes feed |  |
 
 ## Global flags
 
