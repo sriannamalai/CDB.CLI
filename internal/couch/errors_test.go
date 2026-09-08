@@ -7,9 +7,8 @@ import (
 )
 
 // TestWrapClassifiesContextErrors guards against context errors being reported
-// as a server 500: kivik.HTTPStatus returns 500 for anything it does not
-// recognise, which would make an interrupted or timed-out request look like a
-// real server failure and pick the wrong exit code.
+// as a server failure, which would make an interrupted or timed-out request
+// look like a real 500 and pick the wrong exit code.
 func TestWrapClassifiesContextErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name              string

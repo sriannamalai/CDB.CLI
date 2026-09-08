@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"syscall"
-
-	kivik "github.com/go-kivik/kivik/v4"
 )
 
 // StatusUnreachable marks an error that never reached the server.
@@ -47,8 +45,8 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.err }
 
-// Wrap converts any error from Kivik or net/http into an *Error. It returns
-// nil for a nil error and never double-wraps.
+// Wrap converts any error from net/http or the JSON decoder into an *Error. It
+// returns nil for a nil error and never double-wraps.
 func Wrap(err error, op, target string) error {
 	if err == nil {
 		return nil
@@ -85,9 +83,6 @@ func Wrap(err error, op, target string) error {
 		e.Name = "tls"
 		e.Reason = trimPrefixes(err.Error())
 	case errors.Is(err, context.Canceled):
-		// Must come before the default branch: kivik.HTTPStatus reports 500 for
-		// any error it does not recognise, which would make an interrupted
-		// request indistinguishable from a real server failure.
 		e.Status = StatusUnreachable
 		e.Name = "canceled"
 		e.Reason = "canceled"
@@ -96,11 +91,28 @@ func Wrap(err error, op, target string) error {
 		e.Name = "timeout"
 		e.Reason = "timed out"
 	default:
-		e.Status = kivik.HTTPStatus(err)
+		// Nothing that reaches here ever got an HTTP status: a real response
+		// is decoded by doDecode into an *Error, which the branch above
+		// returns untouched. What is left is a transport failure — a reset, a
+		// timeout, a wrong scheme, a proxy refusing — or a body that would not
+		// decode. Spec section 11 counts those as connection errors (exit 3),
+		// so none of them may be given a 5xx status.
+		e.Status = StatusUnreachable
+		e.Name = transportName(err)
 		e.Reason = trimPrefixes(err.Error())
-		e.Name = nameForStatus(e.Status)
 	}
 	return e
+}
+
+// transportName labels a failure that never reached the server.
+func transportName(err error) string {
+	switch {
+	case errors.Is(err, syscall.ECONNRESET):
+		return "connection_reset"
+	case strings.Contains(err.Error(), "unsupported protocol scheme"):
+		return "unsupported_scheme"
+	}
+	return "network"
 }
 
 // AsError extracts an *Error from err, if there is one.
@@ -127,8 +139,14 @@ func isDNSError(err error) bool {
 	return errors.As(err, &d)
 }
 
+// isTLSError recognises the three shapes a TLS failure arrives in: a
+// certificate error ("x509: ..."), a handshake protocol error ("tls: ..."), and
+// net/http's own "TLS handshake timeout", which is what an https client gets
+// when it dials a plain-http port.
 func isTLSError(err error) bool {
-	return strings.Contains(err.Error(), "x509:") || strings.Contains(err.Error(), "tls:")
+	msg := err.Error()
+	return strings.Contains(msg, "x509:") || strings.Contains(msg, "tls:") ||
+		strings.Contains(msg, "TLS handshake")
 }
 
 // statusTexts is the set of canonical HTTP status texts, built once so
@@ -143,8 +161,8 @@ var statusTexts = func() map[string]struct{} {
 	return m
 }()
 
-// trimPrefixes strips the `Get "url": ` and `<Status Text>: ` decorations Kivik
-// puts in front of the server's reason string.
+// trimPrefixes strips the `Get "url": ` and `<Status Text>: ` decorations
+// net/http puts in front of the underlying reason string.
 func trimPrefixes(msg string) string {
 	for _, verb := range []string{"Get ", "Post ", "Put ", "Delete ", "Head ", "Patch "} {
 		if strings.HasPrefix(msg, verb+`"`) {

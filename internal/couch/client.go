@@ -9,9 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	kivik "github.com/go-kivik/kivik/v4"
-	"github.com/go-kivik/kivik/v4/couchdb"
 )
 
 // AuthKind selects how the client authenticates.
@@ -34,12 +31,15 @@ type Config struct {
 	UserAgent   string
 }
 
-// Client talks to one CouchDB server. Its Kivik client and its raw HTTP client
-// share one transport, so both are authenticated the same way.
+// Client talks to one CouchDB server over net/http. Every request it makes —
+// documents, views, _dbs_info, _scheduler, streamed attachments — goes through
+// the one authenticated http.Client below, so they are all authenticated,
+// paged and error-mapped the same way.
 type Client struct {
-	kc  *kivik.Client
 	hc  *http.Client
 	cfg Config
+	// userAgent is sent on every request.
+	userAgent string
 	// base is the URL requests are built against. It keeps any userinfo the
 	// operator supplied, so net/http can turn it into a Basic auth header. It
 	// must never be printed, logged, or put in an error message.
@@ -99,15 +99,14 @@ func New(cfg Config) (*Client, error) {
 	if ua == "" {
 		ua = "cdb"
 	}
-	kc, err := kivik.New("couch", base+"/", couchdb.OptionHTTPClient(hc), couchdb.OptionUserAgent(ua))
-	if err != nil {
-		return nil, Wrap(err, "connect to", safe)
-	}
-	return &Client{kc: kc, hc: hc, cfg: cfg, base: base, safe: safe, host: u.Host}, nil
+	return &Client{hc: hc, cfg: cfg, userAgent: ua, base: base, safe: safe, host: u.Host}, nil
 }
 
-// Close releases the underlying Kivik client.
-func (c *Client) Close() error { return c.kc.Close() }
+// Close releases the connections the client is holding open.
+func (c *Client) Close() error {
+	c.hc.CloseIdleConnections()
+	return nil
+}
 
 // URL is the server URL with no trailing slash and no embedded credentials. It
 // is safe to print, log, or put in an error message.
@@ -119,11 +118,8 @@ func (c *Client) Host() string { return c.host }
 // Username is the configured user name, or "" when unauthenticated.
 func (c *Client) Username() string { return c.cfg.Username }
 
-// Kivik exposes the underlying Kivik client. Only internal/couch may use it.
-func (c *Client) Kivik() *kivik.Client { return c.kc }
-
-// HTTP exposes the shared, authenticated HTTP client for endpoints Kivik does
-// not model (_dbs_info, _scheduler, streamed attachments, partitioned paths).
+// HTTP exposes the shared, authenticated HTTP client for the callers that need
+// the response itself rather than a decoded body (streamed attachments).
 func (c *Client) HTTP() *http.Client { return c.hc }
 
 // NewRequest builds a request against apiPath, which must begin with "/".
@@ -133,6 +129,7 @@ func (c *Client) NewRequest(ctx context.Context, method, apiPath string, body io
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -161,10 +158,9 @@ func (c *Client) DoJSON(ctx context.Context, method, apiPath string, body any, o
 // which may be nil to discard the body. A non-2xx response is decoded as a
 // CouchDB error and returned as *Error.
 //
-// Every request cdb makes outside Kivik ends here: DoJSON builds the common
-// case, and the methods that need a header or a body Kivik cannot express
-// (PutDocument, DeleteDocument, CopyDocument) prepare their own request and
-// call this directly.
+// Every request cdb makes ends here: DoJSON builds the common case, and the
+// methods that need their own header or body (PutDocument, DeleteDocument,
+// CopyDocument) prepare the request themselves and call this directly.
 func (c *Client) doDecode(req *http.Request, out any, op, target string) error {
 	res, err := c.hc.Do(req)
 	if err != nil {

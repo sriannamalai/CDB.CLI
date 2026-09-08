@@ -1,10 +1,11 @@
 // Package couchtest provides a route-stub CouchDB server for tests.
 //
-// The Kivik in-memory driver is not usable as a test double for cdb: as of
-// kivik v4.5.2 its Query, Changes and attachment methods are unimplemented,
-// AllDocs ignores every option and returns rows in map order, and BulkDocs
-// silently ignores new_edits=false. Tests therefore stub HTTP routes here and
-// assert on the exact requests cdb makes.
+// cdb speaks to CouchDB over net/http, so its tests stub HTTP routes here and
+// assert on the exact requests cdb makes — the requests are the contract. (An
+// in-memory CouchDB double was evaluated and rejected: the one available, the
+// Kivik memory driver, leaves Query, Changes and the attachment methods
+// unimplemented, ignores every AllDocs option, and silently drops
+// new_edits=false.)
 package couchtest
 
 import (

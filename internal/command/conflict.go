@@ -104,9 +104,9 @@ func conflictRevisions(ctx context.Context, s *session.Session, t path.Target) (
 }
 
 // conflictRows renders the winner (already fetched by conflictRevisions) and
-// each conflicting revision. kivik's OpenRevs with "all" is broken against
-// CouchDB 3.5, so every conflicting revision is fetched with its own GET
-// instead.
+// each conflicting revision. Every conflicting revision is fetched with its
+// own GET rather than one open_revs=all request: the bulk form returns
+// multipart/mixed, which is a parser this command does not need.
 func conflictRows(ctx context.Context, s *session.Session, t path.Target, winnerBody json.RawMessage, winnerRev string, conflicts []string) (Result, error) {
 	rows := Rows{Columns: []Column{{Title: "rev"}, {Title: "role"}, {Title: "document"}}}
 	rows.Items = append(rows.Items, Row{

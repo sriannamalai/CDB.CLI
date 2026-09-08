@@ -34,7 +34,7 @@ when arguments are missing, and error messages in plain sentences.
 
 | Concern | Library |
 |---|---|
-| CouchDB client | `github.com/go-kivik/kivik/v4` with its `couchdb` driver, plus a raw `net/http` escape hatch |
+| CouchDB client | `net/http` hand-rolled client in `internal/couch` |
 | Commands | `github.com/spf13/cobra` |
 | Line editor | `github.com/reeflective/readline` |
 | JSON highlighting | `github.com/alecthomas/chroma/v2` |
@@ -47,13 +47,23 @@ when arguments are missing, and error messages in plain sentences.
 Library choices are defaults, not contracts. A task may swap one if the
 replacement is justified in the plan.
 
+The CouchDB client started as `github.com/go-kivik/kivik/v4` with a raw
+`net/http` escape hatch. In practice every request cdb makes needs the
+escape hatch — `_dbs_info`, `_scheduler`, partitioned paths, streamed
+attachments, `_bulk_docs` with `new_edits=false`, `open_revs` — so the
+Kivik client ended up making no requests at all and was dropped. The
+one thing it was still used for, `kivik.HTTPStatus` error
+classification, reported 500 for anything it did not recognise, which
+mislabelled connection failures as server errors; `internal/couch`
+classifies them itself.
+
 ## 4. Architecture
 
 ### 4.1 Package layout
 
 ```
 cmd/cdb/main.go            entry point; builds the cobra root and runs it
-internal/couch/            CouchDB client wrapper (Kivik + escape hatch)
+internal/couch/            CouchDB client over net/http
 internal/path/             virtual filesystem paths and resolution
 internal/command/          the command registry and every command
 internal/session/          connection, current path, preferences
@@ -67,7 +77,7 @@ internal/replicate/        _replicator and _scheduler helpers
 
 Dependencies flow downward: `cli` and `shell` depend on `command`,
 which depends on `session`, `couch`, `path`, `render`, `backup`, and
-`replicate`. Nothing above `couch` imports Kivik.
+`replicate`. Nothing above `couch` speaks HTTP.
 
 ### 4.2 The command registry
 
@@ -297,13 +307,15 @@ safe to interrupt.
 
 ## 10. Client layer
 
-`couch.Client` wraps a Kivik client and an `http.Client` that share the
-same cookie jar and transport. Public surface is the small set the
-commands need, expressed in domain terms (`ListDatabases`, `AllDocs`
-with a cursor, `Find` with a bookmark, `Get`, `Put`, `Delete`, `Copy`,
-`Changes`, `Attachment` streams, `BulkDocs`, `SchedulerDocs`, and so
-on). Anything Kivik does not expose (JWT header injection, `_dbs_info`,
-`_scheduler`, partitioned paths) goes through the raw client.
+`couch.Client` is one `http.Client` with a cookie jar and an
+authenticating transport; every request cdb makes goes through it.
+Public surface is the small set the commands need, expressed in domain
+terms (`ListDatabases`, `AllDocs` with a cursor, `Find` with a
+bookmark, `Get`, `Put`, `Delete`, `Copy`, `Changes`, `Attachment`
+streams, `BulkDocs`, `SchedulerDocs`, and so on). The endpoints CouchDB
+clients usually leave out — JWT header injection, `_dbs_info`,
+`_scheduler`, partitioned paths — are just more requests on the same
+client.
 
 Session auth: `POST /_session` on connect; the cookie lives in the jar.
 On any 401 the client re-authenticates once with the stored secret and
@@ -343,9 +355,10 @@ error, 3 connection or auth error, 130 interrupted.
 
 ## 12. Testing
 
-- `internal/command`: every command runs against Kivik's in-memory
-  driver in unit tests, so the whole registry is exercised without a
-  server. Destructive commands are tested with and without `--yes`.
+- `internal/command`: every command runs against the `couchtest`
+  route-stub server in unit tests, so the whole registry is exercised
+  without a real server and each test asserts the exact request cdb
+  made. Destructive commands are tested with and without `--yes`.
 - `internal/couch`: integration tests against CouchDB 3.5 in Docker,
   skipped unless `CDB_TEST_URL` is set. CI runs them via a service
   container. Covers session re-auth, JWT header, paging, attachment
