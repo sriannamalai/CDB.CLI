@@ -425,6 +425,12 @@ func (sh *Shell) RunLine(ctx context.Context, input string) error {
 
 // applyFilterToResult runs a gojq filter over the JSON side of a result.
 func applyFilterToResult(expr string, res command.Result) (command.Result, error) {
+	// A live stream has no end to collect, so its filter is applied change by
+	// change instead: "tail /db --follow | .id" that waited for the whole feed
+	// would print nothing for as long as it ran.
+	if st, ok := res.(command.Stream); ok && st.Live {
+		return filterLiveStream(expr, st)
+	}
 	docs, err := resultJSON(res)
 	if err != nil {
 		return nil, err
@@ -438,6 +444,42 @@ func applyFilterToResult(expr string, res command.Result) (command.Result, error
 		rows.Items = append(rows.Items, command.Row{Cells: []string{string(v)}, JSON: v})
 	}
 	return rows, nil
+}
+
+// filterLiveStream returns a live stream of the values the filter produces,
+// one row in and none, one or several rows out, each written as it is made.
+// The stream stays Live, so the renderer keeps writing rows through unpaged
+// and unbuffered.
+func filterLiveStream(expr string, src command.Stream) (command.Result, error) {
+	f, err := compileFilter(expr)
+	if err != nil {
+		return nil, err
+	}
+	// One change can produce several values, and a filter such as "select(…)"
+	// produces none, so the values of one change are held until they have all
+	// been handed out and only then is the next change read.
+	var pending []json.RawMessage
+	return command.Stream{
+		Live:    true,
+		Columns: []command.Column{{Title: "value"}},
+		Next: func() (command.Row, bool, error) {
+			for len(pending) == 0 {
+				row, ok, err := src.Next()
+				if err != nil || !ok {
+					return command.Row{}, false, err
+				}
+				if row.JSON == nil {
+					continue
+				}
+				if pending, err = f.apply(row.JSON); err != nil {
+					return command.Row{}, false, err
+				}
+			}
+			v := pending[0]
+			pending = pending[1:]
+			return command.Row{Cells: []string{string(v)}, JSON: v}, true, nil
+		},
+	}, nil
 }
 
 // resultJSON extracts the JSON documents a result carries.

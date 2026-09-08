@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -258,10 +259,11 @@ func (c *followClock) recorded() []time.Duration {
 	return append([]time.Duration(nil), c.waits...)
 }
 
-// followServer answers the continuous feed once per distinct "since" value:
-// the first connection, from the resolved start, delivers change 1 and then
-// ends the body, which is what a dropped feed looks like; the second delivers
-// change 2 and then blocks until the client goes away.
+// followServer answers the continuous feed once per distinct "since" value.
+// The first two connections each deliver one change and then end the body,
+// which is what a dropped feed looks like; the third delivers a change and
+// blocks until the client goes away. Every drop follows a delivered change, so
+// a reader of all three rows has watched the backoff reset twice.
 func followServer(t *testing.T) *couchtest.Server {
 	t.Helper()
 	srv := couchtest.New(t)
@@ -274,6 +276,8 @@ func followServer(t *testing.T) *couchtest.Server {
 			// Returning ends the body: the feed has dropped.
 		case "1-x":
 			write(`{"seq":"2-y","id":"b","changes":[{"rev":"1-bb"}]}`)
+		case "2-y":
+			write(`{"seq":"3-z","id":"c","changes":[{"rev":"1-cc"}]}`)
 			<-r.Context().Done()
 		default:
 			<-r.Context().Done()
@@ -452,13 +456,13 @@ func TestTailFollowResumesFromTheResolvedStartWhenNothingArrived(t *testing.T) {
 	srv.On("GET", "/mydb/_changes", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		conns++
-		first := conns == 1
+		n := conns
 		mu.Unlock()
 		write := writeFeed(w)
-		if first {
-			// Delivered nothing and dropped. The reconnect has no change of
-			// its own to resume from, and anything but the resolved start
-			// would lose whatever was written in between.
+		if n <= 2 {
+			// Delivered nothing and dropped, twice. The reconnect has no
+			// change of its own to resume from, and anything but the resolved
+			// start would lose whatever was written in between.
 			return
 		}
 		if r.URL.Query().Get("since") == followStartSeq {
@@ -490,6 +494,13 @@ func TestTailFollowResumesFromTheResolvedStartWhenNothingArrived(t *testing.T) {
 
 	if msg := s.Stderr.(*bytes.Buffer).String(); !strings.Contains(msg, `reconnecting from `+followStartSeq+` in 1s.`) {
 		t.Errorf("stderr = %q, want the notice to name the resolved start", msg)
+	}
+	// Nothing came through either connection, so the wait doubled. Reading the
+	// change is proof both waits are already recorded: the connection that
+	// carried it was opened after them.
+	want := []time.Duration{time.Second, 2 * time.Second}
+	if got := clock.recorded(); !slices.Equal(got, want) {
+		t.Errorf("backoff waits = %v, want %v: a feed delivering nothing backs off further", got, want)
 	}
 }
 
@@ -569,5 +580,81 @@ func TestTailBackoffSchedule(t *testing.T) {
 		if got := tailBackoff(i); got != w {
 			t.Errorf("tailBackoff(%d) = %v, want %v", i, got, w)
 		}
+	}
+}
+
+// A feed that drops after delivering something is not a feed in trouble: the
+// wait starts over at 1s each time rather than doubling towards 30s, or a
+// database that drops its feed every few minutes would end up checked twice an
+// hour. Reading the third change is proof the second wait already happened,
+// because the connection carrying it is only opened after it.
+func TestTailFollowResetsTheBackoffAfterEachChange(t *testing.T) {
+	clock := &followClock{}
+	srv := followServer(t)
+	s := connected(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	res, err := invokeContext(ctx, tailCommand(clock.sleep), s, "/mydb", "--follow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := res.(Stream)
+	for i, want := range []string{"1-x", "2-y", "3-z"} {
+		row, more, err := st.Next()
+		if err != nil || !more {
+			t.Fatalf("row %d: more=%v err=%v", i, more, err)
+		}
+		if row.Cells[0] != shortSeq(want) {
+			t.Errorf("row %d seq cell = %q, want %q", i, row.Cells[0], shortSeq(want))
+		}
+	}
+	cancel()
+	drainStream(st)
+
+	want := []time.Duration{time.Second, time.Second}
+	if got := clock.recorded(); !slices.Equal(got, want) {
+		t.Errorf("backoff waits = %v, want %v: a change through the feed resets it", got, want)
+	}
+}
+
+func TestTailFollowReportsTheSameErrorOnEveryRead(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb", 200, `{"db_name":"mydb","doc_count":0,"update_seq":"`+followStartSeq+`"}`)
+	srv.JSON("GET", "/mydb/_changes", 404, `{"error":"not_found","reason":"Database does not exist."}`)
+	s := connected(t, srv)
+
+	res, err := invoke(t, tailCommand((&followClock{}).sleep), s, "/mydb", "--follow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := res.(Stream)
+	// The producer says why it stopped once. A second read must be given the
+	// same answer rather than waiting on a channel nothing will write to
+	// again: the shell's filter reads a stream to its end and then reads once
+	// more.
+	for i := 0; i < 2; i++ {
+		_, more, err := st.Next()
+		if more {
+			t.Fatalf("read %d produced a row after the feed ended", i)
+		}
+		ce, ok := couch.AsError(err)
+		if !ok || ce.Status != 404 {
+			t.Fatalf("read %d err = %v, want a mapped 404", i, err)
+		}
+	}
+}
+
+func TestTailSleepHonoursCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := tailSleep(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("tailSleep = %v, want context.Canceled", err)
+	}
+	// Ctrl-C during a 30s backoff must return to the prompt now, not when the
+	// wait would have been over.
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("tailSleep took %v to notice a cancelled context", elapsed)
 	}
 }

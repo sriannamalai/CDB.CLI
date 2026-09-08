@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sriannamalai/CDB.CLI/internal/command"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
@@ -214,5 +216,97 @@ func TestHistoryFileIsWrittenThroughTheFilter(t *testing.T) {
 	}
 	if strings.Contains(string(b), "ls '") {
 		t.Errorf("an unparseable line reached the history file:\n%s", b)
+	}
+}
+
+// syncBuffer is a buffer a test can read while the shell writes to it from
+// another goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// liveFeedCommand is a stand-in for "tail --follow": it hands over two changes
+// and then blocks, as a feed does between changes, until block is closed.
+func liveFeedCommand(block <-chan struct{}) command.Command {
+	return command.Command{
+		Name:    "feed",
+		Summary: "a live stream, for tests",
+		Example: "$ feed",
+		MaxArgs: 0,
+		Run: func(ctx context.Context, s *session.Session, inv command.Invocation) (command.Result, error) {
+			rows := []command.Row{
+				{Cells: []string{"1-x", "a"}, JSON: []byte(`{"seq":"1-x","id":"a"}`)},
+				{Cells: []string{"2-y", "b"}, JSON: []byte(`{"seq":"2-y","id":"b"}`)},
+			}
+			i := 0
+			return command.Stream{
+				Live:    true,
+				Columns: []command.Column{{Title: "seq"}, {Title: "id"}},
+				Next: func() (command.Row, bool, error) {
+					if i < len(rows) {
+						i++
+						return rows[i-1], true, nil
+					}
+					<-block
+					return command.Row{}, false, nil
+				},
+			}, nil
+		},
+	}
+}
+
+// A filter over a feed with no end must be applied change by change. Collecting
+// the stream first, as every other result is collected, means "tail --follow |
+// .id" prints nothing for as long as it runs — which is forever.
+func TestRunLineFiltersALiveStreamAsRowsArrive(t *testing.T) {
+	out := &syncBuffer{}
+	srv := couchtest.New(t)
+	c, err := couch.New(couch.Config{URL: srv.URL(), Auth: couch.AuthNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := session.New(strings.NewReader(""), out, out)
+	s.Attach(c, "test")
+	t.Cleanup(func() { _ = s.Detach() })
+	block := make(chan struct{})
+	reg := command.Default()
+	reg.Register(liveFeedCommand(block))
+	sh, err := New(reg, s, Config{HistoryFile: "", Keymap: "emacs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- sh.RunLine(context.Background(), "feed | .id") }()
+
+	// Both filtered values are written while the stream is still open, which
+	// is the whole point: nothing waits for an end that is not coming.
+	const want = "\"a\"\n\"b\"\n"
+	deadline := time.Now().Add(5 * time.Second)
+	for out.String() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("output = %q, want %q while the feed is still open", out.String(), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(block)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != want {
+		t.Errorf("output = %q, want %q", got, want)
 	}
 }

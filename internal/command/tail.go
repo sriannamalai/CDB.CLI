@@ -175,8 +175,11 @@ func tailOptions(ctx context.Context, c *couch.Client, db string, inv Invocation
 		}
 		since = info.UpdateSeq
 		if since == "" {
-			// A server that reported no sequence. "now" still beats 0, which
-			// would replay the whole database.
+			// Unreachable on CouchDB 3.2 through 3.5, all of which report
+			// update_seq on GET /db. It is kept because the zero value of the
+			// field it guards means 0, and a follow starting at 0 would replay
+			// the whole database rather than show what happens next; "now" is
+			// the same instruction, just re-sent on every reconnect.
 			since = "now"
 		}
 	}
@@ -351,10 +354,22 @@ func tailFollow(ctx context.Context, s *session.Session, t path.Target, opts cou
 		}
 	}()
 
+	// The producer reports why it stopped exactly once, so the reason is kept
+	// and handed back on every later read. A renderer that calls Next again
+	// after an error — and the shell's filter is one — would otherwise block
+	// on an empty channel forever.
+	var (
+		ended  bool
+		reason error
+	)
 	return Stream{Live: true, Columns: cols, Next: func() (Row, bool, error) {
+		if ended {
+			return Row{}, false, reason
+		}
 		r, ok := <-rows
 		if !ok {
-			return Row{}, false, <-errc
+			ended, reason = true, <-errc
+			return Row{}, false, reason
 		}
 		return tailRow(r, includeDocs), true, nil
 	}}, nil
