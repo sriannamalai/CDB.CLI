@@ -183,6 +183,11 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 			profile, profileName = p, name
 		} else if env.URL != "" {
 			profile = config.Profile{URL: env.URL, Auth: "session"}
+		} else if n := len(cfg.Profiles); n > 0 {
+			// Profiles exist but none is the default and none was named, which
+			// is a different problem from having none at all: telling this
+			// operator that nothing is saved sends them to create a third.
+			return connection{}, Usagef("connect", "%d profiles are saved but none is the default. Run \"cdb connect <name>\", or \"cdb profiles default <name>\" to pick one; \"cdb profiles list\" shows them.", n)
 		} else {
 			return connection{}, Usagef("connect", "no profile is saved. Run \"cdb connect <url>\" or \"cdb profiles add\".")
 		}
@@ -583,16 +588,17 @@ func promptForProfile(s *session.Session) (config.Profile, string, error) {
 	return p, secret, nil
 }
 
-// askYesNo puts a yes/no question to the operator, defaulting to yes. The
-// walk-through that calls it runs only when both ends are a real terminal, so
-// a read error means there is nobody left to ask: the default stands rather
-// than failing a connection that has already succeeded.
+// askYesNo puts a yes/no question to the operator. Enter means yes; a read
+// error — Ctrl-D, or a script whose input ran out — means no. The question
+// exists to write a file and a keyring entry, and an answer nobody gave is not
+// consent to write them. The connection itself has already succeeded either
+// way, so nothing is lost by declining.
 func askYesNo(s *session.Session, label string) bool {
 	fmt.Fprintf(s.Stdout, "%s [Y/n]: ", label)
 	line, err := s.Reader().ReadString('\n')
 	answer := strings.ToLower(strings.TrimSpace(line))
 	if err != nil && answer == "" {
-		return true
+		return false
 	}
 	switch answer {
 	case "", "y", "yes":

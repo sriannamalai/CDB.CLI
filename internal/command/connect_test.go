@@ -173,9 +173,8 @@ func TestConnectGuidedPromptCreatesTheFirstProfile(t *testing.T) {
 	var out bytes.Buffer
 	s := session.New(strings.NewReader(""), &out, &out)
 	s.Prefs.Interactive = true
-	// Server URL, authentication kind, profile name. Stdin then runs out, so
-	// the "save this connection?" question falls back to its default of yes.
-	s.SetStdin(strings.NewReader(srv.URL() + "\nnone\nlocal\n"))
+	// Server URL, authentication kind, profile name, then "y" to save.
+	s.SetStdin(strings.NewReader(srv.URL() + "\nnone\nlocal\ny\n"))
 	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
 		t.Fatalf("guided connect: %v (output: %s)", err, out.String())
 	}
@@ -192,6 +191,64 @@ func TestConnectGuidedPromptCreatesTheFirstProfile(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Server URL") {
 		t.Errorf("the walk-through did not ask for a URL:\n%s", out.String())
+	}
+}
+
+// Ctrl-D at "Save this connection as a profile?" is not consent. The question
+// writes a file and a keyring entry, so an answer nobody gave must be "no".
+func TestConnectGuidedPromptSavesNothingOnEOF(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), nil)
+	var out bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &out)
+	s.Prefs.Interactive = true
+	// Server URL, authentication kind, profile name — then stdin runs out at
+	// the save question.
+	s.SetStdin(strings.NewReader(srv.URL() + "\nnone\nlocal\n"))
+
+	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
+		t.Fatalf("guided connect: %v (output: %s)", err, out.String())
+	}
+	if !s.Connected() {
+		t.Error("declining to save also dropped the connection")
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(back.Profiles) != 0 {
+		t.Errorf("profiles = %v, want none written for a question nobody answered", back.Profiles)
+	}
+	if names, _ := CurrentDeps().Secrets.List(); len(names) != 0 {
+		t.Errorf("secrets = %v, want none written", names)
+	}
+}
+
+// With two profiles and no default, "no profile is saved" is untrue and sends
+// the operator to create a third.
+func TestConnectWithNoDefaultNamesTheSavedProfiles(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "one", URL: "http://one:5984", Auth: "none"})
+	cfg.SetProfile(config.Profile{Name: "two", URL: "http://two:5984", Auth: "none"})
+	cfg.Default = ""
+	withDeps(t, cfg, nil)
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	_, err := Connect().Run(context.Background(), s, Invocation{})
+	if err == nil {
+		t.Fatal("connect with two profiles and no default succeeded")
+	}
+	if strings.Contains(err.Error(), "no profile is saved") {
+		t.Errorf("error = %q, but two profiles are saved", err)
+	}
+	for _, want := range []string{"default", "profiles list"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q", err, want)
+		}
+	}
+	var ue *UsageError
+	if !errors.As(err, &ue) {
+		t.Errorf("error is %T, want a *UsageError", err)
 	}
 }
 
