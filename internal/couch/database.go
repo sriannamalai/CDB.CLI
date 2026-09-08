@@ -156,6 +156,18 @@ type DocPage struct {
 	NextStartKeyDocID string
 }
 
+// jsonKey encodes a document id as a JSON string for use as a start_key or
+// end_key query value. A plain `"`+id+`"` concatenation breaks for any id
+// containing a quote, backslash, or control character; json.Marshal escapes
+// those correctly.
+func jsonKey(id string) string {
+	b, err := json.Marshal(id)
+	if err != nil {
+		return `""`
+	}
+	return string(b)
+}
+
 func (o AllDocsOptions) query() url.Values {
 	q := url.Values{}
 	if o.Limit > 0 {
@@ -165,11 +177,11 @@ func (o AllDocsOptions) query() url.Values {
 	}
 	if o.StartKeyDocID != "" {
 		q.Set("startkey_docid", o.StartKeyDocID)
-		q.Set("start_key", `"`+o.StartKeyDocID+`"`)
+		q.Set("start_key", jsonKey(o.StartKeyDocID))
 	}
 	if o.EndKeyDocID != "" {
 		q.Set("endkey_docid", o.EndKeyDocID)
-		q.Set("end_key", `"`+o.EndKeyDocID+`"`)
+		q.Set("end_key", jsonKey(o.EndKeyDocID))
 	}
 	if o.IncludeDocs {
 		q.Set("include_docs", "true")

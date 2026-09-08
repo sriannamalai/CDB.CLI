@@ -2,6 +2,7 @@ package couch
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -97,6 +98,24 @@ func TestAllDocsSendsStartKeyDocID(t *testing.T) {
 	}
 	if req.Query("include_docs") != "true" {
 		t.Errorf("include_docs = %q", req.Query("include_docs"))
+	}
+}
+
+func TestAllDocsJSONEncodesStartKeyForSpecialCharacters(t *testing.T) {
+	id := `he said "hi"\back`
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/_all_docs", 200, `{"total_rows":1,"offset":0,"rows":[{"id":"c","key":"c","value":{"rev":"1-c"}}]}`)
+	c := newTestClient(t, srv)
+	if _, err := c.AllDocs(context.Background(), "mydb", AllDocsOptions{Limit: 10, StartKeyDocID: id}); err != nil {
+		t.Fatal(err)
+	}
+	req := srv.Last("GET", "/mydb/_all_docs")
+	var got string
+	if err := json.Unmarshal([]byte(req.Query("start_key")), &got); err != nil {
+		t.Fatalf("start_key = %q is not valid JSON: %v", req.Query("start_key"), err)
+	}
+	if got != id {
+		t.Errorf("start_key decoded to %q, want %q", got, id)
 	}
 }
 
