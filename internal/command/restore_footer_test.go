@@ -195,6 +195,73 @@ func TestRestoreSpillsADocumentWhoseInlineAttachmentsExceedTheBound(t *testing.T
 	}
 }
 
+// manyDocDump writes count documents, each carrying one attachment of size
+// bytes.
+func manyDocDump(t *testing.T, count int, size int64) string {
+	t.Helper()
+	name := filepath.Join(t.TempDir(), "dump.cdb.gz")
+	f, err := os.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	w := backup.NewWriter(f)
+	if err := w.WriteHeader(backup.Header{DB: "mydb", Server: "3.5.2"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < count; i++ {
+		id := fmt.Sprintf("d%d", i)
+		doc := fmt.Sprintf(`{"_id":%q,"_rev":"1-aa","_revisions":{"start":1,"ids":["aa"]},"v":%d}`, id, i)
+		if err := w.WriteDoc(json.RawMessage(doc)); err != nil {
+			t.Fatal(err)
+		}
+		att := backup.Att{ID: id, Rev: "1-aa", Name: "blob.bin", ContentType: "application/octet-stream", Length: size}
+		if err := w.WriteAttachment(att, io.LimitReader(zeroes{}, size)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.WriteFooter(backup.Footer{Docs: int64(count), Attachments: int64(count), LastSeq: "1-y"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return name
+}
+
+// The bound is a limit on what one bulk request holds, and the way to stay
+// under it is to close the batch — not to strip a document of attachments it
+// could perfectly well carry. Applying it mid-batch meant that once the batch
+// neared 16 MiB the next document's 1 MiB attachment was streamed instead,
+// bumping a revision the dump had recorded and blaming an attachment that was
+// nowhere near too large.
+func TestRestoreDoesNotBumpRevisionsForSmallAttachments(t *testing.T) {
+	srv := restoreTarget(t)
+	var puts atomic.Int32
+	srv.On("PUT", "/target/d0/blob.bin", attachmentPut(&puts))
+	for i := 0; i < 30; i++ {
+		srv.On("PUT", fmt.Sprintf("/target/d%d/blob.bin", i), attachmentPut(&puts))
+	}
+
+	dump := manyDocDump(t, 30, 1<<20)
+	s := connected(t, srv)
+
+	res, err := invoke(t, Restore(), s, dump, "/target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := puts.Load(); got != 0 {
+		t.Errorf("%d attachment(s) were streamed; every one of them is under the inline limit", got)
+	}
+	msg, ok := res.(Message)
+	if !ok {
+		t.Fatalf("result is %T, want Message", res)
+	}
+	if strings.Contains(msg.Text, "changed revision") {
+		t.Errorf("result = %q, want no revision-bump warning", msg.Text)
+	}
+}
+
 // The instruction's own case: attachments larger than the inline limit go up on
 // their own whatever the batch bound says.
 func TestRestoreStreamsAttachmentsOverTheInlineLimit(t *testing.T) {

@@ -36,9 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loaded and fails, naming both numbers, when they disagree — a dump that has
   lost records no longer reports success.
 - `restore` bounds the memory one bulk write holds by the base64 size the
-  request really carries, and a single document whose attachments exceed that
-  bound now sends the remainder as separate uploads instead of building one
-  enormous request.
+  request really carries. Reaching the bound closes the batch, so attachments
+  small enough to inline stay inline and keep the revision the dump recorded;
+  only a single document whose attachments alone exceed the bound sends the
+  remainder as separate uploads.
 
 ## [1.0.0] - 2026-09-08
 

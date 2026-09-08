@@ -38,6 +38,12 @@ type pendingDoc struct {
 	fields map[string]json.RawMessage
 	inline map[string]json.RawMessage
 	large  []largeAttachment
+	// inlineBytes is the base64 this document contributes to the request body;
+	// bytes is that plus the document itself and any spilled payload. They are
+	// kept per document so the batch totals can be rebuilt when the documents
+	// ahead of this one are written out on their own.
+	inlineBytes int64
+	bytes       int64
 }
 
 // largeAttachment is an attachment spilled to a temp file because it exceeds
@@ -150,13 +156,12 @@ func Restore() Command {
 				}
 			}()
 
-			flush := func() error {
-				current = nil
-				if len(pending) == 0 {
+			writeBatch := func(batch []*pendingDoc) error {
+				if len(batch) == 0 {
 					return nil
 				}
-				bodies := make([]json.RawMessage, 0, len(pending))
-				for _, p := range pending {
+				bodies := make([]json.RawMessage, 0, len(batch))
+				for _, p := range batch {
 					body, err := p.marshal()
 					if err != nil {
 						return err
@@ -176,7 +181,7 @@ func Restore() Command {
 				}
 				// An attachment too large to inline goes up on its own, which
 				// costs the document the revision the bulk write just gave it.
-				for _, p := range pending {
+				for _, p := range batch {
 					for _, la := range p.large {
 						newRev, err := uploadSpill(ctx, s, t.Database, p, la)
 						if err != nil {
@@ -186,12 +191,39 @@ func Restore() Command {
 						p.rev = newRev
 					}
 				}
-				pending = pending[:0]
-				pendingBytes = 0
-				inlineBytes = 0
 				// Spec section 9: progress carries document and byte counts.
 				fmt.Fprintf(s.Stderr, "\r%d documents, %d attachments, %s…", docs, atts, humanBytes(written))
 				progressed = true
+				return nil
+			}
+
+			flush := func() error {
+				current = nil
+				if err := writeBatch(pending); err != nil {
+					return err
+				}
+				pending = pending[:0]
+				pendingBytes = 0
+				inlineBytes = 0
+				return nil
+			}
+
+			// flushBefore writes out every document ahead of the one being
+			// read, leaving that one alone in a fresh batch. It is how the byte
+			// bound is kept at a document boundary: a document is never stripped
+			// of an attachment it could carry merely because the documents
+			// before it had filled the request.
+			flushBefore := func() error {
+				if len(pending) < 2 {
+					return nil
+				}
+				last := pending[len(pending)-1]
+				if err := writeBatch(pending[:len(pending)-1]); err != nil {
+					return err
+				}
+				pending = append(pending[:0], last)
+				inlineBytes = last.inlineBytes
+				pendingBytes = last.bytes
 				return nil
 			}
 
@@ -242,11 +274,12 @@ func Restore() Command {
 					if err != nil {
 						return nil, err
 					}
+					p.bytes = int64(len(rec.Doc))
 					pending = append(pending, p)
 					current = p
 					docs++
 					written += int64(len(rec.Doc))
-					pendingBytes += int64(len(rec.Doc))
+					pendingBytes += p.bytes
 
 				case backup.KindAtt:
 					a := rec.Att
@@ -259,16 +292,20 @@ func Restore() Command {
 					if a.Length < 0 {
 						return nil, fmt.Errorf("restore: %s: attachment %q of %s@%s declares a length of %d", file, a.Name, a.ID, a.Rev, a.Length)
 					}
-					// The batch is only closed at a document boundary, so a
-					// single document carrying many small attachments could
-					// hold unbounded base64 in memory however low the bound
-					// was set. What the batch actually holds is the encoded
-					// form, which is a third larger than the payload, so that
-					// is what is counted; once the bound is reached the rest of
-					// the document's attachments take the streamed path, at the
-					// cost of the revision — the same trade the oversized ones
-					// already make, and reported the same way.
+					// What the request body actually holds is the base64 form,
+					// a third larger than the payload, so that is what counts
+					// towards the bound. Reaching it is normally a reason to
+					// close the batch, not to strip this document: the
+					// documents ahead of it go out on their own and it starts a
+					// fresh batch. Only a document whose own attachments cannot
+					// fit in an empty batch falls back to the streamed path,
+					// which costs it the revision the dump recorded.
 					encoded := int64(base64.StdEncoding.EncodedLen(int(a.Length)))
+					if a.Length <= inlineAttachmentLimit && inlineBytes+encoded > restoreBatchBytes {
+						if err := flushBefore(); err != nil {
+							return nil, err
+						}
+					}
 					if a.Length <= inlineAttachmentLimit && inlineBytes+encoded <= restoreBatchBytes {
 						entry, err := inlineEntry(rec.Content, a)
 						if err != nil {
@@ -278,6 +315,8 @@ func Restore() Command {
 							current.inline = map[string]json.RawMessage{}
 						}
 						current.inline[a.Name] = entry
+						current.inlineBytes += encoded
+						current.bytes += encoded
 						inlineBytes += encoded
 						pendingBytes += encoded
 					} else {
@@ -295,6 +334,7 @@ func Restore() Command {
 						// A spilled attachment is on disk rather than in the
 						// batch body, but its temp file lives until the batch
 						// closes, so it still counts towards flushing early.
+						current.bytes += a.Length
 						pendingBytes += a.Length
 					}
 					atts++
