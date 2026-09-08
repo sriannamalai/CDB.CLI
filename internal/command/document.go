@@ -330,6 +330,57 @@ func editorCommand() string {
 	return strings.TrimSpace(os.Getenv("EDITOR"))
 }
 
+// editorArgs splits an editor setting into a program and its arguments. $EDITOR
+// is a command line, not a file name — it commonly carries flags, and on macOS
+// the program's own path holds a space ("/Applications/My Editor/bin/ed") — so
+// whitespace alone is not the separator. Single and double quotes group a word
+// exactly as a shell would; nothing else about shell syntax (variables, escapes,
+// globs, operators) is interpreted, because none of it would reach os/exec
+// anyway.
+func editorArgs(editor string) ([]string, error) {
+	var (
+		args    []string
+		cur     strings.Builder
+		quote   byte
+		started bool
+	)
+	for i := 0; i < len(editor); i++ {
+		c := editor[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+				continue
+			}
+			cur.WriteByte(c)
+		case c == '\'' || c == '"':
+			// A quote starts a word even when the word is empty, so
+			// `emacsclient -a "" -c` keeps its empty argument.
+			quote = c
+			started = true
+		case c == ' ' || c == '\t':
+			if started {
+				args = append(args, cur.String())
+				cur.Reset()
+				started = false
+			}
+		default:
+			cur.WriteByte(c)
+			started = true
+		}
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unbalanced %c quote", quote)
+	}
+	if started {
+		args = append(args, cur.String())
+	}
+	if len(args) == 0 {
+		return nil, fmt.Errorf("no command in it")
+	}
+	return args, nil
+}
+
 // editBuffer writes body to a temp file, runs the editor on it, and reports
 // whether the content changed.
 //
@@ -350,7 +401,10 @@ func editBuffer(editor string, body []byte) ([]byte, bool, error) {
 	if err := os.WriteFile(name, pretty, 0o600); err != nil {
 		return nil, false, err
 	}
-	fields := strings.Fields(editor)
+	fields, err := editorArgs(editor)
+	if err != nil {
+		return nil, false, Usagef("edit", "$VISUAL/$EDITOR is not a command line: %v", err)
+	}
 	cmd := exec.Command(fields[0], append(fields[1:], name)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
