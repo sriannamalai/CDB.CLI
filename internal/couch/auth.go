@@ -165,6 +165,12 @@ func withCookies(req *http.Request, jar http.CookieJar) *http.Request {
 	return out
 }
 
+// CloseIdleConnections lets http.Client.CloseIdleConnections reach the pool the
+// base transport owns. net/http only calls it on a transport that has the
+// method, so without it Client.Close was a no-op for every authenticated
+// client — which is every real one — and the sockets stayed open.
+func (t *sessionTransport) CloseIdleConnections() { closeIdle(t.base) }
+
 // jwtTransport adds a bearer token to every request.
 type jwtTransport struct {
 	base  http.RoundTripper
@@ -175,6 +181,18 @@ func (t *jwtTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	out := req.Clone(req.Context())
 	out.Header.Set("Authorization", "Bearer "+t.token)
 	return t.base.RoundTrip(out)
+}
+
+// CloseIdleConnections delegates to the base transport; see the session
+// transport's method for why it has to exist.
+func (t *jwtTransport) CloseIdleConnections() { closeIdle(t.base) }
+
+// closeIdle passes a close down to a transport that supports one. The interface
+// is the same unexported contract net/http itself checks for.
+func closeIdle(rt http.RoundTripper) {
+	if c, ok := rt.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 // newTransport builds the base transport, applying TLS settings.
