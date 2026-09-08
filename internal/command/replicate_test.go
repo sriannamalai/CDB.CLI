@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,8 +15,11 @@ import (
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
 
-// invokeContext is invoke with a caller-supplied context, for the commands
-// that run until they are interrupted.
+// invokeContext parses argv for a command and runs it under ctx, for the
+// commands that run until they are interrupted. It mirrors what the two
+// front-ends do, including copying the shared --yes and --verbose flags into
+// the session preferences; without that, "--yes" would never reach Confirm.
+// invoke is this with a background context.
 func invokeContext(ctx context.Context, c Command, s *session.Session, argv ...string) (Result, error) {
 	fs := NewRegistry().NewFlagSet(c)
 	if err := fs.Parse(argv); err != nil {
@@ -23,6 +27,12 @@ func invokeContext(ctx context.Context, c Command, s *session.Session, argv ...s
 	}
 	if err := c.CheckArgsErr(fs.Args()); err != nil {
 		return nil, err
+	}
+	if v, err := fs.GetBool("yes"); err == nil && v {
+		s.Prefs.Yes = true
+	}
+	if v, err := fs.GetBool("verbose"); err == nil && v {
+		s.Prefs.Verbose = true
 	}
 	return c.Run(ctx, s, Invocation{Args: fs.Args(), Flags: fs, Stdin: s.Stdin(), Stdout: s.Stdout, Stderr: s.Stderr})
 }
@@ -110,14 +120,9 @@ func TestReplicationsList(t *testing.T) {
 	}
 }
 
-func TestReplicationsShow(t *testing.T) {
-	srv := couchtest.New(t)
-	srv.JSON("GET", "/_scheduler/docs/_replicator/job1", 200, `{"database":"_replicator","doc_id":"job1","id":"abc","source":"http://a/","target":"http://b/","state":"running","node":"n1","error_count":0,"last_updated":"2026-09-08T00:00:00Z","info":{"docs_written":5}}`)
-	s := connected(t, srv)
-	res, err := invoke(t, Replications(), s, "show", "job1")
-	if err != nil {
-		t.Fatal(err)
-	}
+// showFields flattens a "replications show" result into "field=value;" pairs.
+func showFields(t *testing.T, res Result) string {
+	t.Helper()
 	rows, ok := res.(Rows)
 	if !ok {
 		t.Fatalf("result is %T, want Rows", res)
@@ -126,19 +131,138 @@ func TestReplicationsShow(t *testing.T) {
 	for _, r := range rows.Items {
 		joined += r.Cells[0] + "=" + r.Cells[1] + ";"
 	}
+	return joined
+}
+
+func TestReplicationsShow(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_scheduler/docs/_replicator/job1", 200, `{"database":"_replicator","doc_id":"job1","id":"abc","source":"http://a/","target":"http://b/","state":"running","node":"n1","error_count":0,"last_updated":"2026-09-08T00:00:00Z","info":{"docs_written":5}}`)
+	s := connected(t, srv)
+	res, err := invoke(t, Replications(), s, "show", "job1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := showFields(t, res)
 	if !strings.Contains(joined, "state=running") {
 		t.Errorf("rows %q are missing the state", joined)
 	}
 }
 
+// TestReplicationsShowJoinsTheSchedulerJob: _scheduler/docs describes the
+// document, _scheduler/jobs the process running it. Only the job carries the
+// history, the pid and the start time, so show reads both.
+func TestReplicationsShowJoinsTheSchedulerJob(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_scheduler/docs/_replicator/job1", 200, `{"database":"_replicator","doc_id":"job1","id":"abc+continuous","source":"http://a/","target":"http://b/","state":"running","node":"","error_count":0,"last_updated":"2026-09-08T00:00:00Z","info":{"docs_written":5}}`)
+	srv.JSON("GET", "/_scheduler/jobs/abc+continuous", 200, `{"database":"_replicator","id":"abc+continuous","pid":"<0.383018.0>","source":"http://a/","target":"http://b/","doc_id":"job1","node":"nonode@nohost","start_time":"2026-09-08T05:55:59Z",
+		"history":[{"timestamp":"2026-09-08T05:55:59Z","type":"started"},{"timestamp":"2026-09-08T05:55:58Z","type":"crashed","reason":"econnrefused"}]}`)
+	s := connected(t, srv)
+	res, err := invoke(t, Replications(), s, "show", "job1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := showFields(t, res)
+	for _, want := range []string{
+		"start time=2026-09-08T05:55:59Z;",
+		"pid=<0.383018.0>;",
+		"history=2026-09-08T05:55:59Z started;",
+		"history=2026-09-08T05:55:58Z crashed: econnrefused;",
+		// The document entry has no node while the job is what holds one.
+		"node=nonode@nohost;",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("rows %q are missing %q", joined, want)
+		}
+	}
+	for _, item := range rowsOf(t, res) {
+		if len(item.JSON) == 0 {
+			t.Errorf("row %v has no JSON", item.Cells)
+		}
+	}
+}
+
+// TestReplicationsShowWithoutARunningJob: a completed replication keeps its
+// _scheduler/docs entry but has no job. That is the normal end state, not a
+// failure, so show prints the document alone.
+func TestReplicationsShowWithoutARunningJob(t *testing.T) {
+	srv := couchtest.New(t)
+	// A finished replication reports a null job id; the stub answers 404 for
+	// the jobs route either way.
+	srv.JSON("GET", "/_scheduler/docs/_replicator/job1", 200, `{"database":"_replicator","doc_id":"job1","id":null,"source":"http://a/","target":"http://b/","state":"completed","node":"","error_count":0,"last_updated":"2026-09-08T00:00:00Z","info":{"docs_written":5}}`)
+	s := connected(t, srv)
+	res, err := invoke(t, Replications(), s, "show", "job1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := showFields(t, res)
+	if !strings.Contains(joined, "state=completed;") {
+		t.Errorf("rows %q are missing the state", joined)
+	}
+	if strings.Contains(joined, "history=") || strings.Contains(joined, "pid=") {
+		t.Errorf("rows %q invented job details for a replication with no job", joined)
+	}
+	for _, r := range srv.Requests() {
+		if strings.HasPrefix(r.Path, "/_scheduler/jobs") {
+			t.Errorf("show requested %s for a replication with no job id", r.Path)
+		}
+	}
+}
+
+// TestReplicationsShowCapsTheHistory: CouchDB keeps dozens of history events,
+// newest first. A status table shows the newest few.
+func TestReplicationsShowCapsTheHistory(t *testing.T) {
+	var events []string
+	for i := 0; i < historyEvents+3; i++ {
+		events = append(events, fmt.Sprintf(`{"timestamp":"2026-09-08T00:00:%02dZ","type":"started"}`, i))
+	}
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_scheduler/docs/_replicator/job1", 200, `{"doc_id":"job1","id":"abc","source":"http://a/","target":"http://b/","state":"running","error_count":0,"last_updated":"2026-09-08T00:00:00Z"}`)
+	srv.JSON("GET", "/_scheduler/jobs/abc", 200, `{"id":"abc","doc_id":"job1","source":"http://a/","target":"http://b/","node":"n1","pid":"<0.1.0>","start_time":"2026-09-08T00:00:00Z","history":[`+strings.Join(events, ",")+`]}`)
+	s := connected(t, srv)
+	res, err := invoke(t, Replications(), s, "show", "job1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for _, item := range rowsOf(t, res) {
+		if item.Cells[0] == "history" {
+			got++
+		}
+	}
+	if got != historyEvents {
+		t.Errorf("show printed %d history rows, want %d", got, historyEvents)
+	}
+	// Newest first, so the first event of the answer survives the cap.
+	if !strings.Contains(showFields(t, res), "history=2026-09-08T00:00:00Z started;") {
+		t.Errorf("show dropped the newest history event: %s", showFields(t, res))
+	}
+}
+
+// rowsOf asserts a Result is Rows and returns its items.
+func rowsOf(t *testing.T, res Result) []Row {
+	t.Helper()
+	rows, ok := res.(Rows)
+	if !ok {
+		t.Fatalf("result is %T, want Rows", res)
+	}
+	return rows.Items
+}
+
 // TestReplicationsRedactEndpointCredentials: a _replicator document written by
 // cdb carries an auth object, and one written by hand may carry userinfo in
-// the URL. Neither may reach a rendered cell or a Row.JSON payload.
+// the URL. The scheduler repeats both on its job entry. None of it may reach a
+// rendered cell or a Row.JSON payload, on either subcommand.
 func TestReplicationsRedactEndpointCredentials(t *testing.T) {
 	const entry = `{"database":"_replicator","doc_id":"job1","id":"abc",
 		"source":{"url":"http://a.example.com/src","auth":{"basic":{"username":"admin","password":"s3cret"}}},
 		"target":"http://admin:s3cret@b.example.com/dst/",
 		"state":"running","node":"n1","error_count":0,"last_updated":"2026-09-08T00:00:00Z"}`
+	// The job entry carries the same credentials, and show renders its
+	// endpoints in preference to the document's.
+	const job = `{"database":"_replicator","id":"abc","doc_id":"job1","pid":"<0.1.0>","node":"n1","start_time":"2026-09-08T00:00:00Z",
+		"source":{"url":"http://a.example.com/src","auth":{"basic":{"username":"admin","password":"s3cret"}}},
+		"target":"http://admin:s3cret@b.example.com/dst/",
+		"history":[{"timestamp":"2026-09-08T00:00:00Z","type":"started"}]}`
 	for _, tc := range []struct {
 		name  string
 		argv  []string
@@ -151,6 +275,7 @@ func TestReplicationsRedactEndpointCredentials(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := couchtest.New(t)
 			srv.JSON("GET", tc.route, 200, tc.body)
+			srv.JSON("GET", "/_scheduler/jobs/abc", 200, job)
 			s := connected(t, srv)
 			res, err := invoke(t, Replications(), s, tc.argv...)
 			if err != nil {

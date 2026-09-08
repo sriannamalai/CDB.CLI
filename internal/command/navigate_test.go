@@ -25,25 +25,14 @@ func connected(t *testing.T, srv *couchtest.Server) *session.Session {
 	return s
 }
 
-// invoke parses argv for a command and runs it. It mirrors what the two
-// front-ends do, including copying the shared --yes and --verbose flags into
-// the session preferences; without that, "--yes" would never reach Confirm.
+// invoke parses argv for a command and runs it with a background context. The
+// work is in invokeContext (replicate_test.go), so that the flag handling the
+// two front-ends do — copying --yes and --verbose into the session
+// preferences, without which "--yes" would never reach Confirm — happens in
+// exactly one place.
 func invoke(t *testing.T, c Command, s *session.Session, argv ...string) (Result, error) {
 	t.Helper()
-	fs := NewRegistry().NewFlagSet(c)
-	if err := fs.Parse(argv); err != nil {
-		return nil, err
-	}
-	if err := c.CheckArgsErr(fs.Args()); err != nil {
-		return nil, err
-	}
-	if v, err := fs.GetBool("yes"); err == nil && v {
-		s.Prefs.Yes = true
-	}
-	if v, err := fs.GetBool("verbose"); err == nil && v {
-		s.Prefs.Verbose = true
-	}
-	return c.Run(context.Background(), s, Invocation{Args: fs.Args(), Flags: fs, Stdin: s.Stdin(), Stdout: s.Stdout, Stderr: s.Stderr})
+	return invokeContext(context.Background(), c, s, argv...)
 }
 
 func TestLsAtRootListsDatabases(t *testing.T) {

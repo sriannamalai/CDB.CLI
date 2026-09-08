@@ -32,8 +32,13 @@ object, so they never reach the stored document's URL or the screen.
 ` + unreachableEndpointNote
 
 // replicationsDetails is the long help for replications.
-const replicationsDetails = `"replications cancel" deletes the _replicator document, which stops the job.
-It confirms first, or fails without a terminal unless --yes is given.
+const replicationsDetails = `"replications list" reads _scheduler/docs, one row per replication document.
+"replications show" reads the same entry and joins the _scheduler/jobs entry
+for it, which adds the start time, the process id and the scheduler history; a
+replication that has completed, failed or not started yet has no job, and show
+prints the document alone. "replications cancel" deletes the _replicator
+document, which stops the job. It confirms first, or fails without a terminal
+unless --yes is given.
 
 ` + unreachableEndpointNote
 
@@ -125,20 +130,47 @@ func Replications() Command {
 				if err != nil {
 					return nil, err
 				}
+				// _scheduler/docs describes the document; _scheduler/jobs
+				// describes the process running it, which is the only place
+				// the history, pid and start time live. A replication that has
+				// completed, failed or is still pending has no job, and that
+				// is not an error.
+				job, running, err := replicate.ShowJob(ctx, s.Client, st.ID)
+				if err != nil {
+					return nil, err
+				}
 				rows := Rows{Columns: []Column{{Title: "field"}, {Title: "value"}}}
 				add := func(k, v string) {
 					rows.Items = append(rows.Items, Row{Cells: []string{k, v}, JSON: jsonObject("field", k, "value", v)})
 				}
+				source, target, node := st.Source, st.Target, st.Node
+				if running {
+					// The job is the live view of the same replication, so it
+					// wins wherever both report a field.
+					source, target = orDefault(job.Source, source), orDefault(job.Target, target)
+					node = orDefault(job.Node, node)
+				}
 				add("doc id", st.DocID)
 				add("job id", st.ID)
-				add("source", st.Source)
-				add("target", st.Target)
+				add("source", source)
+				add("target", target)
 				add("state", st.State)
-				add("node", st.Node)
+				add("node", node)
 				add("errors", strconv.FormatInt(st.ErrorCount, 10))
 				add("last updated", st.LastUpdated)
 				if st.Error != "" {
 					add("error", st.Error)
+				}
+				if running {
+					if job.StartTime != "" {
+						add("start time", job.StartTime)
+					}
+					if job.PID != "" {
+						add("pid", job.PID)
+					}
+					for _, e := range recentHistory(job.History) {
+						add("history", historyLine(e))
+					}
 				}
 				if len(st.Info) > 0 {
 					add("info", string(st.Info))
@@ -163,6 +195,36 @@ func Replications() Command {
 			}
 		},
 	}
+}
+
+// historyEvents is how many scheduler history entries "replications show"
+// prints. CouchDB keeps the most recent first and up to a few dozen of them,
+// which is more than a status table should carry.
+const historyEvents = 5
+
+// orDefault returns s, or fallback when s is empty.
+func orDefault(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+// recentHistory returns the newest events, newest first, as CouchDB orders them.
+func recentHistory(h []replicate.HistoryEvent) []replicate.HistoryEvent {
+	if len(h) > historyEvents {
+		return h[:historyEvents]
+	}
+	return h
+}
+
+// historyLine renders one scheduler history event.
+func historyLine(e replicate.HistoryEvent) string {
+	line := e.Timestamp + " " + e.Type
+	if e.Reason != "" {
+		line += ": " + e.Reason
+	}
+	return line
 }
 
 // replicationRows renders scheduler entries. Every field it shows comes from

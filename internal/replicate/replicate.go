@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -136,6 +137,71 @@ func (d schedulerDoc) toStatus() Status {
 		}
 	}
 	return st
+}
+
+// HistoryEvent is one entry of a job's history: what the scheduler did to the
+// job and when. Reason carries the failure text on a "crashed" event.
+type HistoryEvent struct {
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// Job is one entry of _scheduler/jobs: the running side of a replication,
+// which _scheduler/docs does not describe. Source and Target are redacted for
+// the same reason as Status's.
+type Job struct {
+	ID        string         `json:"id"`
+	DocID     string         `json:"doc_id"`
+	Source    string         `json:"source"`
+	Target    string         `json:"target"`
+	Node      string         `json:"node"`
+	PID       string         `json:"pid"`
+	StartTime string         `json:"start_time"`
+	History   []HistoryEvent `json:"history,omitempty"`
+}
+
+// schedulerJob is the wire shape of a _scheduler/jobs entry.
+type schedulerJob struct {
+	ID        string          `json:"id"`
+	DocID     string          `json:"doc_id"`
+	Source    json.RawMessage `json:"source"`
+	Target    json.RawMessage `json:"target"`
+	Node      string          `json:"node"`
+	PID       string          `json:"pid"`
+	StartTime string          `json:"start_time"`
+	History   []HistoryEvent  `json:"history"`
+}
+
+// ShowJob reads the scheduler job with the given job id — the "id" of a
+// _scheduler/docs entry, not the _replicator document id, which
+// GET /_scheduler/jobs/<doc id> answers 404 for (verified on CouchDB 3.5.2).
+//
+// It reports ok=false, and no error, when there is no running job: an empty
+// job id, which is what CouchDB reports for a completed, failed or pending
+// replication, or a 404 from a job that finished between the two requests.
+func ShowJob(ctx context.Context, cl *couch.Client, jobID string) (Job, bool, error) {
+	if jobID == "" {
+		return Job{}, false, nil
+	}
+	var j schedulerJob
+	apiPath := "/_scheduler/jobs/" + path.Encode(jobID)
+	if err := cl.DoJSON(ctx, "GET", apiPath, nil, &j, "read", fmt.Sprintf("replication job %q", jobID)); err != nil {
+		if ce, ok := couch.AsError(err); ok && ce.Status == http.StatusNotFound {
+			return Job{}, false, nil
+		}
+		return Job{}, false, err
+	}
+	return Job{
+		ID:        j.ID,
+		DocID:     j.DocID,
+		Source:    redactEndpoint(j.Source),
+		Target:    redactEndpoint(j.Target),
+		Node:      j.Node,
+		PID:       j.PID,
+		StartTime: j.StartTime,
+		History:   j.History,
+	}, true, nil
 }
 
 // redactEndpoint renders a scheduler entry's "source" or "target" as a URL

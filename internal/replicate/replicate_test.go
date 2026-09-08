@@ -209,6 +209,98 @@ func TestShowRedactsEndpointCredentials(t *testing.T) {
 	}
 }
 
+// jobBody is a _scheduler/jobs entry as CouchDB 3.5.2 answers it, with the
+// credentials a hand-written or cdb-written endpoint could carry.
+const jobBody = `{"database":"_replicator","id":"abc+continuous","pid":"<0.383018.0>",
+	"source":{"url":"http://a.example.com/src","auth":{"basic":{"username":"admin","password":"s3cret"}}},
+	"target":"http://admin:s3cret@b.example.com/dst/","user":null,"doc_id":"job1",
+	"history":[{"timestamp":"2026-09-08T05:55:59Z","type":"started"},{"timestamp":"2026-09-08T05:55:58Z","type":"crashed","reason":"econnrefused"},{"timestamp":"2026-09-08T05:55:57Z","type":"added"}],
+	"node":"nonode@nohost","start_time":"2026-09-08T05:55:59Z"}`
+
+func TestShowJob(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_scheduler/jobs/abc+continuous", 200, jobBody)
+	c := testClient(t, srv)
+	job, ok, err := ShowJob(context.Background(), c, "abc+continuous")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ShowJob reported no job for a 200 answer")
+	}
+	if job.DocID != "job1" || job.PID != "<0.383018.0>" || job.StartTime != "2026-09-08T05:55:59Z" || job.Node != "nonode@nohost" {
+		t.Errorf("job = %+v", job)
+	}
+	if len(job.History) != 3 {
+		t.Fatalf("history = %d events, want 3", len(job.History))
+	}
+	if job.History[1].Type != "crashed" || job.History[1].Reason != "econnrefused" || job.History[1].Timestamp == "" {
+		t.Errorf("history[1] = %+v", job.History[1])
+	}
+}
+
+func TestShowJobRedactsEndpointCredentials(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_scheduler/jobs/abc+continuous", 200, jobBody)
+	c := testClient(t, srv)
+	job, _, err := ShowJob(context.Background(), c, "abc+continuous")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Source != "http://a.example.com/src" || job.Target != "http://b.example.com/dst/" {
+		t.Errorf("endpoints = %q, %q", job.Source, job.Target)
+	}
+	b, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"s3cret", "auth", "admin"} {
+		if strings.Contains(string(b), leak) {
+			t.Errorf("job JSON %s leaks %q", b, leak)
+		}
+	}
+}
+
+// TestShowJobWithoutARunningJob: a completed, failed or pending replication
+// has no scheduler job. CouchDB reports that as a null "id" on the document
+// entry, or as a 404 if the job ended between the two requests; neither is an
+// error, and an empty id must not cost a request.
+func TestShowJobWithoutARunningJob(t *testing.T) {
+	srv := couchtest.New(t)
+	c := testClient(t, srv)
+
+	job, ok, err := ShowJob(context.Background(), c, "")
+	if err != nil || ok {
+		t.Errorf("ShowJob(\"\") = %+v, %v, %v; want a missing job and no error", job, ok, err)
+	}
+	for _, r := range srv.Requests() {
+		if strings.HasPrefix(r.Path, "/_scheduler/jobs") {
+			t.Errorf("ShowJob(\"\") requested %s", r.Path)
+		}
+	}
+
+	// The stub answers 404 for any route it does not know.
+	job, ok, err = ShowJob(context.Background(), c, "gone+continuous")
+	if err != nil {
+		t.Errorf("ShowJob on a 404 returned %v, want no error", err)
+	}
+	if ok {
+		t.Errorf("ShowJob on a 404 reported a job: %+v", job)
+	}
+	if srv.Last("GET", "/_scheduler/jobs/gone+continuous") == nil {
+		t.Error("ShowJob did not request the job")
+	}
+}
+
+func TestShowJobReportsAServerError(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_scheduler/jobs/abc", 500, `{"error":"internal_server_error","reason":"boom"}`)
+	c := testClient(t, srv)
+	if _, ok, err := ShowJob(context.Background(), c, "abc"); err == nil || ok {
+		t.Errorf("ShowJob on a 500 returned ok=%v, err=%v; want an error", ok, err)
+	}
+}
+
 func TestCancelDeletesTheDocument(t *testing.T) {
 	srv := couchtest.New(t)
 	srv.On("HEAD", "/_replicator/job1", func(w http.ResponseWriter, _ *http.Request) {
