@@ -33,7 +33,14 @@ func TestRedactURL(t *testing.T) {
 		{"http://localhost:5984/", "http://localhost:5984/"},
 		{"http://admin:hunter2@localhost:5984/", "http://localhost:5984/"},
 		{"ftp://admin:hunter2@localhost:5984/", "ftp://localhost:5984/"},
-		{"http://admin:hunter2@local host:5984/", "local host:5984/"},
+		{"http://admin:hunter2@local host:5984/", "http://local host:5984/"},
+		// No scheme: url.Parse reads "admin" as the scheme and never sets
+		// User, so the userinfo has to be cut textually.
+		{"admin:hunter2@localhost:5984", "localhost:5984"},
+		{"admin@localhost:5984", "localhost:5984"},
+		{"//admin:hunter2@localhost:5984/db", "//localhost:5984/db"},
+		// An "@" past the authority belongs to the path, not to a credential.
+		{"http://localhost:5984/mail@host", "http://localhost:5984/mail@host"},
 		{"not a url at all", "not a url at all"},
 		{"", ""},
 	} {

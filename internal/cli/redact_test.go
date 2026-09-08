@@ -26,6 +26,10 @@ func TestExecuteKeepsURLCredentialsOffStderr(t *testing.T) {
 		{name: "url flag", args: []string{"--url", "ftp://admin:hunter2@localhost:5984/", "needs-conn"}},
 		{name: "CDB_URL", args: []string{"needs-conn"}, env: map[string]string{"CDB_URL": "ftp://admin:hunter2@localhost:5984/"}},
 		{name: "malformed CDB_URL", args: []string{"needs-conn"}, env: map[string]string{"CDB_URL": "http://admin:hunter2@local host:5984/"}},
+		// No scheme at all: url.Parse reads "admin" as the scheme and reports
+		// no userinfo, so nothing that trusts it can be relied on to redact.
+		{name: "schemeless url flag", args: []string{"--url", "admin:hunter2@localhost:5984", "needs-conn"}},
+		{name: "schemeless CDB_URL", args: []string{"needs-conn"}, env: map[string]string{"CDB_URL": "admin:hunter2@localhost:5984"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			command.SetDeps(&command.Deps{
@@ -46,8 +50,11 @@ func TestExecuteKeepsURLCredentialsOffStderr(t *testing.T) {
 			if code == ExitOK {
 				t.Fatalf("exit code = %d, want a failure (stderr: %s)", code, errOut.String())
 			}
-			if strings.Contains(out.String()+errOut.String(), secret) {
-				t.Errorf("output leaks the password: %q %q", out.String(), errOut.String())
+			printed := out.String() + errOut.String()
+			for _, leak := range []string{secret, "admin"} {
+				if strings.Contains(printed, leak) {
+					t.Errorf("output leaks %q: %q %q", leak, out.String(), errOut.String())
+				}
 			}
 			if !strings.Contains(errOut.String(), "host:5984") {
 				t.Errorf("stderr does not name the host: %q", errOut.String())

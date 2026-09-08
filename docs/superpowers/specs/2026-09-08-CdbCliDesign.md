@@ -366,8 +366,9 @@ error, 3 connection or auth error, 130 interrupted.
 - `internal/path` and `internal/shell` parsing: table-driven unit tests.
 - `internal/render`: golden-file tests for table and JSON output with
   colour on and off.
-- `internal/backup`: round-trip test on the in-memory driver plus a
-  resume test that truncates a file mid-stream.
+- `internal/backup`: round-trip test that writes and reads real gzip dump
+  files against the `couchtest` stub, plus a resume test that truncates a
+  file mid-stream.
 - End-to-end: a small script exercises `cdb` subcommands against the
   Docker server in CI.
 
