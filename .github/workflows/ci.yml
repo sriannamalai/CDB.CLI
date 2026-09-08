@@ -52,9 +52,11 @@ jobs:
           CDB_URL: http://localhost:5984
           CDB_USER: admin
           CDB_PASSWORD: password
+          CDB_KEYRING_BACKEND: file
         run: |
           go build -o ./cdb ./cmd/cdb
           ./cdb version
+          ./cdb ls /
           ./cdb mkdir /e2e
           echo '{"name":"alice"}' | ./cdb put /e2e/alice
           ./cdb cat /e2e/alice
@@ -69,6 +71,13 @@ jobs:
           ./cdb info /e2e_copy
           ./cdb rmdir /e2e --yes
           ./cdb rmdir /e2e_copy --yes
+          # A profile round-trip, with a password in the URL: the config file
+          # must never hold it. This is the check that would have caught the
+          # "profiles add" credential leak.
+          ./cdb profiles add e2e 'http://admin:password@localhost:5984/'
+          ./cdb profiles list
+          ! grep -q password "${XDG_CONFIG_HOME:-$HOME/.config}/cdb/config.toml"
+          ./cdb profiles remove e2e
 
   build-matrix:
     runs-on: ${{ matrix.os }}
