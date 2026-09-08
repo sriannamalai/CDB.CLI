@@ -50,9 +50,15 @@ type Footer struct {
 }
 
 // Writer writes dump records.
+//
+// Any error returned by a Write method is terminal; the record stream is
+// desynchronised and the Writer must not be used again. The dump remains
+// resumable from its last complete checkpoint. Once a method has failed, every
+// later method returns that same error and writes nothing.
 type Writer struct {
-	w  io.Writer
-	gz *gzip.Writer
+	w   io.Writer
+	gz  *gzip.Writer
+	err error
 }
 
 // NewWriter returns a Writer appending to w.
@@ -60,13 +66,26 @@ func NewWriter(w io.Writer) *Writer {
 	return &Writer{w: w, gz: gzip.NewWriter(w)}
 }
 
+// fail latches err as the Writer's terminal error and returns it.
+func (w *Writer) fail(err error) error {
+	if w.err == nil {
+		w.err = err
+	}
+	return w.err
+}
+
 func (w *Writer) writeJSON(v any) error {
+	if w.err != nil {
+		return w.err
+	}
 	b, err := json.Marshal(v)
 	if err != nil {
-		return err
+		return w.fail(err)
 	}
-	_, err = w.gz.Write(append(b, '\n'))
-	return err
+	if _, err := w.gz.Write(append(b, '\n')); err != nil {
+		return w.fail(err)
+	}
+	return nil
 }
 
 // WriteHeader writes the header record.
@@ -85,25 +104,38 @@ func (w *Writer) WriteDoc(doc json.RawMessage) error {
 
 // WriteAttachment writes an att record followed by exactly a.Length bytes read
 // from r, then a newline.
+//
+// A reader that ends before a.Length bytes is an error, and like any error from
+// a Write method it is terminal: the att record has already been written with
+// its declared length, so the stream is desynchronised and the Writer must not
+// be used again. The dump remains resumable from its last complete checkpoint.
 func (w *Writer) WriteAttachment(a Att, r io.Reader) error {
+	if w.err != nil {
+		return w.err
+	}
 	a.Kind = KindAtt
 	if err := w.writeJSON(a); err != nil {
 		return err
 	}
 	n, err := io.Copy(w.gz, io.LimitReader(r, a.Length))
 	if err != nil {
-		return err
+		return w.fail(err)
 	}
 	if n != a.Length {
-		return fmt.Errorf("attachment %q of %q: wrote %d bytes, declared %d", a.Name, a.ID, n, a.Length)
+		return w.fail(fmt.Errorf("attachment %q of %q: wrote %d bytes, declared %d", a.Name, a.ID, n, a.Length))
 	}
-	_, err = w.gz.Write([]byte{'\n'})
-	return err
+	if _, err := w.gz.Write([]byte{'\n'}); err != nil {
+		return w.fail(err)
+	}
+	return nil
 }
 
 // WriteCheckpoint writes a checkpoint record and closes the current gzip member
 // so the file can be resumed here.
 func (w *Writer) WriteCheckpoint(seq string) error {
+	if w.err != nil {
+		return w.err
+	}
 	if err := w.writeJSON(struct {
 		Kind string `json:"kind"`
 		Seq  string `json:"seq"`
@@ -111,7 +143,7 @@ func (w *Writer) WriteCheckpoint(seq string) error {
 		return err
 	}
 	if err := w.gz.Close(); err != nil {
-		return err
+		return w.fail(err)
 	}
 	w.gz = gzip.NewWriter(w.w)
 	return nil
@@ -123,8 +155,17 @@ func (w *Writer) WriteFooter(f Footer) error {
 	return w.writeJSON(f)
 }
 
-// Close flushes and closes the current gzip member.
-func (w *Writer) Close() error { return w.gz.Close() }
+// Close flushes and closes the current gzip member. It reports the Writer's
+// terminal error, if any, without writing.
+func (w *Writer) Close() error {
+	if w.err != nil {
+		return w.err
+	}
+	if err := w.gz.Close(); err != nil {
+		return w.fail(err)
+	}
+	return nil
+}
 
 // Record is one decoded dump record. Content is valid only until the next call
 // to Reader.Next, which drains anything left unread.

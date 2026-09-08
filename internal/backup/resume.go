@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 )
@@ -19,7 +20,8 @@ type Resume struct {
 	// Bytes is the document and attachment payload size they add up to. The
 	// backup command resumes its progress counters from these.
 	Docs, Attachments, Bytes int64
-	// Complete is true when the dump already contains a footer.
+	// Complete is true when the dump already contains a footer. A complete dump
+	// must not be resumed: it has nothing left to append.
 	Complete bool
 }
 
@@ -48,6 +50,14 @@ func (c *countingReader) ReadByte() (byte, error) {
 // Scan walks an existing dump file member by member and reports the last point
 // at which it can be safely resumed. A partially written trailing member is
 // ignored.
+//
+// The first record of the first member must be a header, so that Scan cannot
+// hand back Offset 0 for a file that is not a cdb dump — a caller acting on that
+// would truncate an unrelated file to nothing. An empty or truncated-to-nothing
+// file is not an error; it reports the zero Resume, meaning start from scratch.
+//
+// Scan leaves f at an unspecified position. Truncate the dump by path and reopen
+// it rather than reusing f for further reads or writes.
 func Scan(f *os.File) (Resume, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return Resume{}, err
@@ -67,6 +77,13 @@ func Scan(f *os.File) (Resume, error) {
 		return res, err
 	}
 	defer gz.Close()
+	// notADump reports a file whose first member does not open with a header
+	// record. Returning Resume{Offset: 0} for one would invite the caller to
+	// truncate an unrelated gzip file to nothing.
+	notADump := func() (Resume, error) {
+		return Resume{}, fmt.Errorf("backup: %s is not a cdb dump", f.Name())
+	}
+	first := true
 	for {
 		gz.Multistream(false)
 		r := &Reader{gz: gz, br: newBufReader(gz)}
@@ -82,11 +99,23 @@ func Scan(f *os.File) (Resume, error) {
 		for {
 			rec, rerr := r.Next()
 			if errors.Is(rerr, io.EOF) {
+				if first {
+					return notADump()
+				}
 				break
 			}
 			if rerr != nil {
+				if first {
+					return notADump()
+				}
 				memberOK = false
 				break
+			}
+			if first {
+				if rec.Kind != KindHeader {
+					return notADump()
+				}
+				first = false
 			}
 			switch rec.Kind {
 			case KindDoc:
@@ -124,5 +153,16 @@ func Scan(f *os.File) (Resume, error) {
 	return res, nil
 }
 
-// Truncate cuts a dump file back to the given byte offset.
-func Truncate(path string, offset int64) error { return os.Truncate(path, offset) }
+// Truncate cuts a dump file back to the given byte offset. It refuses an offset
+// past the end of the file: os.Truncate would zero-extend there, padding the
+// dump with NUL bytes and corrupting it rather than reporting the stale offset.
+func Truncate(path string, offset int64) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if offset < 0 || offset > fi.Size() {
+		return fmt.Errorf("backup: truncate %s to %d: file is %d bytes", path, offset, fi.Size())
+	}
+	return os.Truncate(path, offset)
+}

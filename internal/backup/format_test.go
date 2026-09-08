@@ -2,7 +2,9 @@ package backup
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -295,5 +297,114 @@ func TestWriteAttachmentRejectsAShortReader(t *testing.T) {
 	err := w.WriteAttachment(Att{ID: "a", Name: "x", Length: 10}, strings.NewReader("short"))
 	if err == nil {
 		t.Fatal("WriteAttachment accepted a reader shorter than Length")
+	}
+}
+
+// os.Truncate zero-extends a file when the offset is past its end, so a stale
+// resume offset would pad a dump with NUL bytes instead of failing.
+func TestTruncateRefusesToGrowTheFile(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "dump.cdb.gz")
+	if err := os.WriteFile(name, []byte("0123456789"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Truncate(name, 11); err == nil {
+		t.Fatal("Truncate past the end of the file returned nil")
+	}
+	if err := Truncate(name, -1); err == nil {
+		t.Fatal("Truncate to a negative offset returned nil")
+	}
+	got, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "0123456789" {
+		t.Fatalf("file = %q, want %q", got, "0123456789")
+	}
+	if err := Truncate(name, 4); err != nil {
+		t.Fatalf("Truncate within the file: %v", err)
+	}
+	got, _ = os.ReadFile(name)
+	if string(got) != "0123" {
+		t.Fatalf("after Truncate(4) file = %q, want %q", got, "0123")
+	}
+}
+
+func TestWriterLatchesAFailure(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	if err := w.WriteHeader(Header{DB: "mydb"}); err != nil {
+		t.Fatal(err)
+	}
+	first := w.WriteAttachment(Att{ID: "a", Name: "x", Length: 10}, strings.NewReader("short"))
+	if first == nil {
+		t.Fatal("WriteAttachment accepted a reader shorter than Length")
+	}
+	before := buf.Len()
+
+	if err := w.WriteDoc(json.RawMessage(`{"_id":"a"}`)); !errors.Is(err, first) {
+		t.Errorf("WriteDoc after a failure = %v, want %v", err, first)
+	}
+	if err := w.WriteCheckpoint("1-a"); !errors.Is(err, first) {
+		t.Errorf("WriteCheckpoint after a failure = %v, want %v", err, first)
+	}
+	if err := w.WriteFooter(Footer{LastSeq: "1-a"}); !errors.Is(err, first) {
+		t.Errorf("WriteFooter after a failure = %v, want %v", err, first)
+	}
+	if err := w.Close(); !errors.Is(err, first) {
+		t.Errorf("Close after a failure = %v, want %v", err, first)
+	}
+	if buf.Len() != before {
+		t.Errorf("a failed Writer wrote %d more bytes", buf.Len()-before)
+	}
+}
+
+func TestScanRejectsANonDumpGzipFile(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "other.gz")
+	f, err := os.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	if _, err := gz.Write([]byte(`{"hello":"world"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	f, err = os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	res, err := Scan(f)
+	if err == nil {
+		t.Fatalf("Scan of a non-dump gzip file returned %+v, want an error", res)
+	}
+	if !strings.Contains(err.Error(), "not a cdb dump") {
+		t.Errorf("Scan error = %v, want it to say the file is not a cdb dump", err)
+	}
+}
+
+func TestScanOfAnEmptyFileIsAFreshStart(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "dump.cdb.gz")
+	if err := os.WriteFile(name, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	res, err := Scan(f)
+	if err != nil {
+		t.Fatalf("Scan of an empty file: %v", err)
+	}
+	if res != (Resume{}) {
+		t.Errorf("Scan of an empty file = %+v, want the zero Resume", res)
 	}
 }
