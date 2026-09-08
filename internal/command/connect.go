@@ -228,9 +228,14 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 	profile = env.Apply(profile)
 	// The flag wins over CDB_REPLICATION_URL, which Env.Apply has just layered
 	// over the profile key — the same order --url, CDB_URL and the profile's
-	// url follow.
+	// url follow. A flag the operator got wrong is a usage error, not a
+	// connection failure, and the message never echoes what they typed.
 	if s.Prefs.ReplicationURL != "" {
-		profile.ReplicationURL = s.Prefs.ReplicationURL
+		base, rerr := couch.NormaliseReplicationURL(s.Prefs.ReplicationURL)
+		if rerr != nil {
+			return connection{}, Usagef("connect", "%v", rerr)
+		}
+		profile.ReplicationURL = base
 	}
 
 	// CDB_PASSWORD and CDB_TOKEN bypass the keyring entirely: the environment
@@ -430,6 +435,20 @@ Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 				p, secret, promptErr := promptForProfile(s)
 				if promptErr != nil {
 					return nil, promptErr
+				}
+				// The walk-through asks for a URL, an auth kind and a name; it
+				// does not ask for every profile key. Layer the environment
+				// and then the flags onto the answers, in the order
+				// openProfile uses, so that a first run — which is exactly
+				// when the walk-through appears — can still dial and save a
+				// replication URL nobody was prompted for.
+				p = config.LoadEnv(CurrentDeps().LookupEnv).Apply(p)
+				if s.Prefs.ReplicationURL != "" {
+					base, rerr := couch.NormaliseReplicationURL(s.Prefs.ReplicationURL)
+					if rerr != nil {
+						return nil, Usagef("connect", "%v", rerr)
+					}
+					p.ReplicationURL = base
 				}
 				guided = true
 				conn, err = dial(ctx, s, p, "", secret)

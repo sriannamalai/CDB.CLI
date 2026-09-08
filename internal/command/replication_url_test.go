@@ -151,3 +151,55 @@ func TestProfileRoundTripsTheReplicationURL(t *testing.T) {
 		t.Errorf("reloaded profile = %+v", p)
 	}
 }
+
+// The guided walk-through never asks for a replication URL, so the flag, the
+// environment and the profile defaults have to be layered onto the prompted
+// answers before the connection is dialled and saved. Otherwise a first run —
+// which is exactly when the walk-through appears — cannot persist one.
+func TestGuidedConnectSavesTheReplicationURLFromTheFlag(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), nil)
+	s := newSession(t)
+	s.Prefs.Interactive = true
+	s.Prefs.ReplicationURL = "http://couchdb:5984"
+	// Server URL, authentication kind, profile name, then "y" to save.
+	s.SetStdin(strings.NewReader(srv.URL() + "\nnone\nlocal\ny\n"))
+
+	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Client.ReplicationURL(); got != "http://couchdb:5984" {
+		t.Errorf("ReplicationURL() = %q, want the flag's value", got)
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("local")
+	if !ok || p.ReplicationURL != "http://couchdb:5984" {
+		t.Errorf("saved profile = %+v (ok=%v), want replication_url persisted", p, ok)
+	}
+}
+
+// The environment reaches the guided answers too, and the flag still wins.
+func TestGuidedConnectTakesTheReplicationURLFromTheEnvironment(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), map[string]string{"CDB_REPLICATION_URL": "http://from-env:5984"})
+	s := newSession(t)
+	s.Prefs.Interactive = true
+	s.SetStdin(strings.NewReader(srv.URL() + "\nnone\nlocal\ny\n"))
+
+	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Client.ReplicationURL(); got != "http://from-env:5984" {
+		t.Errorf("ReplicationURL() = %q, want the environment's value", got)
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := back.Profile("local"); p.ReplicationURL != "http://from-env:5984" {
+		t.Errorf("saved profile = %+v", p)
+	}
+}

@@ -317,7 +317,23 @@ func (c *Client) DestroyDatabase(ctx context.Context, db string) error {
 // command.Result. It is handed straight to DoJSON, which marshals it as part
 // of the replicator document and nowhere else.
 func (c *Client) ReplicationEndpoint(db string) map[string]any {
-	endpoint := map[string]any{"url": c.ReplicationURL() + "/" + path.Encode(db)}
+	return c.ReplicationEndpointFor("", db)
+}
+
+// ReplicationEndpointFor is ReplicationEndpoint with the server address given
+// explicitly; an empty base means "use ReplicationURL()". It exists because
+// --replication-url can arrive on a shell line long after the client was
+// built, and rebuilding the connection to carry it — or mutating a live
+// client — would be worse than passing the one value that differs.
+//
+// base must already have been through NormaliseReplicationURL: everything
+// ReplicationEndpoint promises about credentials never reaching the URL
+// depends on it.
+func (c *Client) ReplicationEndpointFor(base, db string) map[string]any {
+	if base == "" {
+		base = c.ReplicationURL()
+	}
+	endpoint := map[string]any{"url": base + "/" + path.Encode(db)}
 	switch c.cfg.Auth {
 	case AuthSession:
 		endpoint["auth"] = map[string]any{"basic": map[string]any{

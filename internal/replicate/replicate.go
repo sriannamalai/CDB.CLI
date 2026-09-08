@@ -281,6 +281,15 @@ func Cancel(ctx context.Context, cl *couch.Client, docID string) error {
 // remote URL moves into the per-endpoint auth object, so that the credential
 // never leaves the request body.
 func ResolveEndpoint(cl *couch.Client, base, s string) (Endpoint, error) {
+	return ResolveEndpointFor(cl, "", base, s)
+}
+
+// ResolveEndpointFor is ResolveEndpoint with the address the server should use
+// to reach itself given explicitly; an empty replicationURL means "use the
+// client's own". Only the same-server branch consults it — a remote http(s)
+// endpoint names its own host and has nothing to do with how the server
+// reaches itself.
+func ResolveEndpointFor(cl *couch.Client, replicationURL, base, s string) (Endpoint, error) {
 	// A URL may carry a password, so neither branch below ever echoes s.
 	if scheme, _, ok := strings.Cut(s, "://"); ok {
 		if scheme != "http" && scheme != "https" {
@@ -309,7 +318,7 @@ func ResolveEndpoint(cl *couch.Client, base, s string) (Endpoint, error) {
 	if t.Kind != path.KindDatabase {
 		return Endpoint{}, fmt.Errorf("%s is %s %s; replication endpoints are databases or full URLs", t.Path, t.Kind.Article(), t.Kind)
 	}
-	doc := cl.ReplicationEndpoint(t.Database)
+	doc := cl.ReplicationEndpointFor(replicationURL, t.Database)
 	safe, _ := doc["url"].(string)
 	return Endpoint{URL: safe, doc: doc}, nil
 }

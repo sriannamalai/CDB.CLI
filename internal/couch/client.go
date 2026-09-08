@@ -88,7 +88,7 @@ func New(cfg Config) (*Client, error) {
 	redacted.User = nil
 	safe := strings.TrimRight(redacted.String(), "/")
 
-	replication, err := normaliseReplicationURL(cfg.ReplicationURL)
+	replication, err := NormaliseReplicationURL(cfg.ReplicationURL)
 	if err != nil {
 		return nil, err
 	}
@@ -247,13 +247,16 @@ func (c *Client) doDecode(req *http.Request, out any, op, target string) error {
 	return nil
 }
 
-// normaliseReplicationURL validates the address the server is told to call
-// itself on, and trims its trailing slash.
+// NormaliseReplicationURL validates the address the server is told to call
+// itself on, and trims its trailing slash. It is exported because the same
+// value can arrive after a client already exists — --replication-url on a
+// shell line, with the session connected since startup — and has to be held
+// to exactly these rules there too.
 //
 // The messages never echo the value: what the operator typed may hold the very
 // userinfo the second case refuses, and an error message is one of the places
 // a secret must never reach.
-func normaliseReplicationURL(raw string) (string, error) {
+func NormaliseReplicationURL(raw string) (string, error) {
 	if raw == "" {
 		return "", nil
 	}

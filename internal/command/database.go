@@ -155,11 +155,15 @@ Started replication ccaace0a9e8a2ddf328eaf46210031fc from /movies to /movies-arc
 // a full URL plus a per-endpoint credential object that never leaves the
 // request body.
 func copyDatabase(ctx context.Context, s *session.Session, src, dst path.Target) (Result, error) {
-	source, err := replicate.ResolveEndpoint(s.Client, s.Path(), src.Path)
+	replicationURL, err := replicationBase(s, "cp")
+	if err != nil {
+		return nil, err
+	}
+	source, err := replicate.ResolveEndpointFor(s.Client, replicationURL, s.Path(), src.Path)
 	if err != nil {
 		return nil, Usagef("cp", "%v", err)
 	}
-	target, err := replicate.ResolveEndpoint(s.Client, s.Path(), dst.Path)
+	target, err := replicate.ResolveEndpointFor(s.Client, replicationURL, s.Path(), dst.Path)
 	if err != nil {
 		return nil, Usagef("cp", "%v", err)
 	}

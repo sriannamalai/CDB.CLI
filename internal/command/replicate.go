@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/replicate"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
@@ -44,6 +45,28 @@ unless --yes is given.
 
 ` + unreachableEndpointNote
 
+// replicationBase returns the server address a same-server endpoint should be
+// written with for this invocation, or "" to leave the choice to the client.
+//
+// The shell connects once, at startup, so a --replication-url typed on a later
+// line never reaches openProfile: the preference is the only place it exists,
+// and every command that writes an endpoint has to read it here. In one-shot
+// mode openProfile has already put the same value on the client, so this
+// agrees with it rather than competing.
+//
+// The value is held to couch's own rules, and the error never echoes it: what
+// the operator typed may carry the very userinfo the check refuses.
+func replicationBase(s *session.Session, cmd string) (string, error) {
+	if s.Prefs.ReplicationURL == "" {
+		return "", nil
+	}
+	base, err := couch.NormaliseReplicationURL(s.Prefs.ReplicationURL)
+	if err != nil {
+		return "", Usagef(cmd, "%v", err)
+	}
+	return base, nil
+}
+
 // Replicate returns the replicate command.
 func Replicate() Command {
 	return Command{
@@ -66,11 +89,15 @@ $ cdb replicate /movies https://user:secret@backup.example.com/movies --continuo
 			fs.String("id", "", "document id for the replication job")
 		},
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
-			source, err := replicate.ResolveEndpoint(s.Client, s.Path(), inv.Arg(0))
+			replicationURL, err := replicationBase(s, "replicate")
+			if err != nil {
+				return nil, err
+			}
+			source, err := replicate.ResolveEndpointFor(s.Client, replicationURL, s.Path(), inv.Arg(0))
 			if err != nil {
 				return nil, Usagef("replicate", "%v", err)
 			}
-			target, err := replicate.ResolveEndpoint(s.Client, s.Path(), inv.Arg(1))
+			target, err := replicate.ResolveEndpointFor(s.Client, replicationURL, s.Path(), inv.Arg(1))
 			if err != nil {
 				return nil, Usagef("replicate", "%v", err)
 			}
