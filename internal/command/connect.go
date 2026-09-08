@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -20,6 +21,26 @@ type Deps struct {
 	ConfigPath string
 	Secrets    config.Secrets
 	LookupEnv  func(string) (string, bool)
+	// secretsErr is why Secrets is nil: the OS keyring would not open. It is
+	// held rather than acted on at construction time, because a connection that
+	// needs no stored secret must still work on a machine with a broken
+	// keyring.
+	secretsErr error
+}
+
+// SecretStore returns the keyring, or a plain error explaining why it is
+// unavailable. There is deliberately no in-memory fallback: a store that
+// accepts a secret and forgets it when the process exits would make
+// "connect --save" report success and then fail on the next run, which is the
+// worst of both outcomes.
+func (d *Deps) SecretStore() (config.Secrets, error) {
+	if d.Secrets != nil {
+		return d.Secrets, nil
+	}
+	if d.secretsErr != nil {
+		return nil, fmt.Errorf("could not open the system keyring: %w. Set CDB_PASSWORD or CDB_TOKEN to connect without saving", d.secretsErr)
+	}
+	return nil, errors.New("no secret store is configured")
 }
 
 var deps *Deps
@@ -42,11 +63,8 @@ func CurrentDeps() *Deps {
 	if err != nil {
 		dir = "."
 	}
-	secrets, err := config.OpenSecrets(dir, promptPassphrase)
-	if err != nil {
-		secrets = config.NewMemorySecrets()
-	}
-	deps = &Deps{ConfigPath: path, Secrets: secrets, LookupEnv: os.LookupEnv}
+	secrets, secretsErr := config.OpenSecrets(dir, promptPassphrase)
+	deps = &Deps{ConfigPath: path, Secrets: secrets, LookupEnv: os.LookupEnv, secretsErr: secretsErr}
 	return deps
 }
 
@@ -159,12 +177,24 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 	// blocked behind, an OS keychain prompt.
 	secret, fromEnv := env.Secret()
 	if !fromEnv && profile.Auth != "none" && profileName != "" {
-		stored, err := d.Secrets.Get(profileName)
+		store, err := d.SecretStore()
+		if err != nil {
+			return connection{}, err
+		}
+		stored, err := store.Get(profileName)
 		if err == nil {
 			secret = stored
 		}
 	}
 
+	profile.Name = profileName
+	return dial(ctx, s, profile, profileName, secret)
+}
+
+// dial builds a client for an already-resolved profile, proves it works, and
+// attaches it to the session. attachAs is the profile name the session should
+// report, which is "" for a connection that is not (yet) saved.
+func dial(ctx context.Context, s *session.Session, profile config.Profile, attachAs, secret string) (connection, error) {
 	cc, err := couch.New(couch.Config{
 		URL:         profile.URL,
 		Auth:        couch.AuthKind(profile.Auth),
@@ -194,8 +224,7 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 	if profile.InsecureTLS {
 		fmt.Fprintln(s.Stderr, "warning: TLS certificate verification is disabled for this connection.")
 	}
-	profile.Name = profileName
-	s.Attach(cc, profileName)
+	s.Attach(cc, attachAs)
 	return connection{Profile: profile, Secret: secret, Info: info}, nil
 }
 
@@ -247,30 +276,23 @@ func Connect() Command {
 				}
 			}
 			arg := inv.Arg(0)
+			var conn connection
+			var err error
+			guided := false
 			if arg == "" && !hasAnyProfile() && s.Prefs.Interactive {
-				p, secret, err := promptForProfile(s)
-				if err != nil {
-					return nil, err
+				// Spec 6.1: ask, verify, and only then offer to save. Nothing
+				// reaches config.toml or the keyring until the server has
+				// accepted the answers, so a mistyped password leaves no
+				// half-made profile behind.
+				p, secret, promptErr := promptForProfile(s)
+				if promptErr != nil {
+					return nil, promptErr
 				}
-				cfg, err := loadConfig()
-				if err != nil {
-					return nil, err
-				}
-				cfg.SetProfile(p)
-				if cfg.Default == "" {
-					cfg.Default = p.Name
-				}
-				if err := cfg.Save(CurrentDeps().ConfigPath); err != nil {
-					return nil, err
-				}
-				if secret != "" {
-					if err := CurrentDeps().Secrets.Set(p.Name, secret); err != nil {
-						fmt.Fprintf(s.Stderr, "warning: could not save the secret in the keyring: %v\n", err)
-					}
-				}
-				arg = p.Name
+				guided = true
+				conn, err = dial(ctx, s, p, "", secret)
+			} else {
+				conn, err = openProfile(ctx, s, arg)
 			}
-			conn, err := openProfile(ctx, s, arg)
 			if err != nil {
 				return nil, err
 			}
@@ -279,7 +301,11 @@ func Connect() Command {
 				who = "anonymous"
 			}
 			text := fmt.Sprintf("Connected to CouchDB %s at %s as %s.", conn.Info.Version, s.Client.Host(), who)
-			if inv.Bool("save") || inv.String("as") != "" {
+			save := inv.Bool("save") || inv.String("as") != ""
+			if guided && !save {
+				save = askYesNo(s, "Save this connection as a profile?")
+			}
+			if save {
 				name := inv.String("as")
 				if name == "" {
 					name = conn.Profile.Name
@@ -318,6 +344,15 @@ func saveConnection(s *session.Session, name string, conn connection) error {
 			profile.Auth = "session"
 		}
 	}
+	// Find the keyring before writing anything. A profile whose secret was
+	// silently dropped is a profile that fails on the next run, so an
+	// unopenable keyring has to stop the save rather than half-complete it.
+	var store config.Secrets
+	if secret != "" && profile.Auth != "none" {
+		if store, err = CurrentDeps().SecretStore(); err != nil {
+			return err
+		}
+	}
 	profile.Name = name
 	cfg.SetProfile(profile)
 	if cfg.Default == "" {
@@ -326,8 +361,8 @@ func saveConnection(s *session.Session, name string, conn connection) error {
 	if err := cfg.Save(CurrentDeps().ConfigPath); err != nil {
 		return err
 	}
-	if secret != "" && profile.Auth != "none" {
-		if err := CurrentDeps().Secrets.Set(name, secret); err != nil {
+	if store != nil {
+		if err := store.Set(name, secret); err != nil {
 			fmt.Fprintf(s.Stderr, "warning: could not save the secret in the keyring: %v\n", err)
 		}
 	}
@@ -406,6 +441,24 @@ func promptForProfile(s *session.Session) (config.Profile, string, error) {
 		}
 	}
 	return p, secret, nil
+}
+
+// askYesNo puts a yes/no question to the operator, defaulting to yes. The
+// walk-through that calls it runs only when both ends are a real terminal, so
+// a read error means there is nobody left to ask: the default stands rather
+// than failing a connection that has already succeeded.
+func askYesNo(s *session.Session, label string) bool {
+	fmt.Fprintf(s.Stdout, "%s [Y/n]: ", label)
+	line, err := s.Reader().ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if err != nil && answer == "" {
+		return true
+	}
+	switch answer {
+	case "", "y", "yes":
+		return true
+	}
+	return false
 }
 
 // readSecret reads a secret without echoing it when stdin is a terminal.
@@ -515,7 +568,14 @@ func Profiles() Command {
 				if err := cfg.Save(CurrentDeps().ConfigPath); err != nil {
 					return nil, err
 				}
-				if err := CurrentDeps().Secrets.Remove(name); err != nil && err != config.ErrSecretNotFound {
+				// The profile is already gone, so a keyring that will not open
+				// is a warning rather than a failure: re-running the command
+				// would report "no profile named ..." and never retry the
+				// secret.
+				store, err := CurrentDeps().SecretStore()
+				if err != nil {
+					fmt.Fprintf(s.Stderr, "warning: %v\n", err)
+				} else if err := store.Remove(name); err != nil && err != config.ErrSecretNotFound {
 					fmt.Fprintf(s.Stderr, "warning: could not remove the saved secret: %v\n", err)
 				}
 				return Message{Text: fmt.Sprintf("Removed profile %q.", name)}, nil

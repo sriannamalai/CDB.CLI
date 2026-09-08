@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,7 +173,8 @@ func TestConnectGuidedPromptCreatesTheFirstProfile(t *testing.T) {
 	var out bytes.Buffer
 	s := session.New(strings.NewReader(""), &out, &out)
 	s.Prefs.Interactive = true
-	// Server URL, authentication kind, profile name.
+	// Server URL, authentication kind, profile name. Stdin then runs out, so
+	// the "save this connection?" question falls back to its default of yes.
 	s.SetStdin(strings.NewReader(srv.URL() + "\nnone\nlocal\n"))
 	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
 		t.Fatalf("guided connect: %v (output: %s)", err, out.String())
@@ -524,6 +526,222 @@ func TestConnectSaveKeepsURLCredentialsOutOfTheConfigFile(t *testing.T) {
 	}
 	if got, err := CurrentDeps().Secrets.Get("creds"); err != nil || got != "hunter2" {
 		t.Errorf("reading the saved secret: %v; want the URL password moved into the keyring", err)
+	}
+}
+
+// guidedSession returns an interactive session whose stdin replays answers.
+func guidedSession(answers string) (*session.Session, *bytes.Buffer) {
+	var out bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &out)
+	s.Prefs.Interactive = true
+	s.SetStdin(strings.NewReader(answers))
+	return s, &out
+}
+
+func TestConnectGuidedPromptSavesNothingWhenVerificationFails(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/_session", 401, `{"error":"unauthorized","reason":"Name or password is incorrect."}`)
+	path := withDeps(t, config.Defaults(), nil)
+	// URL, auth kind, profile name, username, password.
+	s, out := guidedSession(srv.URL() + "\nsession\nlocal\nadmin\nwrong-password\n")
+
+	_, err := Connect().Run(context.Background(), s, Invocation{})
+	if err == nil {
+		t.Fatalf("guided connect succeeded against a server that rejected the credentials (output: %s)", out.String())
+	}
+	if s.Connected() {
+		t.Error("the session holds a client after a failed verification")
+	}
+	back, loadErr := config.Load(path)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(back.Profiles) != 0 {
+		t.Errorf("profiles = %v, want none written when verification failed", back.Profiles)
+	}
+	if names, _ := CurrentDeps().Secrets.List(); len(names) != 0 {
+		t.Errorf("secrets = %v, want none written when verification failed", names)
+	}
+	raw, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(raw), "wrong-password") {
+		t.Errorf("the rejected password reached the config file:\n%s", raw)
+	}
+	if strings.Contains(out.String(), "wrong-password") {
+		t.Errorf("the rejected password was echoed to the terminal:\n%s", out.String())
+	}
+}
+
+func TestConnectGuidedPromptCanDeclineToSave(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), nil)
+	// URL, auth kind, profile name, then "no" to the save question.
+	s, out := guidedSession(srv.URL() + "\nnone\nlocal\nn\n")
+
+	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
+		t.Fatalf("guided connect: %v (output: %s)", err, out.String())
+	}
+	if !s.Connected() {
+		t.Fatal("declining to save also dropped the connection")
+	}
+	if s.Profile != "" {
+		t.Errorf("session profile = %q, want \"\" for a connection that was not saved", s.Profile)
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(back.Profiles) != 0 {
+		t.Errorf("profiles = %v, want none after declining to save", back.Profiles)
+	}
+}
+
+func TestConnectGuidedPromptSavesAfterVerifying(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), nil)
+	// URL, auth kind, profile name, username, password, then "yes" to save.
+	s, out := guidedSession(srv.URL() + "\nsession\nlocal\nadmin\ns3cret\nyes\n")
+
+	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
+		t.Fatalf("guided connect: %v (output: %s)", err, out.String())
+	}
+	name, password := loginCredentials(t, srv)
+	if name != "admin" {
+		t.Errorf("login name = %q, want admin", name)
+	}
+	if password != "s3cret" {
+		t.Error("the login did not present the password typed at the prompt")
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("local")
+	if !ok || p.Auth != "session" || p.Username != "admin" {
+		t.Errorf("saved profile = %+v (ok=%v), want the answers from the walk-through", p, ok)
+	}
+	if s.Profile != "local" {
+		t.Errorf("session profile = %q, want local", s.Profile)
+	}
+	if got, err := CurrentDeps().Secrets.Get("local"); err != nil || got != "s3cret" {
+		t.Errorf("reading the saved secret: %v; want the password from the walk-through", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "s3cret") {
+		t.Errorf("the secret was written into the config file:\n%s", raw)
+	}
+	if strings.Contains(out.String(), "s3cret") {
+		t.Errorf("the secret was echoed to the terminal:\n%s", out.String())
+	}
+}
+
+// withBrokenKeyring installs deps whose keyring refuses to open, the way a
+// machine with no usable backend behaves.
+func withBrokenKeyring(t *testing.T, cfg *config.Config, env map[string]string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if cfg != nil {
+		if err := cfg.Save(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	SetDeps(&Deps{
+		ConfigPath: path,
+		secretsErr: errors.New("no available keyring implementation"),
+		LookupEnv: func(k string) (string, bool) {
+			v, ok := env[k]
+			return v, ok
+		},
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	return path
+}
+
+func TestCurrentDepsDoesNotSubstituteAnInMemoryKeyring(t *testing.T) {
+	SetDeps(nil)
+	t.Cleanup(func() { SetDeps(nil) })
+	t.Setenv("CDB_KEYRING_BACKEND", "no-such-backend")
+
+	d := CurrentDeps()
+	if d.Secrets != nil {
+		t.Errorf("Deps.Secrets = %T, want nil rather than a store that forgets on exit", d.Secrets)
+	}
+	store, err := d.SecretStore()
+	if err == nil {
+		t.Fatalf("SecretStore() = %T, nil; want the keyring failure surfaced", store)
+	}
+	if store != nil {
+		t.Errorf("SecretStore() returned %T alongside its error, want no substitute store", store)
+	}
+	for _, want := range []string{"keyring", "CDB_PASSWORD", "CDB_TOKEN"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q", err, want)
+		}
+	}
+}
+
+func TestConnectFailsWhenTheKeyringCannotOpen(t *testing.T) {
+	srv := couchtest.New(t)
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "local", URL: srv.URL(), Auth: "session", Username: "admin"})
+	withBrokenKeyring(t, cfg, nil)
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	_, err := Connect().Run(context.Background(), s, Invocation{})
+	if err == nil {
+		t.Fatal("connect succeeded even though the stored secret was unreachable")
+	}
+	if !strings.Contains(err.Error(), "CDB_PASSWORD") {
+		t.Errorf("error = %q, want it to say how to connect without the keyring", err)
+	}
+	if s.Connected() {
+		t.Error("connect attached a client without the credential it was meant to load")
+	}
+}
+
+func TestConnectWithAnEnvSecretWorksWhenTheKeyringCannotOpen(t *testing.T) {
+	srv := couchtest.New(t)
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "local", URL: srv.URL(), Auth: "session", Username: "admin"})
+	withBrokenKeyring(t, cfg, map[string]string{"CDB_PASSWORD": "from-env"})
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	// This is the escape hatch the keyring error advertises; it has to work.
+	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
+		t.Fatalf("connect with CDB_PASSWORD and a broken keyring: %v", err)
+	}
+	if _, password := loginCredentials(t, srv); password != "from-env" {
+		t.Error("the login did not present CDB_PASSWORD")
+	}
+}
+
+func TestConnectSaveFailsAndWritesNothingWhenTheKeyringCannotOpen(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withBrokenKeyring(t, config.Defaults(), map[string]string{"CDB_USER": "admin", "CDB_PASSWORD": "hunter2"})
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	fs := NewRegistry().NewFlagSet(Connect())
+	if err := fs.Parse([]string{srv.URL(), "--save", "--as", "saved"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Connect().Run(context.Background(), s, Invocation{Args: fs.Args(), Flags: fs})
+	if err == nil {
+		t.Fatal("connect --save reported success while discarding the secret")
+	}
+	if !strings.Contains(err.Error(), "keyring") {
+		t.Errorf("error = %q, want it to name the keyring", err)
+	}
+	back, loadErr := config.Load(path)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(back.Profiles) != 0 {
+		t.Errorf("profiles = %v, want no half-saved profile whose secret was dropped", back.Profiles)
 	}
 }
 
