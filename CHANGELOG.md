@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-09
+
+### Fixed
+
+- `tail --include-docs` leaves the doc cell empty for a change that carried no
+  document, and leaves the key out of the row JSON, instead of printing the
+  literal `null` and emitting `"doc":null`.
+- `resolve`'s chooser renders a field whose value is JSON `null` as `null`,
+  instead of `added: <field>` with a trailing space where the value belongs.
+- Ctrl-C at `resolve`'s "Keep which revision?" prompt aborts quietly with exit
+  130, instead of reporting that the answer was not a number between 1 and 2.
+- `replicate --filter` refuses a filter that is not `<design>/<name>` with both
+  halves, the way `tail --filter` already did, rather than passing it to the
+  server and reporting the resulting 400 as a command failure.
+
+### Changed
+
+- `profiles add <name> <url>` asks for the user name and password, with echo
+  off, when the URL carries none, stdin is a terminal and `--anonymous` is not
+  given. The credentials are verified against the server before anything is
+  written and the password goes to the OS keychain, so the saved profile is one
+  that can log in; a bare URL used to be saved as a session profile with no
+  secret. `--anonymous` saves a profile with auth `none`, and without a
+  terminal nothing is asked and the URL is stored as typed.
+
 ## [1.1.0] - 2026-09-09
 
 ### Added
@@ -69,7 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `info /` may show a `replication url` row, and `resolve`'s chooser shows
   diffs rather than body previews.
 
-[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.1...v1.1.0
 
 ## [1.0.1] - 2026-09-08
