@@ -95,30 +95,46 @@ func Clean(base, input string) (string, error) {
 	if !strings.HasPrefix(input, "/") {
 		segs = split(base)
 	}
+	// popped records that the previous step was a "..", so the separator it
+	// may have uncovered is still collapsible. A named segment written after
+	// the ".." settles on that separator instead, and clears it.
+	popped := false
 	for _, s := range split(input) {
 		switch s {
 		case ".":
 		case "..":
-			segs = up(segs)
+			if popped {
+				segs = collapseSeparator(segs)
+			}
+			if len(segs) > 0 {
+				segs = segs[:len(segs)-1]
+			}
+			popped = true
 		default:
 			segs = append(segs, s)
+			popped = false
 		}
+	}
+	if popped {
+		segs = collapseSeparator(segs)
 	}
 	return "/" + strings.Join(segs, "/"), nil
 }
 
-// up applies one "..". It is not a plain pop: "_partition" is the separator
-// that introduces a partition key, not a directory of its own, so
-// "/db/_partition" names nothing and stepping up out of "/db/_partition/p1"
-// has to land on "/db". Popping textually would strand the shell on a path
-// that no longer resolves. Only ".." steps over the separator; a path typed
-// out as "/db/_partition" still gets the missing-key error.
-func up(segs []string) []string {
-	if len(segs) > 0 {
-		segs = segs[:len(segs)-1]
-	}
+// collapseSeparator drops a "_partition" left exposed as the last segment.
+// "_partition" introduces a partition key, it is not a directory of its own,
+// so "/db/_partition" names nothing and stepping up out of "/db/_partition/p1"
+// has to land on "/db"; a textual pop alone would strand the shell on a path
+// that no longer resolves.
+//
+// It is applied only to a ".." that no named segment follows, because there
+// the separator is being stepped over rather than landed on. "../p2" from
+// inside a partition is a step sideways to the sibling partition
+// "/db/_partition/p2", not to a document "/db/p2", and a path typed out as
+// "/db/_partition" — or "/db/_partition/.." — still means what it says.
+func collapseSeparator(segs []string) []string {
 	if len(segs) == 2 && segs[1] == "_partition" {
-		segs = segs[:1]
+		return segs[:1]
 	}
 	return segs
 }

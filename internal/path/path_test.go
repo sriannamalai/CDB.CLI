@@ -94,6 +94,14 @@ func TestResolveUpOutOfAPartition(t *testing.T) {
 		{"document to database", "/mydb/_partition/p1/doc1", "../..", "/mydb", KindDatabase},
 		{"partition to server", "/mydb/_partition/p1", "../..", "/", KindServer},
 		{"attachment to document", "/mydb/_partition/p1/doc1/a.png", "..", "/mydb/_partition/p1/doc1", KindDocument},
+		// A ".." with a named segment after it is an ordinary step sideways,
+		// so the separator stays: "../p2" is the sibling partition, not a
+		// document called p2 in the database.
+		{"sibling partition", "/mydb/_partition/p1", "../p2", "/mydb/_partition/p2", KindPartition},
+		{"sibling partition document", "/mydb/_partition/p1", "../p2/doc1", "/mydb/_partition/p2/doc1", KindDocument},
+		// A ".." typed out after the separator itself is a plain pop: nothing
+		// stepped over it on the way in.
+		{"explicit separator", "/", "/mydb/_partition/..", "/mydb", KindDatabase},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Resolve(tc.base, tc.input)
