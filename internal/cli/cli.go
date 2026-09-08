@@ -103,7 +103,13 @@ func newSubcommand(reg *command.Registry, c command.Command, s *session.Session)
 			}
 			applyGlobalFlags(cc, s)
 			if c.NeedsClient && !s.Connected() {
-				return command.Usagef(c.Name, "not connected. Run \"cdb connect\" first.")
+				target, _ := cc.Flags().GetString("profile")
+				if target == "" {
+					target, _ = cc.Flags().GetString("url")
+				}
+				if err := command.Open(cc.Context(), s, target); err != nil {
+					return err
+				}
 			}
 			inv := command.Invocation{
 				Args:   args,
