@@ -1,6 +1,7 @@
 package couch
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -83,6 +84,17 @@ func Wrap(err error, op, target string) error {
 		e.Status = StatusUnreachable
 		e.Name = "tls"
 		e.Reason = trimPrefixes(err.Error())
+	case errors.Is(err, context.Canceled):
+		// Must come before the default branch: kivik.HTTPStatus reports 500 for
+		// any error it does not recognise, which would make an interrupted
+		// request indistinguishable from a real server failure.
+		e.Status = StatusUnreachable
+		e.Name = "canceled"
+		e.Reason = "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		e.Status = StatusUnreachable
+		e.Name = "timeout"
+		e.Reason = "timed out"
 	default:
 		e.Status = kivik.HTTPStatus(err)
 		e.Reason = trimPrefixes(err.Error())

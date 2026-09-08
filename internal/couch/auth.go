@@ -2,6 +2,7 @@ package couch
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -26,7 +28,9 @@ type sessionTransport struct {
 	authed bool
 }
 
-func (t *sessionTransport) login() error {
+// login performs POST /_session. It runs under the caller's context, so a
+// cancelled or timed-out request does not leave a login blocking on the network.
+func (t *sessionTransport) login(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.authed {
@@ -39,21 +43,44 @@ func (t *sessionTransport) login() error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, t.baseURL+"/_session", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+"/_session", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := (&http.Client{Transport: t.base, Jar: t.jar}).Do(req)
 	if err != nil {
-		return err
+		return Wrap(err, "authenticate", "")
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return NewError(res.StatusCode, "unauthorized", "Name or password is incorrect.", "authenticate", "")
+		return loginError(res)
 	}
 	t.authed = true
 	return nil
+}
+
+// loginError turns a failed POST /_session into an *Error. The server's own
+// error and reason are used when it sent them; the credentials message is only
+// claimed for a 401, since any other status means something else went wrong.
+func loginError(res *http.Response) error {
+	var body struct {
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&body)
+	name, reason := body.Error, body.Reason
+	if name == "" {
+		name = nameForStatus(res.StatusCode)
+	}
+	if reason == "" {
+		if res.StatusCode == http.StatusUnauthorized {
+			reason = "Name or password is incorrect."
+		} else {
+			reason = strings.ToLower(http.StatusText(res.StatusCode))
+		}
+	}
+	return NewError(res.StatusCode, name, reason, "authenticate", "")
 }
 
 func (t *sessionTransport) authenticated() bool {
@@ -69,8 +96,9 @@ func (t *sessionTransport) invalidate() {
 }
 
 func (t *sessionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
 	if !t.authenticated() {
-		if err := t.login(); err != nil {
+		if err := t.login(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -78,12 +106,31 @@ func (t *sessionTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if err != nil || res.StatusCode != http.StatusUnauthorized {
 		return res, err
 	}
+
+	// The first attempt consumed req.Body, so the replay needs a fresh one.
+	// Relying on net/http to rewind is not enough: it only does so for its own
+	// internal connection retries, and a body that cannot be rewound would fail
+	// with "ContentLength=N with Body length 0" instead of surfacing the 401.
+	retry := withCookies(req, t.jar)
+	if req.Body != nil && req.Body != http.NoBody {
+		if req.GetBody == nil {
+			// A streamed body (a large attachment upload) cannot be replayed.
+			// Hand the caller the 401 rather than a confusing transport error.
+			return res, nil
+		}
+		body, err := req.GetBody()
+		if err != nil {
+			return res, nil
+		}
+		retry.Body = body
+	}
+
 	res.Body.Close()
 	t.invalidate()
-	if err := t.login(); err != nil {
+	if err := t.login(ctx); err != nil {
 		return nil, err
 	}
-	return t.base.RoundTrip(withCookies(req, t.jar))
+	return t.base.RoundTrip(retry)
 }
 
 func withCookies(req *http.Request, jar http.CookieJar) *http.Request {

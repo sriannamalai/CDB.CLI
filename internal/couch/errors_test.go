@@ -1,6 +1,43 @@
 package couch
 
-import "testing"
+import (
+	"context"
+	"fmt"
+	"testing"
+)
+
+// TestWrapClassifiesContextErrors guards against context errors being reported
+// as a server 500: kivik.HTTPStatus returns 500 for anything it does not
+// recognise, which would make an interrupted or timed-out request look like a
+// real server failure and pick the wrong exit code.
+func TestWrapClassifiesContextErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		err               error
+		wantName, wantWhy string
+	}{
+		{"canceled", context.Canceled, "canceled", "canceled"},
+		{"deadline exceeded", context.DeadlineExceeded, "timeout", "timed out"},
+		{"wrapped canceled", fmt.Errorf(`Get "http://localhost:5984/": %w`, context.Canceled), "canceled", "canceled"},
+		{"wrapped deadline", fmt.Errorf(`Get "http://localhost:5984/": %w`, context.DeadlineExceeded), "timeout", "timed out"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, ok := AsError(Wrap(tc.err, "read", "server localhost:5984"))
+			if !ok {
+				t.Fatalf("Wrap(%v) did not produce an *Error", tc.err)
+			}
+			if e.Status != StatusUnreachable {
+				t.Errorf("Status = %d, want StatusUnreachable (%d)", e.Status, StatusUnreachable)
+			}
+			if e.Name != tc.wantName {
+				t.Errorf("Name = %q, want %q", e.Name, tc.wantName)
+			}
+			if e.Reason != tc.wantWhy {
+				t.Errorf("Reason = %q, want %q", e.Reason, tc.wantWhy)
+			}
+		})
+	}
+}
 
 func TestTrimPrefixes(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
