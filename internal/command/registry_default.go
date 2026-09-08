@@ -21,5 +21,7 @@ func Default() *Registry {
 	r.Register(Mkdir())
 	r.Register(Rmdir())
 	r.Register(Cp())
+	r.Register(Conflicts())
+	r.Register(Resolve())
 	return r
 }
