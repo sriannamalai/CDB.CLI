@@ -274,3 +274,25 @@ func TestInfoForDatabase(t *testing.T) {
 		}
 	}
 }
+
+// A path below a design document that is not a view is an attachment of that
+// design document, which is a real thing to address. When it does not exist the
+// message has to say which design document was searched, so the operator can
+// see whether they meant a view path instead.
+func TestCdNamesTheDesignDocumentForAMissingAttachment(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/_design/app", 200,
+		`{"_id":"_design/app","_rev":"1-a","views":{"by_name":{"map":"function(d){}"}}}`)
+	s := connected(t, srv)
+	_, err := invoke(t, Cd(), s, "/mydb/_design/app/logo.png")
+	if err == nil {
+		t.Fatal("cd to a missing design-document attachment returned no error")
+	}
+	e, ok := couch.AsError(err)
+	if !ok || e.Status != 404 {
+		t.Fatalf("err = %#v, want a 404 couch.Error", err)
+	}
+	if want := `attachment "logo.png" of design document "app" in "mydb"`; e.Target != want {
+		t.Errorf("target = %s, want %s", e.Target, want)
+	}
+}

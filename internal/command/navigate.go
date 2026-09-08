@@ -79,7 +79,7 @@ func verifyTarget(ctx context.Context, s *session.Session, t path.Target) error 
 			if !hasMember(body, "_attachments", t.Attachment) {
 				return couch.NewError(404, "not_found",
 					fmt.Sprintf("Document %q has no attachment %q.", t.DocID, t.Attachment),
-					"read", fmt.Sprintf("attachment %q in %q", t.Attachment, t.Database))
+					"read", couch.AttachmentTarget(t.Database, t.DocID, t.Attachment))
 			}
 		}
 		return nil

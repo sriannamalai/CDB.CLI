@@ -161,3 +161,18 @@ func TestListAttachments(t *testing.T) {
 		t.Errorf("attachment = %+v, want %+v", atts[1], want)
 	}
 }
+
+// A design document carries attachments like any other document, so
+// /db/_design/app/logo.png is one of them. The target has to name the parent as
+// a design document: `attachment "logo.png" of "_design/app"` reads as though
+// the operator mistyped a view path.
+func TestAttachmentTargetNamesADesignDocument(t *testing.T) {
+	if got, want := AttachmentTarget("mydb", "_design/app", "logo.png"),
+		`attachment "logo.png" of design document "app" in "mydb"`; got != want {
+		t.Errorf("target = %s, want %s", got, want)
+	}
+	if got, want := AttachmentTarget("mydb", "doc1", "photo.jpg"),
+		`attachment "photo.jpg" of "doc1" in "mydb"`; got != want {
+		t.Errorf("target = %s, want %s", got, want)
+	}
+}

@@ -50,6 +50,13 @@ func plainSentence(e *couch.Error) string {
 	case e.Status == 404 && kind == "document":
 		return fmt.Sprintf("Document %q was not found in %q.", name, db)
 	case e.Status == 404 && kind == "attachment":
+		// The parent document is the actionable half: naming the database
+		// instead left the operator wondering which document was searched, and
+		// a design document has to be called one, because a path below a design
+		// document is otherwise easy to mistake for a mistyped view path.
+		if parent, ok := attachmentParent(e.Target); ok {
+			return fmt.Sprintf("Attachment %q was not found on %s.", name, parent)
+		}
 		return fmt.Sprintf("Attachment %q was not found on %q.", name, db)
 	case e.Status == 404 && kind == "view":
 		return fmt.Sprintf("View %q was not found in %q.", name, db)
@@ -94,6 +101,25 @@ func describeTarget(target string) (kind, name, db string) {
 		db = fields.quoted[n-1]
 	}
 	return kind, name, db
+}
+
+// attachmentParent reads the parent out of the two shapes couch.AttachmentTarget
+// builds — `attachment "N" of "doc" in "db"` and
+// `attachment "N" of design document "app" in "db"` — and returns it as a
+// phrase ready to drop into a sentence.
+func attachmentParent(target string) (string, bool) {
+	fields := splitQuoted(target)
+	if len(fields.quoted) < 2 || len(fields.words) == 0 || fields.words[0] != "attachment" {
+		return "", false
+	}
+	kind := "document"
+	for _, w := range fields.words {
+		if w == "design" {
+			kind = "design document"
+			break
+		}
+	}
+	return fmt.Sprintf("%s %q", kind, fields.quoted[1]), true
 }
 
 type quotedTarget struct {

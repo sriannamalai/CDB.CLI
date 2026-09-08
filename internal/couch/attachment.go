@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 
 	"github.com/sriannamalai/CDB.CLI/internal/path"
 )
@@ -40,9 +41,19 @@ func attPath(db, docID, name string) string {
 	return docPath(db, docID) + "/" + path.Encode(name)
 }
 
-func attTarget(db, docID, name string) string {
+// AttachmentTarget names an attachment for an error sentence. A design document
+// carries attachments like any other document, so /db/_design/app/logo.png is a
+// real address; naming the parent `"_design/app"` made the message read as
+// though the operator had mistyped a view path, so a design-document parent is
+// spelled out as one.
+func AttachmentTarget(db, docID, name string) string {
+	if ddoc, ok := strings.CutPrefix(docID, "_design/"); ok {
+		return fmt.Sprintf("attachment %q of design document %q in %q", name, ddoc, db)
+	}
 	return fmt.Sprintf("attachment %q of %q in %q", name, docID, db)
 }
+
+func attTarget(db, docID, name string) string { return AttachmentTarget(db, docID, name) }
 
 // ListAttachments reads a document's _attachments map, sorted by name.
 func (c *Client) ListAttachments(ctx context.Context, db, docID string) ([]AttachmentMeta, error) {

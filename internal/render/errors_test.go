@@ -39,6 +39,21 @@ func TestErrorMessage(t *testing.T) {
 			want: `Document "doc1" was not found in "mydb".`,
 		},
 		{
+			// A path below a design document that is not a view is one of the
+			// design document's attachments — design documents carry
+			// attachments like any other document. The sentence has to say so,
+			// or "Attachment \"y\" was not found on \"mydb\"" leaves the
+			// operator wondering which document was searched.
+			name: "404 attachment of a design document",
+			err:  couch.NewError(404, "not_found", "missing", "read", `attachment "logo.png" of design document "app" in "mydb"`),
+			want: `Attachment "logo.png" was not found on design document "app".`,
+		},
+		{
+			name: "404 attachment of an ordinary document",
+			err:  couch.NewError(404, "not_found", "missing", "read", `attachment "photo.jpg" of "doc1" in "mydb"`),
+			want: `Attachment "photo.jpg" was not found on document "doc1".`,
+		},
+		{
 			name: "409",
 			err:  couch.NewError(409, "conflict", "Document update conflict.", "write", `document "doc1" in "mydb"`),
 			want: `Document "doc1" was changed by someone else. "cat doc1" shows the latest version.`,
