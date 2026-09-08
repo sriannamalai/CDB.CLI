@@ -92,6 +92,18 @@ func New(cfg Config) (*Client, error) {
 		tr = &sessionTransport{base: tr, jar: jar, baseURL: base, username: cfg.Username, password: cfg.Secret}
 	case AuthJWT:
 		tr = &jwtTransport{base: tr, token: cfg.Secret}
+	case AuthNone, "":
+		// Nothing to add. The empty kind is the zero value, not a mistake:
+		// the config layer defaults an unset auth to "session" before it
+		// reaches here, and a Config built by hand may legitimately leave it
+		// out. A URL's own userinfo still authenticates, via net/http.
+	default:
+		// A kind that is neither known nor empty is a typo in a hand-edited
+		// config. Ignoring it built a client that sends no credentials while
+		// the profile says it will, and dial's anonymous-login guard does not
+		// catch that: the guard fires only when Auth is not "none", which a
+		// typo also is not.
+		return nil, fmt.Errorf("unknown authentication kind %q; expected session, jwt or none", cfg.Auth)
 	}
 	hc := &http.Client{Transport: tr}
 

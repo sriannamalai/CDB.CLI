@@ -164,7 +164,10 @@ var statusTexts = func() map[string]struct{} {
 // trimPrefixes strips the `Get "url": ` and `<Status Text>: ` decorations
 // net/http puts in front of the underlying reason string.
 func trimPrefixes(msg string) string {
-	for _, verb := range []string{"Get ", "Post ", "Put ", "Delete ", "Head ", "Patch "} {
+	// Copy is here because "cp" issues COPY: without it a failed copy renders
+	// as `Copy "http://user@host/db/doc": ...`, putting the user name and the
+	// whole URL into an operator-facing sentence.
+	for _, verb := range []string{"Get ", "Post ", "Put ", "Delete ", "Head ", "Patch ", "Copy "} {
 		if strings.HasPrefix(msg, verb+`"`) {
 			if j := strings.Index(msg, `": `); j >= 0 {
 				msg = msg[j+3:]
