@@ -134,20 +134,17 @@ func Cp() Command {
 // copyDatabase writes a one-shot _replicator document. Task 20 replaces the
 // body of this function with a call to replicate.Create.
 //
-// source and target are the bare, encoded database names, not full URLs.
-// Client.URL() is deliberately stripped of userinfo (it is safe to print,
-// log, or put in an error message), so building a URL from it here would
-// hand the replicator a remote HTTP endpoint with no credentials attached; on
-// any authenticated server the replication then fails asynchronously with a
-// 401 that "cp" never sees, while still reporting success. A bare name tells
-// CouchDB to replicate the local database directly, with no credentials in
-// the document at all.
+// source and target are built by Client.ReplicationEndpoint, which is a full
+// URL plus a per-endpoint credential object, not a bare database name: CouchDB
+// 3.x rejects a bare name outright (403 local_endpoints_not_supported), and
+// Client.URL() alone carries no credentials, so either one on its own either
+// fails the write or fails the replication later with an unseen 401. The
+// endpoint map may hold a plaintext password or bearer token, so it is handed
+// straight to DoJSON and never touches the Result this function returns.
 func copyDatabase(ctx context.Context, s *session.Session, src, dst path.Target) (Result, error) {
-	source := path.Encode(src.Database)
-	target := path.Encode(dst.Database)
 	doc := map[string]any{
-		"source":        source,
-		"target":        target,
+		"source":        s.Client.ReplicationEndpoint(src.Database),
+		"target":        s.Client.ReplicationEndpoint(dst.Database),
 		"create_target": true,
 		"continuous":    false,
 	}

@@ -291,6 +291,44 @@ func (c *Client) DestroyDatabase(ctx context.Context, db string) error {
 	return c.DoJSON(ctx, "DELETE", "/"+path.Encode(db), nil, nil, "delete", fmt.Sprintf("database %q", db))
 }
 
+// ReplicationEndpoint describes db as a "source" or "target" value for a
+// CouchDB _replicator document: a full URL plus whatever credentials this
+// client authenticates with. CouchDB 3.x rejects a bare database name with
+// 403 "local_endpoints_not_supported", so even a same-server copy needs a
+// full URL; CouchDB's per-endpoint auth object lets that URL stay free of an
+// embedded password, unlike putting the credentials in the URL itself.
+//
+// The returned map is for request bodies only — session auth puts the
+// plaintext password under "auth", and JWT puts the bearer token under
+// "headers" — and must never be rendered, logged, or surfaced in a
+// command.Result. It is handed straight to DoJSON, which marshals it as part
+// of the replicator document and nowhere else.
+func (c *Client) ReplicationEndpoint(db string) map[string]any {
+	endpoint := map[string]any{"url": c.safe + "/" + path.Encode(db)}
+	switch c.cfg.Auth {
+	case AuthSession:
+		endpoint["auth"] = map[string]any{"basic": map[string]any{
+			"username": c.cfg.Username,
+			"password": c.cfg.Secret,
+		}}
+	case AuthJWT:
+		endpoint["headers"] = map[string]any{"Authorization": "Bearer " + c.cfg.Secret}
+	default:
+		// AuthNone still authenticates when the raw URL carried userinfo
+		// (e.g. "cdb http://admin:pw@host"); c.base keeps that userinfo,
+		// c.safe never does. Moving it into auth.basic here means it never
+		// has to go back into a URL.
+		if u, err := url.Parse(c.base); err == nil && u.User != nil {
+			password, _ := u.User.Password()
+			endpoint["auth"] = map[string]any{"basic": map[string]any{
+				"username": u.User.Username(),
+				"password": password,
+			}}
+		}
+	}
+	return endpoint
+}
+
 func revFromValue(v json.RawMessage) string {
 	if len(v) == 0 {
 		return ""

@@ -1,11 +1,14 @@
 package command
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
+	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
 
 func TestMkdirCreatesADatabase(t *testing.T) {
@@ -166,16 +169,53 @@ func TestCpBetweenDatabasesStartsAReplication(t *testing.T) {
 		t.Fatalf("result is %T, want Message", res)
 	}
 	body := string(srv.Last("POST", "/_replicator").Body)
-	// The document must name the databases locally ("src", "dst"), not as full
-	// URLs: Client.URL() carries no credentials, so a URL-shaped source/target
-	// would make the replicator hit an authenticated server with none and fail
-	// asynchronously while cp still reports success.
-	for _, want := range []string{`"source":"src"`, `"target":"dst"`} {
+	// CouchDB 3.x rejects a bare database name in "source"/"target" outright
+	// (403 local_endpoints_not_supported), so the document must carry each
+	// endpoint's full URL.
+	for _, want := range []string{`"url":"` + srv.URL() + `/src"`, `"url":"` + srv.URL() + `/dst"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("_replicator body %s is missing %s", body, want)
 		}
 	}
-	if strings.Contains(body, "http") {
-		t.Errorf("_replicator body %s embeds a URL; want bare database names", body)
+}
+
+// TestCpBetweenDatabasesSendsPerEndpointCredentials uses a session-authenticated
+// client (the credentials are only known here in the test, standing in for
+// what a real profile's stored password would be) to verify that "cp" between
+// two databases carries them in the per-endpoint auth object, never as a bare
+// URL, and never anywhere the operator sees: not in the returned Message, and
+// not printed to stdout.
+func TestCpBetweenDatabasesSendsPerEndpointCredentials(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.On("HEAD", "/src", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	srv.On("HEAD", "/dst", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	srv.JSON("POST", "/_replicator", 201, `{"ok":true,"id":"cdb-cp-src-dst","rev":"1-a"}`)
+	c, err := couch.New(couch.Config{URL: srv.URL(), Auth: couch.AuthSession, Username: "admin", Secret: "s3cret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	var out bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &out)
+	s.Attach(c, "test")
+	t.Cleanup(func() { _ = s.Detach() })
+
+	res, err := invoke(t, Cp(), s, "/src", "/dst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(srv.Last("POST", "/_replicator").Body)
+	if !strings.Contains(body, `"basic":{"password":"s3cret","username":"admin"}`) {
+		t.Errorf("_replicator body %s is missing auth.basic for the session profile", body)
+	}
+	msg, ok := res.(Message)
+	if !ok {
+		t.Fatalf("result is %T, want Message", res)
+	}
+	if strings.Contains(msg.Text, "s3cret") {
+		t.Errorf("cp result leaks the password: %q", msg.Text)
+	}
+	if strings.Contains(out.String(), "s3cret") {
+		t.Errorf("cp printed the password to stdout: %q", out.String())
 	}
 }

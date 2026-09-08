@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
@@ -188,5 +189,89 @@ func TestDestroyDatabase(t *testing.T) {
 	c := newTestClient(t, srv)
 	if err := c.DestroyDatabase(context.Background(), "mydb"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReplicationEndpointForSessionAuth(t *testing.T) {
+	srv := couchtest.New(t)
+	c, err := New(Config{URL: srv.URL(), Auth: AuthSession, Username: "admin", Secret: "s3cret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	got := c.ReplicationEndpoint("mydb")
+	want := map[string]any{
+		"url": srv.URL() + "/mydb",
+		"auth": map[string]any{
+			"basic": map[string]any{"username": "admin", "password": "s3cret"},
+		},
+	}
+	assertJSONEqual(t, got, want)
+}
+
+func TestReplicationEndpointForJWTAuth(t *testing.T) {
+	srv := couchtest.New(t)
+	c, err := New(Config{URL: srv.URL(), Auth: AuthJWT, Secret: "tok.en.sig"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	got := c.ReplicationEndpoint("mydb")
+	want := map[string]any{
+		"url":     srv.URL() + "/mydb",
+		"headers": map[string]any{"Authorization": "Bearer tok.en.sig"},
+	}
+	assertJSONEqual(t, got, want)
+}
+
+func TestReplicationEndpointForNoAuth(t *testing.T) {
+	srv := couchtest.New(t)
+	c, err := New(Config{URL: srv.URL(), Auth: AuthNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	got := c.ReplicationEndpoint("mydb")
+	want := map[string]any{"url": srv.URL() + "/mydb"}
+	assertJSONEqual(t, got, want)
+}
+
+func TestReplicationEndpointMovesURLUserinfoIntoAuthBasic(t *testing.T) {
+	srv := couchtest.New(t)
+	u, err := url.Parse(srv.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword("op", "hunter2")
+	c, err := New(Config{URL: u.String(), Auth: AuthNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	got := c.ReplicationEndpoint("mydb")
+	want := map[string]any{
+		"url": srv.URL() + "/mydb",
+		"auth": map[string]any{
+			"basic": map[string]any{"username": "op", "password": "hunter2"},
+		},
+	}
+	assertJSONEqual(t, got, want)
+}
+
+// assertJSONEqual compares two values by their JSON encoding, which is
+// simpler and exactly as strict as a field-by-field walk for the
+// map[string]any shapes ReplicationEndpoint returns.
+func assertJSONEqual(t *testing.T, got, want any) {
+	t.Helper()
+	g, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(g) != string(w) {
+		t.Errorf("got %s, want %s", g, w)
 	}
 }
