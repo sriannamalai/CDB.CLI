@@ -195,10 +195,14 @@ func lsDatabase(ctx context.Context, s *session.Session, inv Invocation, t path.
 		errc := make(chan error, 1)
 		go func() {
 			defer close(ch)
+			// --start composes with --all: it says where to resume, and the
+			// two flags are documented on the same command. Limit is the
+			// stream's page size here, not a row bound.
 			errc <- s.Client.AllDocsStream(ctx, t.Database, couch.AllDocsOptions{
-				Partition:   t.Partition,
-				Limit:       500,
-				IncludeDocs: opts.IncludeDocs,
+				Partition:     t.Partition,
+				StartKeyDocID: opts.StartKeyDocID,
+				Limit:         500,
+				IncludeDocs:   opts.IncludeDocs,
 			}, func(r couch.DocRow) error {
 				select {
 				case ch <- r:
