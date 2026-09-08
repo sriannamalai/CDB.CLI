@@ -5,6 +5,7 @@ package render
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/sriannamalai/CDB.CLI/internal/command"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
@@ -149,6 +150,9 @@ func (r *Renderer) writeRowJSON(w io.Writer, item command.Row) error {
 const streamTableChunk = 200
 
 func (r *Renderer) renderStream(st command.Stream) error {
+	if st.Live {
+		return r.renderLiveStream(st)
+	}
 	if r.opts.Format == session.FormatRaw || r.opts.Format == session.FormatJSON {
 		for {
 			row, ok, err := st.Next()
@@ -202,7 +206,70 @@ func (r *Renderer) renderStream(st command.Stream) error {
 	if pending > 0 || total == 0 {
 		t.Render()
 	}
+	if st.Hint != "" {
+		if _, err := fmt.Fprintln(out, st.Hint); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// flushWriter is the optional Flush a buffered writer offers. A live stream
+// calls it after every row, so that a change reaches the terminal the moment
+// it arrives even when something between here and the terminal buffers.
+type flushWriter interface{ Flush() error }
+
+// renderLiveStream writes each row as it arrives and never pages.
+//
+// A table cannot be both aligned and unbuffered — alignment needs every cell
+// of a column before the first row can be printed — so a live stream is
+// written as plain space-separated lines under a single header, rather than a
+// box-drawn table. That is the honest trade for a feed with no end: the
+// operator sees the change now, not once two hundred more have happened.
+func (r *Renderer) renderLiveStream(st command.Stream) error {
+	asJSON := r.opts.Format == session.FormatRaw || r.opts.Format == session.FormatJSON
+	if !asJSON {
+		if err := writeLiveRow(r.out, columnTitles(st.Columns)); err != nil {
+			return err
+		}
+		flushLive(r.out)
+	}
+	for {
+		row, ok, err := st.Next()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		if asJSON {
+			if err := r.writeRowJSON(r.out, row); err != nil {
+				return err
+			}
+		} else if err := writeLiveRow(r.out, row.Cells); err != nil {
+			return err
+		}
+		flushLive(r.out)
+	}
+}
+
+func writeLiveRow(w io.Writer, cells []string) error {
+	_, err := fmt.Fprintln(w, strings.Join(cells, "  "))
+	return err
+}
+
+func columnTitles(cols []command.Column) []string {
+	out := make([]string, len(cols))
+	for i, c := range cols {
+		out[i] = c.Title
+	}
+	return out
+}
+
+func flushLive(w io.Writer) {
+	if f, ok := w.(flushWriter); ok {
+		_ = f.Flush()
+	}
 }
 
 // maybePage returns a writer that may be a pager process, plus a function that

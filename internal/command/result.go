@@ -55,6 +55,14 @@ type Rows struct {
 type Stream struct {
 	Columns []Column
 	Next    func() (row Row, ok bool, err error)
+	// Live marks a stream whose rows must appear as they arrive rather than
+	// being collected into aligned pages: a changes feed, where a row that is
+	// held back is a change the operator cannot see yet. The renderer writes
+	// each row straight through and never pages a Live stream.
+	Live bool
+	// Hint is a trailing line such as a paging suggestion, printed after the
+	// last row. A Live stream never sets one: it has no end to print it at.
+	Hint string
 }
 
 // Raw is an opaque byte stream, such as an attachment.
