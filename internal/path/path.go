@@ -95,27 +95,33 @@ func Clean(base, input string) (string, error) {
 	if !strings.HasPrefix(input, "/") {
 		segs = split(base)
 	}
-	// popped records that the previous step was a "..", so the separator it
-	// may have uncovered is still collapsible. A named segment written after
-	// the ".." settles on that separator instead, and clears it.
-	popped := false
+	// pops counts the run of ".." steps that ends the walk so far, because a
+	// separator uncovered by one ".." is owed to the next step, and a chain of
+	// them owes a collapse at each link. A named segment settles on the
+	// separator only when it follows a single "..": that is the sideways step
+	// to a sibling partition. After two or more, the walk has already left the
+	// partition behind, so the name is resolved against the database.
+	pops := 0
 	for _, s := range split(input) {
 		switch s {
 		case ".":
 		case "..":
-			if popped {
+			if pops > 0 {
 				segs = collapseSeparator(segs)
 			}
 			if len(segs) > 0 {
 				segs = segs[:len(segs)-1]
 			}
-			popped = true
+			pops++
 		default:
+			if pops > 1 {
+				segs = collapseSeparator(segs)
+			}
 			segs = append(segs, s)
-			popped = false
+			pops = 0
 		}
 	}
-	if popped {
+	if pops > 0 {
 		segs = collapseSeparator(segs)
 	}
 	return "/" + strings.Join(segs, "/"), nil
@@ -127,10 +133,11 @@ func Clean(base, input string) (string, error) {
 // has to land on "/db"; a textual pop alone would strand the shell on a path
 // that no longer resolves.
 //
-// It is applied only to a ".." that no named segment follows, because there
-// the separator is being stepped over rather than landed on. "../p2" from
-// inside a partition is a step sideways to the sibling partition
-// "/db/_partition/p2", not to a document "/db/p2", and a path typed out as
+// It is applied to a ".." that no named segment follows, and to a name that
+// follows a run of two or more, because in both the separator is being stepped
+// over rather than landed on. A name after a single ".." does land on it:
+// "../p2" from inside a partition is a step sideways to the sibling partition
+// "/db/_partition/p2", not to a document "/db/p2". A path typed out as
 // "/db/_partition" — or "/db/_partition/.." — still means what it says.
 func collapseSeparator(segs []string) []string {
 	if len(segs) == 2 && segs[1] == "_partition" {

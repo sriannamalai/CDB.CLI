@@ -87,3 +87,37 @@ func TestResolvePartitionDecodesSegments(t *testing.T) {
 		t.Errorf("Partition = %q, DocID = %q", got.Partition, got.DocID)
 	}
 }
+
+// A run of ".." that steps over the partition separator owes the collapse to
+// whatever follows it, however many links long the run is. One ".." still
+// lands on the separator — "../p2" is the sibling partition — but after two or
+// more the walk has left the partition, so a name is resolved against the
+// database. Getting this wrong parks the shell in a partition that does not
+// exist, and because partitions are implicit nothing refuses the path.
+func TestResolveNamedSegmentAfterAChainOfDotDots(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, input, want string
+		kind                    Kind
+		partition               string
+	}{
+		{"two out of a document, then a name", "/db/_partition/p1/doc1", "../../x", "/db/x", KindDocument, ""},
+		{"three out of an attachment, then a name", "/db/_partition/p1/doc1/att.txt", "../../../x", "/db/x", KindDocument, ""},
+		// The cases the collapse already got right, held in place.
+		{"two out of a document", "/db/_partition/p1/doc1", "../..", "/db", KindDatabase, ""},
+		{"one out of a partition, then a name", "/db/_partition/p1", "../p2", "/db/_partition/p2", KindPartition, "p2"},
+		{"two out of a partition, then a name", "/db/_partition/p1", "../../other", "/other", KindDatabase, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Resolve(tc.base, tc.input)
+			if err != nil {
+				t.Fatalf("Resolve(%q, %q) = %v", tc.base, tc.input, err)
+			}
+			if got.Path != tc.want || got.Kind != tc.kind {
+				t.Errorf("Resolve(%q, %q) = %q (%v), want %q (%v)", tc.base, tc.input, got.Path, got.Kind, tc.want, tc.kind)
+			}
+			if got.Partition != tc.partition {
+				t.Errorf("Partition = %q, want %q", got.Partition, tc.partition)
+			}
+		})
+	}
+}
