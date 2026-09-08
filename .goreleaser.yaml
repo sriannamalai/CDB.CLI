@@ -63,24 +63,21 @@ changelog:
       - "^test:"
       - "^chore:"
 
-# The tap (sriannamalai/homebrew-tap) and bucket (sriannamalai/scoop-bucket)
-# repositories don't exist yet, and pushing to them needs a token with
-# contents:write on both that GITHUB_TOKEN doesn't have. Until that's set up,
-# skip_upload keeps a release from failing after the binaries are already
-# built: it's templated so it evaluates to "true" (skip) whenever the
-# matching env var is unset or empty, and "false" (upload) once it's set.
-#
-# To enable the tap once ready:
-#   1. Create sriannamalai/homebrew-tap and sriannamalai/scoop-bucket on GitHub.
-#   2. Generate a fine-grained PAT with contents:write on both repositories.
-#   3. Set it as the TAP_GITHUB_TOKEN repository secret (see
-#      .github/workflows/release.yml, which maps it to
-#      HOMEBREW_TAP_GITHUB_TOKEN and SCOOP_GITHUB_TOKEN for goreleaser).
+# Pushing the cask and the scoop manifest needs a token with contents:write
+# on sriannamalai/homebrew-tap and sriannamalai/scoop-bucket; GITHUB_TOKEN
+# cannot write to other repositories. The TAP_GITHUB_TOKEN repository secret
+# holds that token (release.yml maps it to HOMEBREW_TAP_GITHUB_TOKEN and
+# SCOOP_GITHUB_TOKEN). skip_upload is templated so a release still succeeds,
+# without the tap and bucket, whenever the token is unset.
 homebrew_casks:
   - name: cdb
     repository:
       owner: sriannamalai
       name: homebrew-tap
+      # The cask and scoop pipes only use a personal access token when it is
+      # named here; otherwise they fall back to GITHUB_TOKEN, which cannot
+      # write to another repository.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/sriannamalai/CDB.CLI"
     description: "Interactive CouchDB command line client"
     license: "Apache-2.0"
@@ -97,6 +94,7 @@ scoops:
     repository:
       owner: sriannamalai
       name: scoop-bucket
+      token: "{{ .Env.SCOOP_GITHUB_TOKEN }}"
     homepage: "https://github.com/sriannamalai/CDB.CLI"
     description: "Interactive CouchDB command line client"
     license: "Apache-2.0"
