@@ -229,6 +229,16 @@ func chooseRevision(ctx context.Context, s *session.Session, t path.Target, winn
 	}
 	fmt.Fprintf(s.Stdout, "Keep which revision? [1-%d] ", len(revs))
 	line, err := s.Reader().ReadString('\n')
+	// Ctrl-C at this prompt cancels the command's context. The terminal read
+	// is already blocked when the signal lands, so it comes back with whatever
+	// the terminal had rather than with an error, and the cancelled context is
+	// the only record that the operator asked to stop. Reporting it as one —
+	// the convention every other interruptible command follows — exits 130 in
+	// silence and returns the shell to its prompt, instead of accusing the
+	// operator of mistyping an answer they never meant to give.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil && line == "" {
 		return "", ErrDeclined
 	}
