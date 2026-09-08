@@ -36,9 +36,44 @@ With no saved profile, `cdb` asks for the URL, authentication kind, user name
 and password, and offers to save the profile. The password goes into the OS
 keychain, never into the config file.
 
+### Logging in
+
+There is deliberately no `--password` flag. Three ways to authenticate:
+
+1. Guided setup, recommended the first time. With no profile saved, run
+   `cdb connect` with no arguments. It prompts for the URL, the
+   authentication kind (press Enter for `session`), the username, and the
+   password with echo off, verifies against the server, then asks whether
+   to save the profile. The password goes into the OS keychain, never into
+   `config.toml`.
+
+2. One line, saved as a profile:
+
+   ```
+   cdb connect --save --as local http://admin:password@localhost:5984
+   ```
+
+   The username and password are split out of the URL and stored in the
+   keychain under the profile name; the config file keeps only the URL and
+   username. Afterwards `cdb connect local`, or just `cdb`, uses it, and the
+   only profile becomes the default.
+
+3. Environment variables, for scripts or a quick test:
+
+   ```
+   CDB_URL=http://localhost:5984 CDB_USER=admin CDB_PASSWORD=password cdb ls /
+   ```
+
+   These override any profile and never touch the keychain. `CDB_TOKEN` does
+   the same for JWT.
+
+Once a default profile exists, `cdb` alone opens the shell already connected,
+and `cdb session` shows who you are logged in as. Profile names may not
+contain a dot, so use `local` rather than a hostname.
+
 ```
 $ cdb
-cdb> connect http://localhost:5984
+cdb> connect http://admin:password@localhost:5984 --save --as local
 Connected to CouchDB 3.5.2 at localhost:5984 as admin.
 admin@localhost:5984:/> ls
 ┌───────────┬──────┬──────────┬─────────────┐
@@ -54,10 +89,6 @@ admin@localhost:5984:/movies> find '{"year":{"$gt":2000}}' --fields title,year -
 admin@localhost:5984:/movies> cat tt0111161 | .title
 "The Shawshank Redemption"
 ```
-
-To save a connection you opened by URL, add `--save` (and `--as <name>` to
-choose the profile name): `connect http://localhost:5984 --save --as local`.
-Profile names may not contain a dot.
 
 Press Tab at any point to complete command names, flags, database names,
 document ids, view names, and document field names sampled from the database.
