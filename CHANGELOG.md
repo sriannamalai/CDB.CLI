@@ -26,9 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than advising you to check a password you never supplied.
 - `edit` understands a quoted `$EDITOR` or `$VISUAL`, so an editor whose path
   contains a space works: `EDITOR='"/Applications/My Editor/bin/ed" -w'`.
-- `put <path>` inside the shell now asks for a file, or an explicit `-`, rather
-  than silently reading the terminal to end-of-file and leaving the prompt
-  gone. One-shot use is unchanged: `echo … | cdb put /db/doc` still works.
+- `put <path>` run interactively — in the shell, or as a one-shot command at a
+  terminal — now asks for a file, or an explicit `-`, rather than silently
+  reading the terminal to end-of-file and leaving the prompt gone. Piped use is
+  unchanged: `echo … | cdb put /db/doc` still works.
 - Closing a connection releases its sockets. On an authenticated client the
   close never reached the connection pool, so idle connections were held until
   the process exited.
