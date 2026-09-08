@@ -126,6 +126,24 @@ func TestHistoryRedactsCredentialsInTypedLines(t *testing.T) {
 			line: "profiles add prod admin:hunter2@db.example.com",
 			want: "profiles add prod db.example.com",
 		},
+		// The command word is only trustworthy when it is a command. A typo
+		// reaches the history like any other parseable line, and guessing that
+		// an unknown word takes no URL is the guess that leaks a password.
+		{
+			name: "a mistyped command is redacted anyway",
+			line: "conect admin:hunter2@db.example.com",
+			want: "conect db.example.com",
+		},
+		{
+			name: "a mistyped subcommand of a URL command is redacted anyway",
+			line: "profiles a prod admin:hunter2@db.example.com",
+			want: "profiles a prod db.example.com",
+		},
+		{
+			name: "a global flag before the command does not hide it",
+			line: "--yes connect admin:hunter2@db.example.com",
+			want: "--yes connect db.example.com",
+		},
 		// A full URL carries its own evidence, so it is redacted whatever the
 		// command is.
 		{

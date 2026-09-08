@@ -42,7 +42,13 @@ type Shell struct {
 // no line it records carries a credential. Spec section 7 requires the history
 // to be deduplicated and to exclude unparseable lines, and readline writes
 // every accepted line straight through to its source.
-type filteredHistory struct{ src readline.History }
+type filteredHistory struct {
+	src readline.History
+	// known reports whether a word is a registered command name or alias. The
+	// redactor asks before it trusts the word to say what the line's arguments
+	// are; see takesServerAddress.
+	known func(string) bool
+}
 
 func (h *filteredHistory) Write(line string) (int, error) {
 	line = strings.TrimSpace(line)
@@ -53,7 +59,7 @@ func (h *filteredHistory) Write(line string) (int, error) {
 		return h.src.Len(), nil
 	}
 	// Redact before the dedup check, so what is compared is what is stored.
-	line = redactLine(line)
+	line = redactLine(line, h.known)
 	if n := h.src.Len(); n > 0 {
 		if last, err := h.src.GetLine(n - 1); err == nil && last == line {
 			return n, nil
@@ -70,8 +76,8 @@ func (h *filteredHistory) Write(line string) (int, error) {
 // stored is still a command the operator can re-run, and only the tokens that
 // are recognisably a server URL are touched: a document id that merely
 // contains an "@" must survive intact.
-func redactLine(line string) string {
-	schemeless := takesServerAddress(line)
+func redactLine(line string, known func(string) bool) string {
+	schemeless := takesServerAddress(line, known)
 	var b strings.Builder
 	b.Grow(len(line))
 	start := -1
@@ -97,25 +103,48 @@ func redactLine(line string) string {
 // without a scheme. Only there is "user:pass@host" read as a credential: under
 // any other command a token of that shape is a start key, a document id or a
 // field value, and rewriting it would change the command the operator re-runs.
+// "profiles" is here whole rather than only as "profiles add": narrowing it to
+// one subcommand means a mistyped one carries a password through unredacted,
+// and no profiles argument is worth protecting from a rewrite.
 var urlCommands = map[string]bool{
 	"connect":   true,
 	"replicate": true,
 	"cp":        true,
+	"profiles":  true,
 }
 
-// takesServerAddress reports whether the line's command is one that accepts a
-// server address or a profile, and so may carry a schemeless credential.
-func takesServerAddress(line string) bool {
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
+// takesServerAddress reports whether the line may carry a credential typed
+// without a scheme.
+//
+// The history stores every line that merely parses, typos included, so the
+// command word cannot be taken at face value: `conect admin:pw@host` would
+// otherwise be filed away with the password in it. A word that is not a
+// registered command or alias is therefore treated as one that takes a URL —
+// the conservative direction, since the cost of a wrong guess is a rewritten
+// argument in one unusable line, against a leaked password the other way.
+func takesServerAddress(line string, known func(string) bool) bool {
+	word, ok := commandWord(line)
+	if !ok {
 		return false
 	}
-	if urlCommands[fields[0]] {
+	if known != nil && !known(word) {
 		return true
 	}
-	// "profiles" only touches a URL in its "add" subcommand; "profiles remove
-	// prod" and "profiles list" take names.
-	return fields[0] == "profiles" && len(fields) > 1 && fields[1] == "add"
+	return urlCommands[word]
+}
+
+// commandWord finds the word naming the command. Global flags may come first —
+// `--yes connect …` is accepted — so leading dash-prefixed tokens are skipped.
+// A flag's separate value would be skipped as a command word too, which is why
+// an unrecognised word is treated as URL-taking rather than as safe.
+func commandWord(line string) (string, bool) {
+	for _, f := range strings.Fields(line) {
+		if strings.HasPrefix(f, "-") {
+			continue
+		}
+		return f, true
+	}
+	return "", false
 }
 
 func isLineSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
@@ -244,7 +273,10 @@ func (sh *Shell) initHistory() error {
 			return ferr
 		}
 	}
-	sh.hist = &filteredHistory{src: src}
+	sh.hist = &filteredHistory{src: src, known: func(name string) bool {
+		_, ok := sh.reg.Lookup(name)
+		return ok
+	}}
 	sh.reg.Replace(command.HistoryFrom(func() []string { return historyLines(sh.hist) }))
 	return nil
 }
