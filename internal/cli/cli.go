@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/sriannamalai/CDB.CLI/internal/command"
 	"github.com/sriannamalai/CDB.CLI/internal/config"
 	"github.com/sriannamalai/CDB.CLI/internal/render"
@@ -40,17 +41,7 @@ func NewRoot(reg *command.Registry, s *session.Session, build BuildInfo) *cobra.
 		return command.Usagef(c.Name(), "%s", err)
 	})
 
-	pf := root.PersistentFlags()
-	pf.String("profile", "", "connection profile to use, overriding CDB_PROFILE and the default")
-	pf.String("url", "", "server URL, overriding the profile and CDB_URL")
-	pf.String("path", "", "starting virtual path")
-	pf.String("format", "", "output format: table or json")
-	pf.String("color", "", "colour: auto, always or never")
-	pf.String("pager", "", "pager command, or off")
-	pf.Bool("json", false, "print raw JSON instead of a table")
-	pf.Bool("yes", false, "skip confirmation prompts")
-	pf.Bool("verbose", false, "include raw status codes and reasons in errors")
-	pf.Bool("anonymous", false, "connect without credentials, and do not ask for any")
+	GlobalFlags(root.PersistentFlags())
 
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
@@ -86,6 +77,22 @@ func NewRoot(reg *command.Registry, s *session.Session, build BuildInfo) *cobra.
 	// subcommands.
 	root.InitDefaultCompletionCmd()
 	return root
+}
+
+// GlobalFlags declares the flags every one-shot subcommand accepts, on the
+// root command's persistent flag set. It is exported so that the reference
+// documentation generator describes the same flags the binary parses.
+func GlobalFlags(pf *pflag.FlagSet) {
+	pf.String("profile", "", "connection profile to use, overriding CDB_PROFILE and the default")
+	pf.String("url", "", "server URL, overriding the profile and CDB_URL")
+	pf.String("path", "", "starting virtual path")
+	pf.String("format", "", "output format: table or json")
+	pf.String("color", "", "colour: auto, always or never")
+	pf.String("pager", "", "pager command, or off")
+	pf.Bool("json", false, "print raw JSON instead of a table")
+	pf.Bool("yes", false, "skip confirmation prompts")
+	pf.Bool("verbose", false, "include raw status codes and reasons in errors")
+	pf.Bool("anonymous", false, "connect without credentials, and do not ask for any")
 }
 
 func orUnknown(s string) string {
