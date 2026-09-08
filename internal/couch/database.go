@@ -68,30 +68,42 @@ func (c *Client) ListDatabases(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// DatabasesInfo reads POST /_dbs_info for a set of names.
+// dbsInfoBatch is the most names one POST /_dbs_info may carry. CouchDB's
+// chttpd enforces [chttpd] max_db_number_for_dbs_info_req, which defaults to
+// 100, and answers 400 "too_many_keys" beyond it — so an unchunked request
+// breaks "ls /" outright on any server with a database per tenant. The cap is
+// applied here rather than at the call site so every caller inherits it.
+const dbsInfoBatch = 100
+
+// DatabasesInfo reads POST /_dbs_info for a set of names, in batches the
+// server will accept. The results are returned in the order the names were
+// given.
 func (c *Client) DatabasesInfo(ctx context.Context, names []string) ([]DatabaseInfo, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
-	var body []struct {
-		Key  string      `json:"key"`
-		Info *dbInfoBody `json:"info"`
-	}
-	req := map[string][]string{"keys": names}
-	if err := c.DoJSON(ctx, "POST", "/_dbs_info", req, &body, "list", "databases"); err != nil {
-		return nil, err
-	}
-	out := make([]DatabaseInfo, 0, len(body))
-	for _, row := range body {
-		if row.Info == nil {
-			out = append(out, DatabaseInfo{Name: row.Key})
-			continue
+	out := make([]DatabaseInfo, 0, len(names))
+	for start := 0; start < len(names); start += dbsInfoBatch {
+		end := min(start+dbsInfoBatch, len(names))
+		var body []struct {
+			Key  string      `json:"key"`
+			Info *dbInfoBody `json:"info"`
 		}
-		info := row.Info.toInfo()
-		if info.Name == "" {
-			info.Name = row.Key
+		req := map[string][]string{"keys": names[start:end]}
+		if err := c.DoJSON(ctx, "POST", "/_dbs_info", req, &body, "list", "databases"); err != nil {
+			return nil, err
 		}
-		out = append(out, info)
+		for _, row := range body {
+			if row.Info == nil {
+				out = append(out, DatabaseInfo{Name: row.Key})
+				continue
+			}
+			info := row.Info.toInfo()
+			if info.Name == "" {
+				info.Name = row.Key
+			}
+			out = append(out, info)
+		}
 	}
 	return out, nil
 }
