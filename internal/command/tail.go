@@ -142,8 +142,13 @@ $ cdb tail /movies --follow`,
 // where "now" is.
 func tailOptions(ctx context.Context, c *couch.Client, db string, inv Invocation, follow bool) (couch.ChangesOptions, error) {
 	filter := inv.String("filter")
-	if filter != "" && strings.Count(filter, "/") != 1 {
-		return couch.ChangesOptions{}, Usagef("tail", "--filter takes a design document and a filter name, as \"app/by_type\".")
+	if filter != "" {
+		// Both halves, or the server answers 400 and a mistyped flag exits 1
+		// as though the database had refused the request.
+		ddoc, name, ok := strings.Cut(filter, "/")
+		if !ok || ddoc == "" || name == "" || strings.Contains(name, "/") {
+			return couch.ChangesOptions{}, Usagef("tail", "--filter takes a design document and a filter name, as \"app/by_type\".")
+		}
 	}
 	if inv.Changed("heartbeat") && !follow {
 		return couch.ChangesOptions{}, Usagef("tail", "--heartbeat only applies to --follow; the normal feed has no idle period to keep alive.")

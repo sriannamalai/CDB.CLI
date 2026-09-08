@@ -221,7 +221,12 @@ func (c *Client) ChangesFollow(ctx context.Context, db string, opts ChangesOptio
 			continue
 		}
 		if l.ID == "" {
-			continue // the trailing {"last_seq":…} line
+			// The trailing {"last_seq":…} line — and, deliberately, a
+			// mid-stream {"error":…} line, which carries no id either. The
+			// feed is about to end there anyway, and the follow loop reopens
+			// it from the last sequence delivered, so reporting it would only
+			// turn a recoverable hiccup into a terminated tail.
+			continue
 		}
 		if err := fn(l.toRow()); err != nil {
 			return err
