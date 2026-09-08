@@ -10,5 +10,9 @@ func Default() *Registry {
 	r.Register(Cd())
 	r.Register(Ls())
 	r.Register(Info())
+	r.Register(Cat())
+	r.Register(Put())
+	r.Register(Rm())
+	r.Register(Edit())
 	return r
 }

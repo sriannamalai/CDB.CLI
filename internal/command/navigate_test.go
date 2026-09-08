@@ -165,6 +165,30 @@ func TestCdVerifiesTheTargetExists(t *testing.T) {
 	}
 }
 
+func TestCdVerifiesADocumentExists(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/doc1", 200, `{"_id":"doc1","_rev":"1-a"}`)
+	s := connected(t, srv)
+	if _, err := invoke(t, Cd(), s, "/mydb/doc1"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Path() != "/mydb/doc1" {
+		t.Errorf("Path() = %q, want /mydb/doc1", s.Path())
+	}
+	// The stub answers 404 for every unregistered route, so this is the real
+	// "document does not exist" path and not a database check standing in.
+	_, err := invoke(t, Cd(), s, "/mydb/missing-doc")
+	if err == nil {
+		t.Fatal("cd to a missing document returned no error")
+	}
+	if e, ok := couch.AsError(err); !ok || e.Status != 404 {
+		t.Fatalf("err = %#v, want a 404 couch.Error", err)
+	}
+	if s.Path() != "/mydb/doc1" {
+		t.Errorf("Path() = %q after a failed cd, want it unchanged", s.Path())
+	}
+}
+
 func TestCdWithNoArgumentGoesToRoot(t *testing.T) {
 	srv := couchtest.New(t)
 	s := connected(t, srv)

@@ -58,17 +58,12 @@ func verifyTarget(ctx context.Context, s *session.Session, t path.Target) error 
 		}
 		return nil
 	default:
-		// Task 10 replaces this branch with a document existence check once
-		// Client.GetDocument exists. Until then, verifying the database is
-		// enough to catch the common mistake of cd-ing into a missing database.
-		ok, err := s.Client.DatabaseExists(ctx, t.Database)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return couch.NewError(404, "not_found", "Database does not exist.", "read", fmt.Sprintf("database %q", t.Database))
-		}
-		return nil
+		// Documents, design documents, views and attachments all hang off a
+		// document, so reading it settles both whether the database exists and
+		// whether the path within it does. A 404 from here carries CouchDB's own
+		// reason, which is a better message than a database check could give.
+		_, _, err := s.Client.GetDocument(ctx, t.Database, t.DocID, couch.GetOptions{})
+		return err
 	}
 }
 
