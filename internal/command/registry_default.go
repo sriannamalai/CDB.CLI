@@ -24,6 +24,7 @@ func Default() *Registry {
 	r.Register(Conflicts())
 	r.Register(Resolve())
 	r.Register(Backup())
+	r.Register(Restore())
 	r.Register(History())
 	r.Register(Clear())
 	r.Register(Exit())
