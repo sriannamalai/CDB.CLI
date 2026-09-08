@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -60,11 +61,32 @@ func runShell(ctx context.Context, reg *command.Registry, s *session.Session) in
 		return cli.ExitError
 	}
 	if err := command.Open(ctx, s, ""); err != nil {
-		fmt.Fprintf(os.Stderr, "Not connected: %v\nRun \"connect <url>\" to connect.\n", err)
+		if msg := notConnectedMessage(err, s.Prefs.Verbose); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
 	}
 	if err := sh.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return cli.ExitError
 	}
 	return cli.ExitOK
+}
+
+// notConnectedMessage renders the shell's opening auto-connect failure. It is
+// the first message a new user sees, so it goes through the same section 11
+// mapper every other error does — "Could not reach localhost:5984. Is CouchDB
+// running?", not a raw dial error. It returns "" when nothing should be
+// printed.
+func notConnectedMessage(err error, verbose bool) string {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return ""
+	}
+	const hint = "Run \"connect <url>\" to connect."
+	var ue *command.UsageError
+	if errors.As(err, &ue) {
+		// Already prefixed with the command that raised it ("connect: no
+		// profile is saved."); a "Not connected:" in front would double it.
+		return ue.Error() + "\n" + hint
+	}
+	return "Not connected: " + render.ErrorMessage(err, verbose) + "\n" + hint
 }
