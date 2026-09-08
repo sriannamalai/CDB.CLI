@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
@@ -107,28 +108,39 @@ func (t *sessionTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		return res, err
 	}
 
-	// The first attempt consumed req.Body, so the replay needs a fresh one.
-	// Relying on net/http to rewind is not enough: it only does so for its own
-	// internal connection retries, and a body that cannot be rewound would fail
-	// with "ContentLength=N with Body length 0" instead of surfacing the 401.
-	retry := withCookies(req, t.jar)
+	// Decide replayability before touching the session. The first attempt
+	// consumed req.Body, so the replay needs a fresh one. Relying on net/http to
+	// rewind is not enough: it only does so for its own internal connection
+	// retries, and a body that cannot be rewound would fail with
+	// "ContentLength=N with Body length 0" instead of surfacing the 401.
+	var body io.ReadCloser
 	if req.Body != nil && req.Body != http.NoBody {
 		if req.GetBody == nil {
 			// A streamed body (a large attachment upload) cannot be replayed.
 			// Hand the caller the 401 rather than a confusing transport error.
 			return res, nil
 		}
-		body, err := req.GetBody()
+		body, err = req.GetBody()
 		if err != nil {
 			return res, nil
 		}
-		retry.Body = body
 	}
 
 	res.Body.Close()
 	t.invalidate()
 	if err := t.login(ctx); err != nil {
+		if body != nil {
+			body.Close()
+		}
 		return nil, err
+	}
+
+	// Build the retry only now. withCookies copies the jar's cookies into the
+	// request at call time, so doing it any earlier would replay the stale
+	// cookie that just drew the 401 instead of the one login stored.
+	retry := withCookies(req, t.jar)
+	if body != nil {
+		retry.Body = body
 	}
 	return t.base.RoundTrip(retry)
 }

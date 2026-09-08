@@ -108,6 +108,69 @@ func TestSessionAuthReplaysBodyOn401(t *testing.T) {
 	}
 }
 
+// TestSessionAuthReplayUsesTheRefreshedCookie pins the ordering inside the 401
+// retry. withCookies bakes the Cookie header in at call time, so building the
+// retry before re-logging in replays the very cookie that drew the 401. Counting
+// calls cannot catch that; this stub answers on the cookie's value.
+func TestSessionAuthReplayUsesTheRefreshedCookie(t *testing.T) {
+	srv := couchtest.New(t)
+	var mu sync.Mutex
+	logins := 0
+	srv.On("POST", "/_session", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		logins++
+		value := "cookie-A"
+		if logins > 1 {
+			value = "cookie-B"
+		}
+		mu.Unlock()
+		http.SetCookie(w, &http.Cookie{Name: "AuthSession", Value: value, Path: "/"})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"ok":true,"name":"admin","roles":["_admin"]}`)
+	})
+	// The session behind cookie A has expired; only cookie B is accepted.
+	srv.On("GET", "/_all_dbs", func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie("AuthSession")
+		if err != nil || c.Value != "cookie-B" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(401)
+			_, _ = io.WriteString(w, `{"error":"unauthorized","reason":"expired session"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `["mydb"]`)
+	})
+
+	c, err := New(Config{URL: srv.URL(), Auth: AuthSession, Username: "admin", Secret: "password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	var out []string
+	if err := c.DoJSON(context.Background(), "GET", "/_all_dbs", nil, &out, "list", "databases"); err != nil {
+		t.Fatalf("the retry did not use the refreshed cookie: %v", err)
+	}
+	if len(out) != 1 || out[0] != "mydb" {
+		t.Fatalf("out = %v", out)
+	}
+
+	gotLogins := 0
+	for _, r := range srv.Requests() {
+		if r.Method == "POST" && r.Path == "/_session" {
+			gotLogins++
+		}
+	}
+	if gotLogins != 2 {
+		t.Errorf("POST /_session happened %d times, want 2", gotLogins)
+	}
+	if last := srv.Last("GET", "/_all_dbs"); last == nil || !strings.Contains(last.Header.Get("Cookie"), "cookie-B") {
+		t.Errorf("the replayed request carried Cookie %q, want the refreshed cookie-B", last.Header.Get("Cookie"))
+	}
+}
+
 // TestSessionAuthSurfaces401ForNonRewindableBody covers the streamed-attachment
 // case: a body with no GetBody cannot be replayed, so the caller must get the
 // server's 401 rather than a "ContentLength=N with Body length 0" transport
