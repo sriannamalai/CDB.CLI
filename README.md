@@ -291,12 +291,16 @@ scripts.
 
 ### Backup and restore
 
-`backup` writes a snapshot of the live documents and their attachments. It
-carries no deletion tombstones, so a restored database does not know which
-documents were deleted in the source — use replication, not backup/restore, to
-keep two databases in step. A conflicted document is dumped once per leaf
-revision, so the document count in the dump's footer counts revisions, not
-distinct documents.
+`backup` writes a snapshot of the live documents and their attachments. Pass
+`--tombstones` to record deletions too: a deleted document is dumped as an
+ordinary record carrying `_deleted: true` and its full revision history, so a
+restore reproduces the deletion and replicates it onward. Without the flag the
+dump holds live documents only, as in 1.0, and a restored database does not
+know which documents were deleted in the source. A dump is either a record of
+deletions or it is not — `--resume` refuses to continue one in the other mode.
+A conflicted document is dumped once per leaf revision, so the document count
+in the dump's footer counts revisions, not distinct documents; the footer's
+`deleted` count says how many of those were tombstones.
 
 `restore` recreates any conflicts from the dump. Attachments up to 4 MiB
 restore inline, preserving the exact revision from the dump; larger

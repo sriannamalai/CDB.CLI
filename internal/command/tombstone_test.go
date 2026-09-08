@@ -217,3 +217,128 @@ func TestBackupResumeRefusesAModeMismatch(t *testing.T) {
 		})
 	}
 }
+
+// tombstoneDumpFile writes a dump holding one live document and one tombstone.
+func tombstoneDumpFile(t *testing.T) string {
+	t.Helper()
+	srv := tombstoneServer(t)
+	s := connected(t, srv)
+	out := filepath.Join(t.TempDir(), "mydb.cdb.gz")
+	if _, err := invoke(t, Backup(), s, "/mydb", out, "--tombstones"); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestRestoreLoadsTombstones(t *testing.T) {
+	file := tombstoneDumpFile(t)
+
+	srv := couchtest.New(t)
+	srv.JSON("HEAD", "/target", 200, ``)
+	srv.JSON("GET", "/target", 200, `{"db_name":"target","doc_count":0,"sizes":{"file":1,"external":1},"cluster":{"q":1,"n":1},"props":{}}`)
+	srv.JSON("POST", "/target/_bulk_docs", 201, `[]`)
+	s := connected(t, srv)
+
+	res, err := invoke(t, Restore(), s, file, "/target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(srv.Last("POST", "/target/_bulk_docs").Body)
+	if !strings.Contains(body, `"new_edits":false`) {
+		t.Errorf("_bulk_docs body has no new_edits:false: %s", body)
+	}
+	if !strings.Contains(body, `"_deleted":true`) {
+		t.Errorf("_bulk_docs body carries no tombstone: %s", body)
+	}
+	if !strings.Contains(body, `"_revisions"`) {
+		t.Errorf("_bulk_docs body lost the revision history: %s", body)
+	}
+	if msg := res.(Message).Text; !strings.Contains(msg, "Restored 2 document(s) (1 of them deletions)") {
+		t.Errorf("message = %q", msg)
+	}
+}
+
+func TestRestoreRefusesAnAttachmentAfterATombstone(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "bad.cdb.gz")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := backup.NewWriter(f)
+	_ = w.WriteHeader(backup.Header{Version: backup.FormatVersion, DB: "mydb", Tombstones: true})
+	_ = w.WriteDoc(json.RawMessage(`{"_id":"gone","_rev":"3-c0ffee","_deleted":true,"_revisions":{"start":3,"ids":["c0ffee","dead","beef"]}}`))
+	_ = w.WriteAttachment(backup.Att{ID: "gone", Rev: "3-c0ffee", Name: "photo.jpg", ContentType: "image/jpeg", Length: 5}, strings.NewReader("hello"))
+	_ = w.WriteFooter(backup.Footer{Docs: 1, Deleted: 1, Attachments: 1, LastSeq: "1-a"})
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	srv := couchtest.New(t)
+	srv.JSON("HEAD", "/target", 200, ``)
+	srv.JSON("GET", "/target", 200, `{"db_name":"target","doc_count":0,"sizes":{"file":1,"external":1},"cluster":{"q":1,"n":1},"props":{}}`)
+	srv.JSON("POST", "/target/_bulk_docs", 201, `[]`)
+	s := connected(t, srv)
+
+	_, err = invoke(t, Restore(), s, p, "/target")
+	if err == nil {
+		t.Fatal("restore accepted an attachment on a deletion")
+	}
+	want := `attachment "photo.jpg" follows the deletion of "gone", which can hold no attachments.`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to contain %q", err, want)
+	}
+}
+
+func TestRestoreRefusesANewerDumpFormat(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "future.cdb.gz")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := backup.NewWriter(f)
+	_ = w.WriteHeader(backup.Header{Version: "1.2", DB: "mydb"})
+	_ = w.WriteFooter(backup.Footer{Docs: 0, LastSeq: "0"})
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	s := connected(t, couchtest.New(t))
+	_, err = invoke(t, Restore(), s, p, "/target")
+	var ue *UsageError
+	if err == nil || !errors.As(err, &ue) {
+		t.Fatalf("err = %v, want a UsageError", err)
+	}
+	if !strings.Contains(ue.Error(), "was written by a newer cdb (dump format 1.2); upgrade cdb to read it.") {
+		t.Errorf("message = %q", ue.Error())
+	}
+}
+
+// TestBackupResumeRefusesANewerDumpFormat is the backup-side companion to
+// TestRestoreRefusesANewerDumpFormat: both commands map backup.VersionError
+// to the same usage sentence, so both need their own command-level test of it.
+func TestBackupResumeRefusesANewerDumpFormat(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "future.cdb.gz")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := backup.NewWriter(f)
+	_ = w.WriteHeader(backup.Header{Version: "9.9", DB: "mydb"})
+	_ = w.WriteFooter(backup.Footer{Docs: 0, LastSeq: "0"})
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	s := connected(t, couchtest.New(t))
+	_, err = invoke(t, Backup(), s, "/mydb", p, "--resume")
+	var ue *UsageError
+	if err == nil || !errors.As(err, &ue) {
+		t.Fatalf("err = %v, want a UsageError", err)
+	}
+	if !strings.Contains(ue.Error(), "was written by a newer cdb (dump format 9.9); upgrade cdb to read it.") {
+		t.Errorf("message = %q", ue.Error())
+	}
+}

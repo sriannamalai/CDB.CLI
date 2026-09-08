@@ -44,6 +44,11 @@ type pendingDoc struct {
 	// ahead of this one are written out on their own.
 	inlineBytes int64
 	bytes       int64
+	// deleted marks a tombstone. It needs no special write path — _bulk_docs
+	// with new_edits=false stores it with its supplied _rev and _revisions,
+	// which is what makes the deletion replicate onward — but an attachment
+	// record following one is a corrupt dump.
+	deleted bool
 }
 
 // largeAttachment is an attachment spilled to a temp file because it exceeds
@@ -104,6 +109,10 @@ $ cdb restore movies.cdb.gz /movies --merge`,
 			// still has to surface those itself.
 			scan, err := backup.Scan(f)
 			if err != nil {
+				var ve *backup.VersionError
+				if errors.As(err, &ve) {
+					return nil, Usagef("restore", "%s was written by a newer cdb (dump format %s); upgrade cdb to read it.", file, ve.Version)
+				}
 				if errors.Is(err, backup.ErrNotADump) {
 					// Naming the wrong file is a usage mistake, so exit 2, and
 					// under the command the operator actually ran.
@@ -143,6 +152,7 @@ $ cdb restore movies.cdb.gz /movies --merge`,
 				inlineBytes         int64
 				current             *pendingDoc
 				docs, atts, written int64
+				deleted             int64
 				bumped              []string
 				tempFiles           []string
 				progressed          bool
@@ -283,6 +293,9 @@ $ cdb restore movies.cdb.gz /movies --merge`,
 					pending = append(pending, p)
 					current = p
 					docs++
+					if p.deleted {
+						deleted++
+					}
 					written += int64(len(rec.Doc))
 					pendingBytes += p.bytes
 
@@ -290,6 +303,9 @@ $ cdb restore movies.cdb.gz /movies --merge`,
 					a := rec.Att
 					if current == nil || current.id != a.ID || current.rev != a.Rev {
 						return nil, fmt.Errorf("restore: %s: attachment %q belongs to %s@%s, which is not the document that precedes it in the dump", file, a.Name, a.ID, a.Rev)
+					}
+					if current.deleted {
+						return nil, fmt.Errorf("restore: %s: attachment %q follows the deletion of %q, which can hold no attachments.", file, a.Name, a.ID)
 					}
 					// Length comes off the wire, and it sizes an allocation
 					// below; a negative one would panic rather than report the
@@ -370,7 +386,11 @@ $ cdb restore movies.cdb.gz /movies --merge`,
 				}
 			}
 
-			text := fmt.Sprintf("Restored %d document(s), %d attachment(s) and %s into %q.", docs, atts, humanBytes(written), t.Database)
+			text := fmt.Sprintf("Restored %d document(s)", docs)
+			if deleted > 0 {
+				text += fmt.Sprintf(" (%d of them deletions)", deleted)
+			}
+			text += fmt.Sprintf(", %d attachment(s) and %s into %q.", atts, humanBytes(written), t.Database)
 			if len(bumped) > 0 {
 				text += fmt.Sprintf("\n%d document(s) changed revision because their attachments were too large to inline: %s", len(bumped), strings.Join(bumped, ", "))
 			}
@@ -411,6 +431,7 @@ func newPendingDoc(body json.RawMessage) (*pendingDoc, error) {
 	p := &pendingDoc{fields: m}
 	_ = json.Unmarshal(m["_id"], &p.id)
 	_ = json.Unmarshal(m["_rev"], &p.rev)
+	p.deleted = backup.IsTombstone(body)
 	return p, nil
 }
 
