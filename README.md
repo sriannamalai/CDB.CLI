@@ -271,7 +271,7 @@ each revision in full instead.
 ### Watching changes
 
 ```
-cdb tail /mydb                       # the last 25 changes
+cdb tail /mydb                       # the first page of changes
 cdb tail /mydb --since 941-g1AAA…    # continue from a sequence
 cdb tail /mydb --follow              # keep reading; Ctrl-C to stop
 cdb tail /mydb --follow --json | jq  # one change per line, unbuffered

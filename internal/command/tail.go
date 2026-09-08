@@ -46,8 +46,8 @@ A CouchDB update sequence is a long opaque string, so the table shows only its
 leading number followed by an ellipsis, which is the part worth reading; a
 sequence that number cannot be taken from is shown whole, unmarked. The full
 value is what --json prints and what --since takes, so copy it from --json or
-from the paging hint and never from the table: CouchDB accepts a bare number
-in --since and answers it by replaying the feed from the beginning.
+from the paging hint and never from the table: CouchDB rejects a bare number
+in --since as a malformed sequence.
 
 CouchDB has no partition-scoped changes feed, so tail takes a database path.`
 

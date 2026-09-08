@@ -309,8 +309,8 @@ refuses.
 opaque string, so the table prints only its leading number and an ellipsis,
 which is the part worth reading. The whole value is what `--json` prints and
 what `--since` takes, so copy it from `--json` or from the paging hint and
-never from the table: CouchDB accepts a bare number in `--since` and answers it
-by replaying the feed from the beginning.
+never from the table: CouchDB rejects a bare number in `--since` as a malformed
+sequence.
 
 **`--follow`** opens CouchDB's continuous feed at the database's current
 sequence and keeps reading until you stop it with Ctrl-C, printing each change
