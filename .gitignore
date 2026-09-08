@@ -34,6 +34,3 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Worktrees and SDD scratch
-.claude/worktrees/
-.superpowers/
