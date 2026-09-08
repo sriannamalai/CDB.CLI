@@ -34,6 +34,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Vet for Windows
+        run: GOOS=windows go vet ./...
+
       - name: Reference documentation is up to date
         run: go run ./internal/tools/gendocs -check
 
@@ -42,11 +45,49 @@ jobs:
           curl -fsS -X PUT http://admin:password@localhost:5984/_users
           curl -fsS -X PUT http://admin:password@localhost:5984/_replicator
 
+      - name: Enable the JWT handler
+        env:
+          CDB_TEST_JWT_SECRET: ci-jwt-secret
+        run: |
+          set -euo pipefail
+          # The key is the base64 of the raw shared secret.
+          b64=$(printf %s "$CDB_TEST_JWT_SECRET" | base64 | tr -d '\n')
+          curl -fsS -X PUT -H 'Content-Type: application/json' \
+            "http://admin:password@localhost:5984/_node/_local/_config/jwt_keys/hmac:_default" \
+            -d "\"$b64\""
+          # authentication_handlers lives under [chttpd] — a value written to
+          # [chttpd_auth] is stored and ignored. The cookie and default
+          # handlers are kept so every existing session-auth test still passes.
+          curl -fsS -X PUT -H 'Content-Type: application/json' \
+            "http://admin:password@localhost:5984/_node/_local/_config/chttpd/authentication_handlers" \
+            -d '"{chttpd_auth, jwt_authentication_handler}, {chttpd_auth, cookie_authentication_handler}, {chttpd_auth, default_authentication_handler}"'
+          # Verified on CouchDB 3.5.2: [chttpd] authentication_handlers is read
+          # at start-up and never re-read, so the node has to be restarted
+          # before the handler is in the chain. A restart is not a re-create:
+          # the container keeps its filesystem, so local.d/docker.ini and
+          # /opt/couchdb/data survive it — the databases created by the step
+          # before this one are still there afterwards — and it keeps its
+          # published 5984 port binding.
+          #
+          # GitHub Actions exposes the service container's id, so name it
+          # rather than guessing at "docker ps" output: a filter on the image
+          # would pick an arbitrary match if a second couchdb:3.5 container
+          # existed, and would break silently if the image tag were changed
+          # here but not in the services block.
+          docker restart "${{ job.services.couchdb.id }}"
+          for _ in $(seq 1 60); do
+            curl -fsS http://admin:password@localhost:5984/_up >/dev/null 2>&1 && break
+            sleep 1
+          done
+          # Fail loudly rather than letting the test skip or assert nothing.
+          curl -fsS http://admin:password@localhost:5984/_session | grep -q '"jwt"'
+
       - name: Unit and integration tests
         env:
           CDB_TEST_URL: http://localhost:5984/
           CDB_TEST_USER: admin
           CDB_TEST_PASSWORD: password
+          CDB_TEST_JWT_SECRET: ci-jwt-secret
           CDB_KEYRING_BACKEND: file
         run: go test ./... -race -count=1
 

@@ -336,7 +336,27 @@ curl -X PUT http://admin:password@localhost:15984/_replicator
 CDB_TEST_URL=http://localhost:15984/ go test ./... # plus integration tests
 ```
 
-CI pins `CDB_KEYRING_BACKEND=file` so tests never touch a real OS keychain.
+The JWT integration test needs a server with the JWT handler enabled, which is
+not CouchDB's default. Configure one and restart it — the handler list is read
+at start-up and never re-read:
+
+```
+b64=$(printf %s 'dev-jwt-secret' | base64 | tr -d '\n')
+curl -X PUT -H 'Content-Type: application/json' \
+  "http://admin:password@localhost:15984/_node/_local/_config/jwt_keys/hmac:_default" -d "\"$b64\""
+curl -X PUT -H 'Content-Type: application/json' \
+  "http://admin:password@localhost:15984/_node/_local/_config/chttpd/authentication_handlers" \
+  -d '"{chttpd_auth, jwt_authentication_handler}, {chttpd_auth, cookie_authentication_handler}, {chttpd_auth, default_authentication_handler}"'
+docker restart cdb-test
+CDB_TEST_URL=http://localhost:15984/ CDB_TEST_JWT_SECRET=dev-jwt-secret go test ./internal/command/
+```
+
+Keeping the cookie and default handlers means username-and-password auth keeps
+working alongside the token. The test skips unless both `CDB_TEST_URL` and
+`CDB_TEST_JWT_SECRET` are set.
+
+CI pins `CDB_KEYRING_BACKEND=file` so tests never touch a real OS keychain, and
+runs `gofmt -l .`, `go vet ./...` and `GOOS=windows go vet ./...` as gates.
 
 ## License
 
