@@ -270,6 +270,27 @@ func (c *Client) DesignDoc(ctx context.Context, db, ddocID string) (json.RawMess
 	return raw, nil
 }
 
+// CreateDatabase creates a database. q of 0 leaves the server default.
+func (c *Client) CreateDatabase(ctx context.Context, db string, partitioned bool, q int) error {
+	apiPath := "/" + path.Encode(db)
+	query := url.Values{}
+	if partitioned {
+		query.Set("partitioned", "true")
+	}
+	if q > 0 {
+		query.Set("q", strconv.Itoa(q))
+	}
+	if enc := query.Encode(); enc != "" {
+		apiPath += "?" + enc
+	}
+	return c.DoJSON(ctx, "PUT", apiPath, nil, nil, "create", fmt.Sprintf("database %q", db))
+}
+
+// DestroyDatabase deletes a database and everything in it.
+func (c *Client) DestroyDatabase(ctx context.Context, db string) error {
+	return c.DoJSON(ctx, "DELETE", "/"+path.Encode(db), nil, nil, "delete", fmt.Sprintf("database %q", db))
+}
+
 func revFromValue(v json.RawMessage) string {
 	if len(v) == 0 {
 		return ""

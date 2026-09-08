@@ -145,3 +145,48 @@ func TestDatabaseExists(t *testing.T) {
 		t.Errorf("DatabaseExists(nope) = %v, %v", ok, err)
 	}
 }
+
+func TestCreateDatabaseSendsPartitionedAndQ(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("PUT", "/mydb", 201, `{"ok":true}`)
+	c := newTestClient(t, srv)
+	if err := c.CreateDatabase(context.Background(), "mydb", true, 4); err != nil {
+		t.Fatal(err)
+	}
+	req := srv.Last("PUT", "/mydb")
+	if req.Query("partitioned") != "true" || req.Query("q") != "4" {
+		t.Errorf("query = %q", req.RawQuery)
+	}
+}
+
+func TestCreateDatabaseOmitsDefaults(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("PUT", "/mydb", 201, `{"ok":true}`)
+	c := newTestClient(t, srv)
+	if err := c.CreateDatabase(context.Background(), "mydb", false, 0); err != nil {
+		t.Fatal(err)
+	}
+	if q := srv.Last("PUT", "/mydb").RawQuery; q != "" {
+		t.Errorf("query = %q, want empty", q)
+	}
+}
+
+func TestCreateDatabaseAlreadyExists(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("PUT", "/mydb", 412, `{"error":"file_exists","reason":"The database could not be created, the file already exists."}`)
+	c := newTestClient(t, srv)
+	err := c.CreateDatabase(context.Background(), "mydb", false, 0)
+	e, ok := AsError(err)
+	if !ok || e.Status != 412 || e.Name != "file_exists" {
+		t.Fatalf("err = %#v", err)
+	}
+}
+
+func TestDestroyDatabase(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("DELETE", "/mydb", 200, `{"ok":true}`)
+	c := newTestClient(t, srv)
+	if err := c.DestroyDatabase(context.Background(), "mydb"); err != nil {
+		t.Fatal(err)
+	}
+}
