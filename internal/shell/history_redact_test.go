@@ -73,6 +73,29 @@ func TestHistoryRedactsCredentialsInTypedLines(t *testing.T) {
 			line: "cat /users/alice@example.com",
 			want: "cat /users/alice@example.com",
 		},
+		// A Mango selector is a single token that can hold an "@" and a ":"
+		// either side of it. Cutting at the last "@" turned the operator's
+		// query into a parse error they could not recover.
+		{
+			name: "a Mango selector matching an email address is stored verbatim",
+			line: `find /db '{"email":{"$eq":"a@b.com"}}'`,
+			want: `find /db '{"email":{"$eq":"a@b.com"}}'`,
+		},
+		{
+			name: "an unquoted JSON document is stored verbatim",
+			line: `put /db/doc {"owner":"sri@example.com","n":1}`,
+			want: `put /db/doc {"owner":"sri@example.com","n":1}`,
+		},
+		{
+			name: "a regex selector is stored verbatim",
+			line: `find /db '{"email":{"$regex":"@corp.com"}}'`,
+			want: `find /db '{"email":{"$regex":"@corp.com"}}'`,
+		},
+		{
+			name: "a schemeless credential with a port is still redacted",
+			line: "connect admin:hunter2@db.example.com:5984 --save",
+			want: "connect db.example.com:5984 --save",
+		},
 		{
 			name: "an ordinary line is untouched",
 			line: "ls /movies --limit 3",

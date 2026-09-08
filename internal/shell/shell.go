@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -96,47 +97,73 @@ func isLineSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c =
 // redactToken strips the userinfo from one word of a command line, leaving
 // anything that is not a credential-carrying URL exactly as it was.
 func redactToken(tok string) string {
-	if !carriesUserinfo(tok) {
+	// Shell quoting is part of the raw line. Analyse and rewrite the quoted
+	// text, then put the quotes back, so 'https://admin:pw@host' is treated
+	// exactly like the bare form and a quoted JSON argument is judged on its
+	// JSON rather than on a stray trailing quote.
+	open, body, closing := splitQuotes(tok)
+	if !carriesUserinfo(body) {
 		return tok
 	}
-	return couch.RedactURL(tok)
+	return open + couch.RedactURL(body) + closing
 }
 
+// splitQuotes peels one matching pair of surrounding shell quotes off a token.
+func splitQuotes(tok string) (open, body, closing string) {
+	if len(tok) >= 2 {
+		q := tok[0]
+		if (q == '\'' || q == '"') && tok[len(tok)-1] == q {
+			return string(q), tok[1 : len(tok)-1], string(q)
+		}
+	}
+	return "", tok, ""
+}
+
+// hostPattern is what the host half of an authority has to look like: a host
+// name or address, optionally with a port. It is the guard that keeps a JSON
+// argument out of the redactor — `{"email":{"$eq":"a@b.com"}}` has an "@" with
+// a ":" before it and would otherwise be cut at the "@", silently rewriting
+// the operator's query into a parse error.
+var hostPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+(:[0-9]+)?$`)
+
+// userPattern is what the user-name half of a schemeless credential has to
+// look like. JSON punctuation and "$" are what a Mango selector brings and a
+// user name does not.
+var userPattern = regexp.MustCompile(`^[A-Za-z0-9._~%+-]+$`)
+
 // carriesUserinfo reports whether tok is a URL, or a schemeless
-// "user:pass@host", whose authority holds userinfo. Surrounding shell quotes
-// are part of the token and are left in place by couch.RedactURL, which cuts
-// only the authority.
+// "user:pass@host", whose authority holds userinfo. Both forms require the
+// host half to look like a host: everything else is an argument that merely
+// contains an "@".
 func carriesUserinfo(tok string) bool {
-	authority := tok
 	if i := strings.Index(tok, "://"); i >= 0 {
-		authority = tok[i+3:]
-	} else if !schemelessCredential(tok) {
-		return false
+		authority := tok[i+3:]
+		if j := strings.IndexAny(authority, "/?#"); j >= 0 {
+			authority = authority[:j]
+		}
+		at := strings.LastIndex(authority, "@")
+		return at > 0 && hostPattern.MatchString(authority[at+1:])
 	}
-	if j := strings.IndexAny(authority, "/?#"); j >= 0 {
-		authority = authority[:j]
-	}
-	return strings.Contains(authority, "@")
+	return schemelessCredential(tok)
 }
 
 // schemelessCredential recognises "user:pass@host", which url.Parse reads as a
 // scheme plus an opaque part rather than as an authority. A password is what
 // makes such a token worth rewriting: a bare "name@host" is an email address or
 // a document id far more often than it is a credential, and rewriting those
-// would corrupt the stored command.
+// would corrupt the stored command. Both halves must also look like an
+// authority — see hostPattern.
 func schemelessCredential(tok string) bool {
 	at := strings.LastIndex(tok, "@")
 	if at <= 0 || at == len(tok)-1 {
 		return false
 	}
 	userinfo, host := tok[:at], tok[at+1:]
-	if !strings.Contains(userinfo, ":") {
+	colon := strings.Index(userinfo, ":")
+	if colon <= 0 {
 		return false
 	}
-	if strings.ContainsAny(userinfo, "/?#") {
-		return false
-	}
-	return !strings.ContainsAny(host, "@/?#")
+	return userPattern.MatchString(userinfo[:colon]) && hostPattern.MatchString(host)
 }
 
 func (h *filteredHistory) GetLine(pos int) (string, error) { return h.src.GetLine(pos) }
