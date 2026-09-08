@@ -21,6 +21,11 @@ const tailDefaultLimit = 25
 // connection.
 const tailDefaultHeartbeatMS = 30000
 
+// tailSeqHint explains the shortened SEQ column, once, under the table. It is
+// only ever seen in table output: the JSON renderers return before a stream's
+// hint is written, and their sequences are whole anyway.
+const tailSeqHint = "Sequences are shortened in the table; use --json for the full value and --since."
+
 // tailDetails is the long help for tail.
 const tailDetails = `Reads the _changes feed of one database, newest changes last. Without --follow
 it reads one page and stops; with --follow it opens the continuous feed and
@@ -30,6 +35,12 @@ keeps reading until you stop it, reconnecting on its own if the feed drops.
 report. It defaults to the beginning of the feed, or to "now" under --follow,
 so a follow shows what happens from the moment you start it.
 
+A CouchDB update sequence is a long opaque string, so the table shows only its
+leading number, which is the part worth reading; a sequence that number cannot
+be taken from is shown whole. The full value is what --json prints and what
+--since takes, so copy it from --json or from the paging hint, never from the
+table.
+
 CouchDB has no partition-scoped changes feed, so tail takes a database path.`
 
 // Tail returns the tail command.
@@ -38,12 +49,13 @@ func Tail() Command {
 		Name:    "tail",
 		Summary: "Read a database's changes feed",
 		Example: `$ cdb tail /movies --limit 3
- SEQ        | ID        | REV                                | DELETED
-------------+-----------+------------------------------------+---------
- 3-g1AAAAFT | tt0211915 | 1-967a00dff5e02add41819138abb3284d | false
- 4-g1AAAAFU | tt2543164 | 2-7051cbe5c8faecd085a3fa619e6e6337 | false
- 5-g1AAAAFV | tt0245429 | 3-825cb35de44c433bfb2df415563a19de | true
+ SEQ | ID        | REV                                | DELETED
+-----+-----------+------------------------------------+---------
+ 3   | tt0211915 | 1-967a00dff5e02add41819138abb3284d | false
+ 4   | tt2543164 | 2-7051cbe5c8faecd085a3fa619e6e6337 | false
+ 5   | tt0245429 | 3-825cb35de44c433bfb2df415563a19de | true
 more changes: tail /movies --since "5-g1AAAAFV"
+Sequences are shortened in the table; use --json for the full value and --since.
 
 $ cdb tail /movies --since "5-g1AAAAFV" --include-docs
 $ cdb tail /movies --follow`,
@@ -99,9 +111,11 @@ $ cdb tail /movies --follow`,
 			}}
 			// A page that came back exactly full is the only signal that more
 			// changes exist. With no limit there is no full page to compare
-			// against and nothing to continue from.
+			// against and nothing to continue from. The hint carries the whole
+			// sequence, because it is what the operator pastes back into
+			// --since, and says once that the column above it does not.
 			if opts.Limit > 0 && len(rows) == opts.Limit {
-				st.Hint = fmt.Sprintf("more changes: tail %s --since %q", t.Path, page.LastSeq)
+				st.Hint = fmt.Sprintf("more changes: tail %s --since %q\n%s", t.Path, page.LastSeq, tailSeqHint)
 			}
 			return st, nil
 		},
@@ -160,15 +174,34 @@ func tailColumns(includeDocs bool) []Column {
 	return cols
 }
 
+// shortSeq is a sequence as the table shows it: the number CouchDB puts before
+// the opaque body, which is the only part of it a person reads. A whole
+// sequence is around a hundred characters and would crowd every other column
+// off the line. Anything not shaped "<digits>-<rest>" is returned whole rather
+// than guessed at, and Row.JSON always keeps the full value.
+func shortSeq(seq string) string {
+	i := strings.IndexByte(seq, '-')
+	if i <= 0 {
+		return seq
+	}
+	for _, c := range []byte(seq[:i]) {
+		if c < '0' || c > '9' {
+			return seq
+		}
+	}
+	return seq[:i]
+}
+
 // tailRow renders one change. Row.JSON is the machine-readable contract:
 // {"seq":…,"id":…,"rev":…,"deleted":…} with "doc" present only under
-// --include-docs, so "tail --json" emits one change per line.
+// --include-docs, so "tail --json" emits one change per line. "seq" is always
+// the full sequence; only the table cell is shortened.
 func tailRow(r couch.ChangeRow, includeDocs bool) Row {
 	rev := ""
 	if len(r.Revs) > 0 {
 		rev = r.Revs[0]
 	}
-	cells := []string{r.Seq, r.ID, rev, strconv.FormatBool(r.Deleted)}
+	cells := []string{shortSeq(r.Seq), r.ID, rev, strconv.FormatBool(r.Deleted)}
 	payload := map[string]any{"seq": r.Seq, "id": r.ID, "rev": rev, "deleted": r.Deleted}
 	if includeDocs {
 		doc := ""

@@ -53,8 +53,12 @@ func TestTailReadsTheNormalFeed(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("got %d rows, want 2", len(rows))
 	}
-	if got := rows[0].Cells; got[0] != "1-x" || got[1] != "a" || got[2] != "1-aa" || got[3] != "false" {
+	// The cell is the sequence's numeric prefix; the JSON keeps it whole.
+	if got := rows[0].Cells; got[0] != "1" || got[1] != "a" || got[2] != "1-aa" || got[3] != "false" {
 		t.Errorf("row 0 cells = %v", got)
+	}
+	if got := string(rows[0].JSON); !strings.Contains(got, `"seq":"1-x"`) {
+		t.Errorf("row 0 JSON = %s, want the full sequence", got)
 	}
 	if got := rows[1].Cells[3]; got != "true" {
 		t.Errorf("row 1 deleted cell = %q, want true", got)
@@ -62,8 +66,10 @@ func TestTailReadsTheNormalFeed(t *testing.T) {
 	if got := string(rows[1].JSON); got != `{"deleted":true,"id":"b","rev":"2-bb","seq":"2-y"}` {
 		t.Errorf("row 1 JSON = %s", got)
 	}
-	// The hint is offered because the page came back exactly full.
-	if want := `more changes: tail /mydb --since "2-y"`; st.Hint != want {
+	// The hint is offered because the page came back exactly full, and it
+	// carries the full sequence plus the one note about the shortened column.
+	want := "more changes: tail /mydb --since \"2-y\"\n" + tailSeqHint
+	if st.Hint != want {
 		t.Errorf("hint = %q, want %q", st.Hint, want)
 	}
 
@@ -143,6 +149,41 @@ func TestTailUsageErrors(t *testing.T) {
 				t.Errorf("message = %q, want it to contain %q", ue.Error(), tc.want)
 			}
 		})
+	}
+}
+
+func TestTailShortensTheSequenceInTheTable(t *testing.T) {
+	const long = "25-g1AAAACLeJzLYWBgYMpgTmHgzcvPy09JdcjLz8gvLskBCScyJNX___8_K4M5kTEXKMBukGhiYZpkia4Yh_Y8FiDJ0ACk_qOYYmKRmpKWYoKuJwsASGwqvA"
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/_changes", 200, `{"results":[
+		{"seq":"`+long+`","id":"a","changes":[{"rev":"1-aa"}]},
+		{"seq":"7","id":"b","changes":[{"rev":"1-bb"}]}],
+		"last_seq":"`+long+`","pending":0}`)
+	s := connected(t, srv)
+
+	res, err := invoke(t, Tail(), s, "/mydb", "--limit", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := res.(Stream)
+	rows := drain(t, st)
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+	if got := rows[0].Cells[0]; got != "25" {
+		t.Errorf("seq cell = %q, want the numeric prefix %q", got, "25")
+	}
+	// A sequence with no "-" has no prefix to take, so it is shown whole.
+	if got := rows[1].Cells[0]; got != "7" {
+		t.Errorf("seq cell = %q, want %q", got, "7")
+	}
+	if got := string(rows[0].JSON); !strings.Contains(got, `"seq":"`+long+`"`) {
+		t.Errorf("row JSON = %s, want the full sequence", got)
+	}
+	// --since is fed from the hint, so the hint must carry the whole thing.
+	want := "more changes: tail /mydb --since \"" + long + "\"\n" + tailSeqHint
+	if st.Hint != want {
+		t.Errorf("hint = %q, want %q", st.Hint, want)
 	}
 }
 
