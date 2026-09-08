@@ -14,6 +14,14 @@ cdb profiles [list | add <name> <url> | remove <name> | default <name>] [flags]
 
 List, add, remove and default saved profiles.
 
+"profiles add" saves a server without connecting to it. A URL with no user name
+and password is asked about on a terminal, the way connect asks: it prompts for
+the user name and the password with echo off, proves them against the server, and
+stores the password in the OS keychain. A profile saved with neither could not log
+in — it would accept every command and then refuse it. Press Enter at the password,
+or pass --anonymous, to save a profile that connects anonymously; without a
+terminal nothing is asked and the URL is stored as typed.
+
 ## Arguments
 
 Takes at most 3 arguments.
@@ -39,6 +47,12 @@ Takes at most 3 arguments.
 ```
 $ cdb profiles add local http://admin:password@localhost:5984/
 Saved profile "local" for http://localhost:5984/. Run "cdb connect local" to use it.
+
+$ cdb profiles add prod https://couch.example.com/
+This server may need a login. Press Enter at the password to connect anonymously.
+Username [admin]: admin
+Password:
+Saved profile "prod" for https://couch.example.com/. Run "cdb connect prod" to use it.
 
 $ cdb profiles list
  NAME  | URL                    | AUTH    | DEFAULT

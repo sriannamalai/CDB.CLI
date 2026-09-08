@@ -304,10 +304,15 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 // credentials because there was nobody to ask for any.
 const anonymousNotice = "Connected anonymously; pass --anonymous to silence this or set CDB_USER/CDB_PASSWORD."
 
-// dial builds a client for an already-resolved profile, proves it works, and
-// attaches it to the session. attachAs is the profile name the session should
-// report, which is "" for a connection that is not (yet) saved.
-func dial(ctx context.Context, s *session.Session, profile config.Profile, attachAs, secret string) (connection, error) {
+// verifyLogin builds a client for an already-resolved profile and proves the
+// credentials are accepted, returning the live client and the server banner it
+// read. A failure closes the client and returns the server's own error, so the
+// caller has nothing to clean up.
+//
+// It is the single place a credential is checked. dial attaches the client it
+// hands back to the session; "profiles add" closes it again, because it is
+// only asking whether the password works before writing it down.
+func verifyLogin(ctx context.Context, profile config.Profile, secret string) (*couch.Client, couch.ServerInfo, error) {
 	cc, err := couch.New(couch.Config{
 		URL:            profile.URL,
 		Auth:           couch.AuthKind(profile.Auth),
@@ -319,27 +324,38 @@ func dial(ctx context.Context, s *session.Session, profile config.Profile, attac
 		UserAgent:      "cdb",
 	})
 	if err != nil {
-		return connection{}, err
+		return nil, couch.ServerInfo{}, err
 	}
 	info, err := cc.ServerInfo(ctx)
 	if err != nil {
 		_ = cc.Close()
-		return connection{}, err
+		return nil, couch.ServerInfo{}, err
 	}
 	// Spec 6.1: the connection is verified with GET /_session, which is what
 	// proves the credentials were accepted; GET / answers for anyone.
 	sess, err := cc.Session(ctx)
 	if err != nil {
 		_ = cc.Close()
-		return connection{}, err
+		return nil, couch.ServerInfo{}, err
 	}
 	// A server with no admins, or a JWT it declines to honour, answers
 	// GET /_session with "name": null and a 200. Asking for authentication and
 	// silently getting none is a failure, not a connection.
 	if sess.Name == "" && profile.Auth != string(couch.AuthNone) {
 		_ = cc.Close()
-		return connection{}, couch.NewError(http.StatusUnauthorized, "unauthorized",
+		return nil, couch.ServerInfo{}, couch.NewError(http.StatusUnauthorized, "unauthorized",
 			"Login succeeded anonymously; check the username.", "authenticate", "server "+cc.Host())
+	}
+	return cc, info, nil
+}
+
+// dial builds a client for an already-resolved profile, proves it works, and
+// attaches it to the session. attachAs is the profile name the session should
+// report, which is "" for a connection that is not (yet) saved.
+func dial(ctx context.Context, s *session.Session, profile config.Profile, attachAs, secret string) (connection, error) {
+	cc, info, err := verifyLogin(ctx, profile, secret)
+	if err != nil {
+		return connection{}, err
 	}
 	if !supportedVersion(info.Version) {
 		fmt.Fprintf(s.Stderr, "warning: this server reports CouchDB %s; cdb supports 3.2 through 3.5.\n", info.Version)
@@ -712,6 +728,12 @@ func Profiles() Command {
 		Example: `$ cdb profiles add local http://admin:password@localhost:5984/
 Saved profile "local" for http://localhost:5984/. Run "cdb connect local" to use it.
 
+$ cdb profiles add prod https://couch.example.com/
+This server may need a login. Press Enter at the password to connect anonymously.
+Username [admin]: admin
+Password:
+Saved profile "prod" for https://couch.example.com/. Run "cdb connect prod" to use it.
+
 $ cdb profiles list
  NAME  | URL                    | AUTH    | DEFAULT
 -------+------------------------+---------+---------
@@ -722,6 +744,13 @@ Default profile is now "local".`,
 		Usage:   "[list | add <name> <url> | remove <name> | default <name>]",
 		MinArgs: 0,
 		MaxArgs: 3,
+		Details: "\"profiles add\" saves a server without connecting to it. A URL with no user name\n" +
+			"and password is asked about on a terminal, the way connect asks: it prompts for\n" +
+			"the user name and the password with echo off, proves them against the server, and\n" +
+			"stores the password in the OS keychain. A profile saved with neither could not log\n" +
+			"in — it would accept every command and then refuse it. Press Enter at the password,\n" +
+			"or pass --anonymous, to save a profile that connects anonymously; without a\n" +
+			"terminal nothing is asked and the URL is stored as typed.",
 		Complete: func(_ context.Context, _ *session.Session, args []string, cur string) []Candidate {
 			if len(args) == 0 {
 				var out []Candidate
@@ -744,7 +773,7 @@ Default profile is now "local".`,
 			}
 			return out
 		},
-		Run: func(_ context.Context, s *session.Session, inv Invocation) (Result, error) {
+		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
 			cfg, err := loadConfig()
 			if err != nil {
 				return nil, err
@@ -785,11 +814,15 @@ Default profile is now "local".`,
 				if err := checkProfileName("profiles", name); err != nil {
 					return nil, err
 				}
+				profile, secret, err := profileToAdd(ctx, s, inv, name, serverURL)
+				if err != nil {
+					return nil, err
+				}
 				// The URL argument may carry userinfo. storeProfile splits it
 				// out, so neither the config file nor the message below can
 				// hold a password: it is the same write path "connect --save"
 				// uses, deliberately, rather than a second one to keep in step.
-				stored, err := storeProfile(name, config.Profile{Name: name, URL: serverURL, Auth: "session"}, "")
+				stored, err := storeProfile(name, profile, secret)
 				if err != nil {
 					return nil, err
 				}
@@ -838,6 +871,56 @@ Default profile is now "local".`,
 		},
 		Destructive: false,
 	}
+}
+
+// profileToAdd settles what "profiles add" is about to write: the profile and
+// the secret that goes with it.
+//
+// A URL typed with no user name and password used to be saved as a session
+// profile with no secret, which is the one profile shape that cannot connect —
+// "cdb connect <name>" then 401s on every command with advice about a password
+// nobody was ever asked for. So on a terminal it asks, with connect's own two
+// questions, and proves the answers against the server before anything is
+// written: a rejected password leaves no profile behind, and the failure is
+// the server's own 401, which reads "Login failed for <user> at <host>".
+//
+// Nothing changes for a URL that carries its own credentials, for --anonymous,
+// which says outright that there are none, or for a script: without a terminal
+// there is nobody to ask, and the profile is stored exactly as 1.1.0 stored
+// it.
+func profileToAdd(ctx context.Context, s *session.Session, inv Invocation, name, serverURL string) (config.Profile, string, error) {
+	profile := config.Profile{Name: name, URL: serverURL, Auth: "session"}
+	_, urlUser, urlSecret := splitURLCredentials(serverURL)
+	switch {
+	case inv.Bool("anonymous") || s.Prefs.Anonymous:
+		profile.Auth = "none"
+		return profile, "", nil
+	case urlUser != "" || urlSecret != "":
+		return profile, "", nil
+	case !s.Prefs.Interactive:
+		return profile, "", nil
+	}
+	user, secret, err := promptForCredentials(s)
+	if err != nil {
+		return config.Profile{}, "", err
+	}
+	if secret == "" {
+		// The same reading connect gives an empty password: "there are none",
+		// not "the password is the empty string". Saved as anonymous, it is a
+		// profile that connects; saved as a session profile with no secret, it
+		// is the profile this asks about in the first place.
+		profile.Auth, profile.Username = "none", ""
+		return profile, "", nil
+	}
+	profile.Username = user
+	cc, _, err := verifyLogin(ctx, profile, secret)
+	if err != nil {
+		return config.Profile{}, "", err
+	}
+	// Verifying a profile is not connecting to it: the session keeps whatever
+	// connection it already had.
+	_ = cc.Close()
+	return profile, secret, nil
 }
 
 // SessionCmd returns the session command.

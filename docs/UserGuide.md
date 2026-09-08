@@ -63,6 +63,23 @@ $ cdb profiles default prod
 $ cdb profiles remove prod
 ```
 
+`profiles add` saves a server without connecting to it, and a URL typed with
+no user name and password is asked about rather than saved as it stands: on a
+terminal it prompts for the user name and the password with echo off, proves
+them against the server, and puts the password in the keychain. A profile with
+neither could not log in, so `cdb connect` on it would accept every command and
+then refuse it. Press Enter at the password, or pass `--anonymous`, to save a
+profile that connects anonymously; in a script, where there is nobody to ask,
+nothing is prompted and the URL is stored as typed.
+
+```
+$ cdb profiles add prod https://couch.example.com/
+This server may need a login. Press Enter at the password to connect anonymously.
+Username [admin]: admin
+Password:
+Saved profile "prod" for https://couch.example.com/. Run "cdb connect prod" to use it.
+```
+
 Profile names may not contain a dot: name one `prod`, not
 `couch.example.com`. Four ways to choose one, in decreasing precedence:
 
