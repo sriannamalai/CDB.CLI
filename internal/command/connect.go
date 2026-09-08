@@ -147,7 +147,13 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 	case nameOrURL != "":
 		p, ok := cfg.Profile(nameOrURL)
 		if !ok {
-			return connection{}, Usagef("connect", "no profile named %q. Run \"cdb profiles list\" to see the saved profiles.", nameOrURL)
+			// A URL with an unexpected scheme reaches here rather than the
+			// branch above. Say so instead of calling it a missing profile —
+			// and redact first: the argument may carry a password.
+			if strings.Contains(nameOrURL, "://") {
+				return connection{}, Usagef("connect", "server URL %q must start with http:// or https://", couch.RedactURL(nameOrURL))
+			}
+			return connection{}, Usagef("connect", "no profile named %q. Run \"cdb profiles list\" to see the saved profiles.", couch.RedactURL(nameOrURL))
 		}
 		profile, profileName = p, nameOrURL
 	default:
@@ -161,7 +167,10 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 		if name != "" {
 			p, ok := cfg.Profile(name)
 			if !ok {
-				return connection{}, Usagef("connect", "no profile named %q. Run \"cdb profiles list\" to see the saved profiles.", name)
+				if strings.Contains(name, "://") {
+					return connection{}, Usagef("connect", "server URL %q must start with http:// or https://", couch.RedactURL(name))
+				}
+				return connection{}, Usagef("connect", "no profile named %q. Run \"cdb profiles list\" to see the saved profiles.", couch.RedactURL(name))
 			}
 			profile, profileName = p, name
 		} else if env.URL != "" {

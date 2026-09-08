@@ -3,6 +3,7 @@ package couch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -56,10 +57,18 @@ func New(cfg Config) (*Client, error) {
 	}
 	u, err := url.Parse(cfg.URL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid server URL %q: %w", cfg.URL, err)
+		// Neither the URL nor url.Error's own text may be printed as it
+		// stands: both repeat whatever the operator typed, password included.
+		// Only the parse failure's reason is safe.
+		reason := err.Error()
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			reason = ue.Err.Error()
+		}
+		return nil, fmt.Errorf("invalid server URL %q: %s", RedactURL(cfg.URL), reason)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("server URL %q must start with http:// or https://", cfg.URL)
+		return nil, fmt.Errorf("server URL %q must start with http:// or https://", RedactURL(cfg.URL))
 	}
 	base := strings.TrimRight(u.String(), "/")
 	// A URL may carry credentials (https://user:pass@host). Keep them on base so
