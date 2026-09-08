@@ -151,9 +151,18 @@ func Backup() Command {
 						refs = append(refs, couch.BulkRef{ID: row.ID, Rev: rev})
 					}
 				}
-				bodies, err := s.Client.BulkGet(ctx, t.Database, refs, true)
+				bodies, failed, err := s.Client.BulkGet(ctx, t.Database, refs, true)
 				if err != nil {
 					return nil, err
+				}
+				// A revision the server cannot hand back — purged or compacted
+				// away since the changes feed named it — is missing data. Skip
+				// it and the footer would claim a completeness the dump does
+				// not have, so stop instead and say which revision was lost.
+				if len(failed) > 0 {
+					e := failed[0]
+					return nil, fmt.Errorf("backup: %d of %d revisions could not be fetched (first: %s@%s: %s); the dump is resumable from its last checkpoint",
+						len(failed), len(refs), e.ID, e.Rev, e.Error)
 				}
 				for _, body := range bodies {
 					stripped, attachments, id, rev, err := splitAttachments(body)

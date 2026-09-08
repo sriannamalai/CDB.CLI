@@ -146,6 +146,49 @@ func TestBackupResumeContinuesFromTheLastCheckpoint(t *testing.T) {
 	}
 }
 
+// A revision the server cannot return is missing data. Backup must stop rather
+// than write a footer over a dump that is quietly short a document.
+func TestBackupAbortsWhenARevisionCannotBeFetched(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb", 200, `{"db_name":"mydb","doc_count":2,"sizes":{"file":1,"external":1},"cluster":{"q":1,"n":1},"props":{}}`)
+	srv.JSONSeq("GET", "/mydb/_changes", 200,
+		`{"results":[{"seq":"1-x","id":"a","changes":[{"rev":"1-aa"}]}],"last_seq":"1-x","pending":1}`,
+		`{"results":[{"seq":"2-y","id":"b","changes":[{"rev":"1-bb"}]}],"last_seq":"2-y","pending":0}`)
+	srv.JSONSeq("POST", "/mydb/_bulk_get", 200,
+		`{"results":[{"id":"a","docs":[{"ok":{"_id":"a","_rev":"1-aa","_revisions":{"start":1,"ids":["aa"]}}}]}]}`,
+		`{"results":[{"id":"b","docs":[{"error":{"id":"b","rev":"1-bb","error":"not_found","reason":"missing"}}]}]}`)
+	s := connected(t, srv)
+	out := filepath.Join(t.TempDir(), "mydb.cdb.gz")
+
+	_, err := invoke(t, Backup(), s, "/mydb", out)
+	if err == nil {
+		t.Fatal("backup reported success despite a revision it could not fetch")
+	}
+	for _, want := range []string{"1 of 1 revisions", "b@1-bb", "not_found"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to mention %q", err, want)
+		}
+	}
+
+	// The partial dump must carry no footer, and must still resume from the
+	// checkpoint the first batch wrote.
+	f, oerr := os.Open(out)
+	if oerr != nil {
+		t.Fatal(oerr)
+	}
+	defer f.Close()
+	res, serr := backup.Scan(f)
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	if res.Complete {
+		t.Error("the aborted dump carries a footer")
+	}
+	if res.Seq != "1-x" || res.Docs != 1 {
+		t.Errorf("resume = %+v, want the 1-x checkpoint with 1 document", res)
+	}
+}
+
 // A dump whose first record is not a header is not a cdb dump: backup.Scan
 // refuses it, so --resume could never continue it. A fresh dump therefore
 // writes a header even when --since starts it part way through the feed.

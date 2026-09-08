@@ -89,12 +89,25 @@ type BulkRef struct {
 	Rev string `json:"rev,omitempty"`
 }
 
+// BulkError is one per-document failure from _bulk_get or _bulk_docs.
+type BulkError struct {
+	ID     string `json:"id"`
+	Rev    string `json:"rev"`
+	Error  string `json:"error"`
+	Reason string `json:"reason"`
+}
+
 // BulkGet fetches full documents. With revs set, each document carries its
-// _revisions history, which restore needs for new_edits=false. Entries the
-// server reports as errors are skipped.
-func (c *Client) BulkGet(ctx context.Context, db string, refs []BulkRef, revs bool) ([]json.RawMessage, error) {
+// _revisions history, which restore needs for new_edits=false.
+//
+// It returns the fetched documents and, separately, every entry the server
+// reported as an error — a revision purged or compacted away between reading
+// the changes feed and fetching it, say. The failures are returned rather than
+// dropped: a caller that silently skipped them would produce a dump missing
+// documents it claims to hold.
+func (c *Client) BulkGet(ctx context.Context, db string, refs []BulkRef, revs bool) ([]json.RawMessage, []BulkError, error) {
 	if len(refs) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	apiPath := "/" + path.Encode(db) + "/_bulk_get"
 	if revs {
@@ -105,31 +118,33 @@ func (c *Client) BulkGet(ctx context.Context, db string, refs []BulkRef, revs bo
 			ID   string `json:"id"`
 			Docs []struct {
 				OK    json.RawMessage `json:"ok"`
-				Error json.RawMessage `json:"error"`
+				Error *BulkError      `json:"error"`
 			} `json:"docs"`
 		} `json:"results"`
 	}
 	req := map[string]any{"docs": refs}
 	if err := c.DoJSON(ctx, "POST", apiPath, req, &body, "read", fmt.Sprintf("documents in %q", db)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var out []json.RawMessage
+	var (
+		out    []json.RawMessage
+		failed []BulkError
+	)
 	for _, r := range body.Results {
 		for _, d := range r.Docs {
-			if len(d.OK) > 0 {
+			switch {
+			case len(d.OK) > 0:
 				out = append(out, d.OK)
+			case d.Error != nil:
+				e := *d.Error
+				if e.ID == "" {
+					e.ID = r.ID
+				}
+				failed = append(failed, e)
 			}
 		}
 	}
-	return out, nil
-}
-
-// BulkError is one per-document failure from _bulk_docs.
-type BulkError struct {
-	ID     string `json:"id"`
-	Rev    string `json:"rev"`
-	Error  string `json:"error"`
-	Reason string `json:"reason"`
+	return out, failed, nil
 }
 
 // BulkDocs writes a batch. With newEdits false, CouchDB keeps each document's

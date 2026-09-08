@@ -41,15 +41,23 @@ func TestBulkGetRequestsRevisions(t *testing.T) {
 		{"id":"a","docs":[{"ok":{"_id":"a","_rev":"1-aa","_revisions":{"start":1,"ids":["aa"]}}}]},
 		{"id":"b","docs":[{"error":{"id":"b","rev":"9-z","error":"not_found","reason":"missing"}}]}]}`)
 	c := newTestClient(t, srv)
-	docs, err := c.BulkGet(context.Background(), "mydb", []BulkRef{{ID: "a", Rev: "1-aa"}, {ID: "b", Rev: "9-z"}}, true)
+	docs, failed, err := c.BulkGet(context.Background(), "mydb", []BulkRef{{ID: "a", Rev: "1-aa"}, {ID: "b", Rev: "9-z"}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(docs) != 1 {
-		t.Fatalf("docs = %d, want 1 (the error entry is skipped)", len(docs))
+		t.Fatalf("docs = %d, want 1", len(docs))
 	}
 	if !strings.Contains(string(docs[0]), "_revisions") {
 		t.Errorf("doc = %s, want _revisions", docs[0])
+	}
+	// The error entry is reported, never dropped: a revision the server cannot
+	// hand back is missing data, not an empty result.
+	if len(failed) != 1 {
+		t.Fatalf("failed = %+v, want the one error entry", failed)
+	}
+	if failed[0] != (BulkError{ID: "b", Rev: "9-z", Error: "not_found", Reason: "missing"}) {
+		t.Errorf("failed[0] = %+v", failed[0])
 	}
 	req := srv.Last("POST", "/mydb/_bulk_get")
 	if req.Query("revs") != "true" {
