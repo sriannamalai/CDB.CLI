@@ -1,0 +1,5 @@
+ NAME  │ DOCS 
+───────┼──────
+ mydb  │   42 
+ other │    7 
+more rows: ls --start "other"
