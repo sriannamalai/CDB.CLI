@@ -18,10 +18,12 @@ func completeShell(t *testing.T) (*Shell, *couchtest.Server) {
 	t.Helper()
 	srv := couchtest.New(t)
 	srv.JSON("GET", "/_all_dbs", 200, `["mydb","mydata","other"]`)
-	srv.JSON("GET", "/mydb/_all_docs", 200, `{"total_rows":3,"offset":0,"rows":[
+	srv.JSON("GET", "/mydb/_all_docs", 200, `{"total_rows":5,"offset":0,"rows":[
 		{"id":"_design/app","key":"_design/app","value":{"rev":"1-c"}},
+		{"id":"caf\u00e9","key":"caf\u00e9","value":{"rev":"1-d"}},
 		{"id":"doc1","key":"doc1","value":{"rev":"1-a"}},
-		{"id":"doc2","key":"doc2","value":{"rev":"1-b"}}]}`)
+		{"id":"doc2","key":"doc2","value":{"rev":"1-b"}},
+		{"id":"my doc","key":"my doc","value":{"rev":"1-e"}}]}`)
 	srv.JSON("GET", "/mydb/_design/app", 200, `{"_id":"_design/app","views":{"by_name":{"map":"function(){}"},"by_date":{"map":"function(){}"}}}`)
 	srv.JSON("POST", "/mydb/_find", 200, `{"docs":[{"_id":"a","name":"alice","age":30}]}`)
 	c, err := couch.New(couch.Config{URL: srv.URL(), Auth: couch.AuthNone})
@@ -142,6 +144,36 @@ func TestCompleteDocumentIDsUsesABoundedPrefixQuery(t *testing.T) {
 	}
 }
 
+func TestCompleteDecodesTheTypedPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		line    string
+		wantKey string
+		want    string
+	}{
+		{"space", "cat /mydb/my%20", "my ", "/mydb/my%20doc"},
+		{"partial rune", "cat /mydb/caf%C3", "caf\xc3", "/mydb/caf%C3%A9"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sh, srv := completeShell(t)
+			_, cands := sh.CompleteLine(context.Background(), tc.line, len(tc.line))
+			if got := values(cands); !contains(got, tc.want) {
+				t.Errorf("candidates = %v, want %q", got, tc.want)
+			}
+			req := srv.Last("GET", "/mydb/_all_docs")
+			if req == nil {
+				t.Fatal("completion made no _all_docs request")
+			}
+			if got := req.Query("startkey_docid"); got != tc.wantKey {
+				t.Errorf("startkey_docid = %q, want %q", got, tc.wantKey)
+			}
+			if got, want := req.Query("endkey_docid"), tc.wantKey+"\ufff0"; got != want {
+				t.Errorf("endkey_docid = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestCompleteViewNames(t *testing.T) {
 	sh, _ := completeShell(t)
 	_, cands := sh.CompleteLine(context.Background(), "query /mydb/_design/app/_view/by_", 33)
@@ -156,6 +188,29 @@ func TestCompleteFieldNames(t *testing.T) {
 	_, cands := sh.CompleteLine(context.Background(), "find /mydb --fields na", 22)
 	if !contains(values(cands), "name") {
 		t.Errorf("candidates = %v, want name", values(cands))
+	}
+}
+
+func TestCompleteFieldNamesSkipsFlagValues(t *testing.T) {
+	for _, line := range []string{
+		"find --limit 5 /mydb --fields na",
+		"find --limit=5 /mydb --fields na",
+	} {
+		t.Run(line, func(t *testing.T) {
+			sh, srv := completeShell(t)
+			_, cands := sh.CompleteLine(context.Background(), line, len(line))
+			if !contains(values(cands), "name") {
+				t.Errorf("candidates = %v, want name", values(cands))
+			}
+			if srv.Last("POST", "/mydb/_find") == nil {
+				t.Error("the field sample did not query /mydb")
+			}
+			for _, r := range srv.Requests() {
+				if r.Method == "POST" && r.Path == "/5/_find" {
+					t.Error("the field sample took the --limit value for a database")
+				}
+			}
+		})
 	}
 }
 

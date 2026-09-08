@@ -201,7 +201,11 @@ func (r *Registry) All() []Command {
 
 // NewFlagSet builds a flag set for a command, with the shared flags every
 // command accepts already declared.
-func (r *Registry) NewFlagSet(c Command) *pflag.FlagSet {
+func (r *Registry) NewFlagSet(c Command) *pflag.FlagSet { return NewFlagSet(c) }
+
+// NewFlagSet builds a command's flag set. It is what both front-ends parse a
+// line with and what completion consults to tell a flag's value from a path.
+func NewFlagSet(c Command) *pflag.FlagSet {
 	fs := pflag.NewFlagSet(c.Name, pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Bool("json", false, "print raw JSON instead of a table")

@@ -339,6 +339,15 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 	// Split the prefix into the directory part that already exists and the
 	// partial last segment being typed.
 	dir, partial := splitPathPrefix(cur)
+	// The line carries percent-encoded segments — path.Encode is what put them
+	// there — while CouchDB keys, and the names it hands back, are raw text.
+	// Every comparison and key bound below therefore works on the decoded
+	// prefix, and only the candidate values are encoded again. A half-typed
+	// escape ("%" with nothing after it) does not decode; the raw text is the
+	// best guess then.
+	if decoded, err := path.Decode(partial); err == nil {
+		partial = decoded
+	}
 	join := func(name string) string {
 		if dir == "" {
 			return name
@@ -371,9 +380,8 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 		}
 		var out []Candidate
 		for _, n := range names {
-			enc := path.Encode(n)
-			if strings.HasPrefix(enc, partial) {
-				out = append(out, Candidate{Value: join(enc), Display: enc, Tag: "databases"})
+			if strings.HasPrefix(n, partial) {
+				out = append(out, Candidate{Value: join(path.Encode(n)), Display: n, Tag: "databases"})
 			}
 		}
 		return out
@@ -458,6 +466,43 @@ func splitPathPrefix(cur string) (dir, partial string) {
 	return cur[:i+1], cur[i+1:]
 }
 
+// positionalArgs drops flag words, and the separate word a non-boolean flag
+// consumes, from a partially typed argument list. Without it the "5" in
+// "find --limit 5 /mydb" would be read as a path.
+func positionalArgs(fs *pflag.FlagSet, args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			return append(out, args[i+1:]...)
+		case strings.HasPrefix(a, "--"):
+			name, _, attached := strings.Cut(a[2:], "=")
+			if !attached && takesValue(fs.Lookup(name)) {
+				i++
+			}
+		case strings.HasPrefix(a, "-") && a != "-":
+			// Only a lone shorthand takes the next word: in a cluster, or with
+			// anything attached, pflag reads the value out of the word itself.
+			body, _, attached := strings.Cut(a[1:], "=")
+			if !attached && len(body) == 1 && takesValue(fs.ShorthandLookup(body)) {
+				i++
+			}
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// takesValue reports whether a flag consumes the word after it. Boolean flags
+// do not; every other type does. An unknown flag is treated as boolean, the
+// safer guess while the line is still being typed: it leaves the next word
+// available as a path instead of swallowing it.
+func takesValue(f *pflag.Flag) bool {
+	return f != nil && f.Value.Type() != "bool"
+}
+
 // CompleteFields completes document field names sampled from the database the
 // session or one of the arguments points at.
 func CompleteFields(ctx context.Context, s *session.Session, args []string, cur string) []Candidate {
@@ -468,10 +513,9 @@ func CompleteFields(ctx context.Context, s *session.Session, args []string, cur 
 	if err != nil {
 		return nil
 	}
-	for _, a := range args {
-		if strings.HasPrefix(a, "-") {
-			continue
-		}
+	// find is the only command that completes field names, so its own flag set
+	// is what says which of the typed words are flag values rather than paths.
+	for _, a := range positionalArgs(NewFlagSet(Find()), args) {
 		if t, terr := s.Resolve(a); terr == nil && t.Database != "" {
 			target = t
 			break
