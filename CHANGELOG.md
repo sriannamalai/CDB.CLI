@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-08
+
+### Added
+
+- `tail`: read a database's `_changes` feed. `--follow` opens CouchDB's
+  continuous feed from `now` and keeps reading, printing each change the
+  moment it arrives rather than buffering a page of them, and reconnecting
+  from the last change it showed after 1s, 2s, 4s, 8s, 16s and then every
+  30s — a deleted database or a rejected token ends the command instead.
+  `--since`, `--limit`, `--include-docs`, `--filter ddoc/name` and
+  `--heartbeat` shape the read; `--json` emits one change per line.
+- `--replication-url`, the profile key `replication_url` and
+  `CDB_REPLICATION_URL`: the address the server should use to reach itself
+  when `replicate` or `cp` writes a replication endpoint. This is the fix for
+  the same-server replication limitation 1.0 shipped with — a container
+  published on `localhost:15984` that calls itself `http://couchdb:5984`, an
+  SSH tunnel, a reverse proxy. The value must be a bare http(s) server
+  address and may not carry a user name or password; credentials still travel
+  in CouchDB's per-endpoint auth object. `info /` shows it when it differs
+  from the connected URL.
+- `backup --tombstones` dumps deleted documents as records carrying
+  `_deleted: true` and their full revision history, so a restore reproduces
+  the deletion and replicates it onward — the other limitation 1.0 shipped
+  with. The dump header records whether deletions were dumped and the footer
+  counts them; `--resume` refuses to continue a dump in the other mode, and
+  `restore` reports how many of the documents it loaded were deletions.
+- Partition-scoped paths: `/db/_partition/<key>/<id>` addresses the document
+  `<key>:<id>`, `/db/_partition/<key>/<id>/<name>` its attachment, and
+  `/db/_partition/<key>/_design/<ddoc>/_view/<name>` runs a view against the
+  partition. `ls`, `cat`, `cd`, `rm`, `edit`, `put`, `attach`, `fetch`,
+  `find`, `query` and tab completion all reach through them. An id that
+  already carries the `<key>:` prefix is used as it is, so a path built by
+  pasting an id out of `ls` names the same document.
+- `resolve` shows how each conflicting revision differs from the current one —
+  field by field, at the top level, with values summarised — instead of an
+  80-character preview of each body. `--diff-full` prints each revision in
+  full instead.
+- Dump format 1.1: the header records the format version and whether
+  deletions were dumped; the footer counts them. Dumps written by 1.0 restore
+  unchanged, and a dump written by a newer cdb is refused by name rather than
+  half-read.
+
+### Fixed
+
+- `find` on a path that is not a database or a partition is a usage error
+  naming the kind, instead of silently querying the whole database the
+  document lives in.
+- Tab completion of an attached flag value (`--fields=na`) reaches the
+  command's own completer instead of matching no flag name, and completion of
+  a comma-separated `--fields`/`--sort` list keeps the fields already typed.
+- `cdb` now proves JWT authentication against a live CouchDB in CI: the
+  handler is enabled on the service container, a hand-minted HS256 token is
+  accepted, and an expired one is reported as an authentication failure
+  (exit 3) rather than a server error.
+
+### Changed
+
+- Nothing removed or renamed. No flag changes meaning and no default changes.
+  Every 1.0 invocation produces 1.0 output, with two visible additions:
+  `info /` may show a `replication url` row, and `resolve`'s chooser shows
+  diffs rather than body previews.
+
+[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.1...v1.1.0
+
 ## [1.0.1] - 2026-09-08
 
 ### Fixed
@@ -132,16 +197,12 @@ CouchDB 3.2 through 3.5.
 
 ### Known limitations
 
-- Same-server replication or copy jobs hand CouchDB the URL `cdb` itself
-  connected with; if the server cannot reach that address from where it
-  runs (a remapped Docker port, an SSH tunnel), the job is accepted and
-  then fails with `econnrefused` — check it with `replications show <id>`.
-- `backup` dumps carry no deletion tombstones, and a conflicted document
-  is counted once per leaf revision rather than once per document.
 - Attachments over 4 MiB are restored in a separate step after the
   document, which bumps the document's revision from the one recorded in
   the dump.
 
-[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.1...HEAD
+  The first two limitations recorded here were addressed in 1.1.0 by
+  `--replication-url` and `backup --tombstones`.
+
 [1.0.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/sriannamalai/CDB.CLI/compare/dc010ee...v1.0.0
