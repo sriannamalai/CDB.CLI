@@ -138,6 +138,16 @@ func (r *Renderer) writeRowJSON(w io.Writer, item command.Row) error {
 	return err
 }
 
+// streamTableChunk is how many rows one rendered table holds. A table needs
+// every cell of a column before it can align that column, so a streamed result
+// cannot be both aligned and unbuffered; the compromise is to align within a
+// page and emit each page as it fills. 200 rows is a few screens — enough that
+// the alignment looks settled, small enough that memory is bounded and the
+// first rows appear immediately. Spec section 10 forbids loading an unbounded
+// result into memory, which is what rendering one table for the whole stream
+// did.
+const streamTableChunk = 200
+
 func (r *Renderer) renderStream(st command.Stream) error {
 	if r.opts.Format == session.FormatRaw || r.opts.Format == session.FormatJSON {
 		for {
@@ -155,19 +165,43 @@ func (r *Renderer) renderStream(st command.Stream) error {
 	}
 	out, done := r.maybePage(r.opts.Height + 1)
 	defer done()
+	// One table per chunk of rows. go-pretty holds every row it is given until
+	// Render, so a single table for the whole stream is a copy of the whole
+	// result in memory and nothing on screen until the last row arrives. A
+	// table per page bounds both: at most streamTableChunk rows are held, and
+	// each page appears as soon as it is full. The cost is that column widths
+	// are settled per page rather than across the whole result, so a later page
+	// may be wider than an earlier one; that is the honest trade for a listing
+	// whose length is not known in advance.
 	t := newTable(out, st.Columns, r.opts.Color, r.opts.Width)
+	pending, total := 0, 0
 	for {
 		row, ok, err := st.Next()
 		if err != nil {
-			t.Render()
+			if pending > 0 {
+				t.Render()
+			}
 			return err
 		}
 		if !ok {
 			break
 		}
 		t.AppendRow(toTableRow(row.Cells))
+		pending++
+		total++
+		if pending >= streamTableChunk {
+			t.Render()
+			t = newTable(out, st.Columns, r.opts.Color, r.opts.Width)
+			pending = 0
+		}
 	}
-	t.Render()
+	// The trailing partial page — or, for a stream that held nothing at all,
+	// the bare header, which is how an empty listing has always been shown. A
+	// stream whose length is an exact multiple of the chunk has already been
+	// fully written, so it gets no second header.
+	if pending > 0 || total == 0 {
+		t.Render()
+	}
 	return nil
 }
 
