@@ -157,9 +157,15 @@ func diffKey(field string, v any) string {
 
 // diffValue summarises one field value for display, shortening it to fit one
 // line of the chooser. It is never the comparison: see diffKey.
+//
+// A JSON null is rendered as "null", the word it is written with: a field
+// added with a null value is a difference the operator is choosing between
+// revisions on, and an empty summary would print it as "added: note " —
+// trailing space and all — as though the value had been rendered and come out
+// blank.
 func diffValue(field string, v any) string {
 	if v == nil {
-		return ""
+		return "null"
 	}
 	if field == "_attachments" {
 		if atts, ok := v.(map[string]any); ok {

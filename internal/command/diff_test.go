@@ -70,6 +70,33 @@ func TestDiffRevisions(t *testing.T) {
 			summary: "no differences from the current revision",
 		},
 		{
+			// A JSON null is a value a document can hold, and it is the value
+			// the chooser is least able to guess at: an empty summary reads as
+			// though the field were rendered and came out blank.
+			name:    "a field added with a null value",
+			winner:  `{"a":1}`,
+			other:   `{"a":1,"note":null}`,
+			summary: "added: note null",
+		},
+		{
+			name:    "a field changed to null",
+			winner:  `{"a":1,"note":"x"}`,
+			other:   `{"a":1,"note":null}`,
+			summary: `changed: note "x" → null`,
+		},
+		{
+			name:    "a field changed from null",
+			winner:  `{"a":1,"note":null}`,
+			other:   `{"a":1,"note":"x"}`,
+			summary: `changed: note null → "x"`,
+		},
+		{
+			name:    "a null field present in both is no difference",
+			winner:  `{"a":1,"note":null}`,
+			other:   `{"a":1,"note":null}`,
+			summary: "no differences from the current revision",
+		},
+		{
 			name:    "a non-object revision stays selectable",
 			winner:  `{"a":1}`,
 			other:   `[1,2,3]`,
