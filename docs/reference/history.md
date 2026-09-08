@@ -35,6 +35,7 @@ on a shell line; the rest belong to the one-shot front end.
 | `--pager` | string |  | pager command, or off |
 | `--path` | string |  | starting virtual path |
 | `--profile` | string |  | connection profile to use, overriding CDB_PROFILE and the default |
+| `--replication-url` | string |  | address the server should use to reach itself for replication, overriding the profile and CDB_REPLICATION_URL |
 | `--url` | string |  | server URL, overriding the profile and CDB_URL |
 | `--verbose` | bool | `false` | include raw status codes and reasons in errors |
 | `--yes` | bool | `false` | skip confirmation prompts |

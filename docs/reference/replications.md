@@ -26,7 +26,9 @@ A same-server replication is written with the URL cdb itself connected with,
 because CouchDB 3.x rejects a bare database name (local_endpoints_not_supported).
 If the server cannot reach that address from where it runs — a remapped Docker
 port, an SSH tunnel — the job is accepted and then fails with econnrefused;
-"replications show <id>" reports it.
+"replications show <id>" reports it. If the server cannot reach the address cdb
+connected with, set --replication-url (or replication_url in the profile) to the
+address the server knows itself by.
 
 ## Arguments
 
@@ -49,6 +51,7 @@ Takes at most 2 arguments.
 | `--pager` | string |  | pager command, or off |
 | `--path` | string |  | starting virtual path |
 | `--profile` | string |  | connection profile to use, overriding CDB_PROFILE and the default |
+| `--replication-url` | string |  | address the server should use to reach itself for replication, overriding the profile and CDB_REPLICATION_URL |
 | `--url` | string |  | server URL, overriding the profile and CDB_URL |
 | `--verbose` | bool | `false` | include raw status codes and reasons in errors |
 | `--yes` | bool | `false` | skip confirmation prompts |

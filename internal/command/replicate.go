@@ -22,7 +22,9 @@ const unreachableEndpointNote = `A same-server replication is written with the U
 because CouchDB 3.x rejects a bare database name (local_endpoints_not_supported).
 If the server cannot reach that address from where it runs — a remapped Docker
 port, an SSH tunnel — the job is accepted and then fails with econnrefused;
-"replications show <id>" reports it.`
+"replications show <id>" reports it. If the server cannot reach the address cdb
+connected with, set --replication-url (or replication_url in the profile) to the
+address the server knows itself by.`
 
 // replicateDetails is the long help for replicate.
 const replicateDetails = `Each endpoint is a database path on the connected server (/mydb) or a full

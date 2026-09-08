@@ -5,12 +5,13 @@ import "strconv"
 // Env holds the CDB_* overrides. An override always wins over the config file
 // and never touches the keyring.
 type Env struct {
-	Profile     string
-	URL         string
-	User        string
-	Password    string
-	Token       string
-	InsecureTLS *bool
+	Profile        string
+	URL            string
+	User           string
+	Password       string
+	Token          string
+	ReplicationURL string
+	InsecureTLS    *bool
 }
 
 // LoadEnv reads the overrides using lookup, which is normally os.LookupEnv.
@@ -20,11 +21,12 @@ func LoadEnv(lookup func(string) (string, bool)) Env {
 		return v
 	}
 	e := Env{
-		Profile:  get("CDB_PROFILE"),
-		URL:      get("CDB_URL"),
-		User:     get("CDB_USER"),
-		Password: get("CDB_PASSWORD"),
-		Token:    get("CDB_TOKEN"),
+		Profile:        get("CDB_PROFILE"),
+		URL:            get("CDB_URL"),
+		User:           get("CDB_USER"),
+		Password:       get("CDB_PASSWORD"),
+		Token:          get("CDB_TOKEN"),
+		ReplicationURL: get("CDB_REPLICATION_URL"),
 	}
 	if raw, ok := lookup("CDB_INSECURE_TLS"); ok && raw != "" {
 		if b, err := strconv.ParseBool(raw); err == nil {
@@ -38,6 +40,9 @@ func LoadEnv(lookup func(string) (string, bool)) Env {
 func (e Env) Apply(p Profile) Profile {
 	if e.URL != "" {
 		p.URL = e.URL
+	}
+	if e.ReplicationURL != "" {
+		p.ReplicationURL = e.ReplicationURL
 	}
 	if e.User != "" {
 		p.Username = e.User

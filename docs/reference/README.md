@@ -44,9 +44,9 @@ before it acts, unless `--yes` is given.
 ## Global flags
 
 Every one-shot subcommand accepts these, before or after its own flags.
-Inside the shell only `--json`, `--yes`, `--verbose` and `--anonymous` are
-accepted on a line; the rest have shell equivalents (`connect`, `cd`) or are
-read from `config.toml` for the whole session.
+Inside the shell only `--json`, `--yes`, `--verbose`, `--anonymous` and
+`--replication-url` are accepted on a line; the rest have shell equivalents
+(`connect`, `cd`) or are read from `config.toml` for the whole session.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
@@ -57,6 +57,7 @@ read from `config.toml` for the whole session.
 | `--pager` | string |  | pager command, or off |
 | `--path` | string |  | starting virtual path |
 | `--profile` | string |  | connection profile to use, overriding CDB_PROFILE and the default |
+| `--replication-url` | string |  | address the server should use to reach itself for replication, overriding the profile and CDB_REPLICATION_URL |
 | `--url` | string |  | server URL, overriding the profile and CDB_URL |
 | `--verbose` | bool | `false` | include raw status codes and reasons in errors |
 | `--yes` | bool | `false` | skip confirmation prompts |

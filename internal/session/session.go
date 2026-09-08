@@ -45,6 +45,10 @@ type Prefs struct {
 	// Anonymous means the operator asked to connect without credentials, so a
 	// server URL that carries none must neither be questioned nor warned about.
 	Anonymous bool
+	// ReplicationURL is the value of the --replication-url flag for this run or
+	// this shell line. It overrides CDB_REPLICATION_URL and the profile key,
+	// mirroring how --url overrides CDB_URL.
+	ReplicationURL string
 }
 
 // DefaultPrefs are the settings used before any config or flag is applied.

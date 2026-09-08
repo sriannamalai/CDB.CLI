@@ -93,9 +93,9 @@ func index(reg *command.Registry) string {
 	}
 	b.WriteString("\n## Global flags\n\n")
 	b.WriteString("Every one-shot subcommand accepts these, before or after its own flags.\n")
-	b.WriteString("Inside the shell only `--json`, `--yes`, `--verbose` and `--anonymous` are\n")
-	b.WriteString("accepted on a line; the rest have shell equivalents (`connect`, `cd`) or are\n")
-	b.WriteString("read from `config.toml` for the whole session.\n\n")
+	b.WriteString("Inside the shell only `--json`, `--yes`, `--verbose`, `--anonymous` and\n")
+	b.WriteString("`--replication-url` are accepted on a line; the rest have shell equivalents\n")
+	b.WriteString("(`connect`, `cd`) or are read from `config.toml` for the whole session.\n\n")
 	b.WriteString(flagTable(globalFlags()))
 	return b.String()
 }

@@ -161,6 +161,7 @@ Every one-shot subcommand accepts these, before or after its own flags:
 |---|---|---|
 | `--profile <name>` | connect with a saved profile instead of the default | use `connect <name>` |
 | `--url <url>` | connect with a server URL instead of a profile | use `connect <url>` |
+| `--replication-url <url>` | address the server should use to reach itself for replication | yes |
 | `--anonymous` | connect without credentials, and do not ask for any | yes |
 | `--json` | raw JSON, one document per line, as when piped | yes |
 | `--yes` | skip confirmation prompts | yes |
@@ -170,7 +171,7 @@ Every one-shot subcommand accepts these, before or after its own flags:
 | `--color auto\|always\|never` | ANSI colour; `NO_COLOR` overrides it | no |
 | `--pager <cmd>` | pager command, or `off` | no |
 
-Inside the shell only the four marked "yes" are accepted on a line; the rest
+Inside the shell only the five marked "yes" are accepted on a line; the rest
 are one-shot flags, and their shell equivalents are the commands named above.
 `--format`, `--color` and `--pager` have no per-line form there and are read
 from `config.toml` for the whole session.
@@ -189,6 +190,7 @@ auth = "session"          # session | jwt | none
 username = "admin"
 insecure_tls = false
 ca_file = ""
+replication_url = "http://couchdb:5984"   # optional; defaults to url
 
 [output]
 format = "table"          # table | json
@@ -206,8 +208,8 @@ an encrypted file under the config directory when none of those is available
 `config.toml` and never accepted as flags.
 
 For scripts and CI, these environment variables override the file and skip
-the keychain entirely: `CDB_PROFILE`, `CDB_URL`, `CDB_USER`, `CDB_PASSWORD`,
-`CDB_TOKEN`, `CDB_INSECURE_TLS`. An explicit `--profile` or `--url` on the
+the keychain entirely: `CDB_PROFILE`, `CDB_URL`, `CDB_REPLICATION_URL`,
+`CDB_USER`, `CDB_PASSWORD`, `CDB_TOKEN`, `CDB_INSECURE_TLS`. An explicit `--profile` or `--url` on the
 command line wins over `CDB_PROFILE`/`CDB_URL`, which in turn win over the
 config file.
 
@@ -270,12 +272,21 @@ CouchDB has no partition-scoped changes feed, so `tail` takes a database path.
 
 ### Replication and same-server jobs
 
-`replicate` and `cp` between two databases on the same server hand CouchDB the
-URL `cdb` itself connected with (CouchDB rejects a bare database name). If the
-server cannot reach that address from where it runs — a remapped Docker port,
-an SSH tunnel — the job is still accepted, and then fails with `econnrefused`;
-check it with `replications show <id>`. Credentials for these jobs are stored
-in CouchDB's own `_replicator` database, as CouchDB requires.
+`replicate` and `cp` between two databases on the same server hand CouchDB a
+full URL to dial, because CouchDB rejects a bare database name. By default that
+is the URL `cdb` itself connected with, which is wrong whenever the two do not
+agree — a container published on `localhost:15984` that calls itself
+`http://couchdb:5984`, an SSH tunnel, a reverse proxy; the job is accepted and
+then fails with `econnrefused`, which `replications show <id>` reports.
+
+Set `--replication-url http://couchdb:5984` (or `replication_url` in the
+profile, or `CDB_REPLICATION_URL`) to the address the server knows itself by.
+It is a server address, not a database one, and it must not carry a user name
+or password: `cdb` sends the profile's credentials in CouchDB's own
+per-endpoint auth object instead, where they are stored in the `_replicator`
+database as CouchDB requires. `info /` shows the value when it differs from the
+connected URL; `profiles list` does not show it, so its columns stay stable for
+scripts.
 
 ### Backup and restore
 

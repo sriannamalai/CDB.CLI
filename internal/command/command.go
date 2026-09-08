@@ -224,6 +224,11 @@ func NewFlagSet(c Command) *pflag.FlagSet {
 	// so every command can be the one that reaches a server URL carrying no
 	// credentials.
 	fs.Bool("anonymous", false, "connect without credentials, and do not ask for any")
+	// Shared for the same reason as --anonymous: every command auto-connects,
+	// so every command can be the one that opens the connection a replication
+	// endpoint will be written from. "connect --replication-url … --save"
+	// persists it.
+	fs.String("replication-url", "", "address the server should use to reach itself for replication")
 	if c.Flags != nil {
 		c.Flags(fs)
 	}

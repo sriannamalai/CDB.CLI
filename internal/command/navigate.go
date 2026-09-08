@@ -325,6 +325,12 @@ $ cdb info /`,
 					return nil, err
 				}
 				add("url", s.Client.URL())
+				// Only when it differs, so the common case stays uncluttered.
+				// Validation guarantees the value carries no credentials, so
+				// it is safe to render.
+				if r := s.Client.ReplicationURL(); r != s.Client.URL() {
+					add("replication url", r)
+				}
 				add("version", si.Version)
 				add("vendor", si.Vendor)
 				add("features", strings.Join(si.Features, ", "))

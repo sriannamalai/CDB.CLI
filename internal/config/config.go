@@ -26,6 +26,10 @@ type Profile struct {
 	Username    string `koanf:"username"`
 	InsecureTLS bool   `koanf:"insecure_tls"`
 	CAFile      string `koanf:"ca_file"`
+	// ReplicationURL is the address the server should use to reach itself for
+	// a replication this profile starts. Optional; empty means "use URL". It
+	// is a plain address and never a secret, so it lives here beside URL.
+	ReplicationURL string `koanf:"replication_url"`
 }
 
 // Output holds rendering preferences.
@@ -103,11 +107,12 @@ func (c *Config) Save(path string) error {
 	profiles := map[string]any{}
 	for name, p := range c.Profiles {
 		profiles[name] = map[string]any{
-			"url":          p.URL,
-			"auth":         p.Auth,
-			"username":     p.Username,
-			"insecure_tls": p.InsecureTLS,
-			"ca_file":      p.CAFile,
+			"url":             p.URL,
+			"auth":            p.Auth,
+			"username":        p.Username,
+			"insecure_tls":    p.InsecureTLS,
+			"ca_file":         p.CAFile,
+			"replication_url": p.ReplicationURL,
 		}
 	}
 	m := map[string]any{

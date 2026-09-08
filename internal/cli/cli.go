@@ -85,6 +85,7 @@ func NewRoot(reg *command.Registry, s *session.Session, build BuildInfo) *cobra.
 func GlobalFlags(pf *pflag.FlagSet) {
 	pf.String("profile", "", "connection profile to use, overriding CDB_PROFILE and the default")
 	pf.String("url", "", "server URL, overriding the profile and CDB_URL")
+	pf.String("replication-url", "", "address the server should use to reach itself for replication, overriding the profile and CDB_REPLICATION_URL")
 	pf.String("path", "", "starting virtual path")
 	pf.String("format", "", "output format: table or json")
 	pf.String("color", "", "colour: auto, always or never")
@@ -172,6 +173,9 @@ func applyGlobalFlags(c *cobra.Command, s *session.Session) {
 	// Read before the auto-connect below, which is what acts on it.
 	if v, err := flags.GetBool("anonymous"); err == nil && v {
 		s.Prefs.Anonymous = true
+	}
+	if v, err := flags.GetString("replication-url"); err == nil && v != "" {
+		s.Prefs.ReplicationURL = v
 	}
 	if v, err := flags.GetString("format"); err == nil && v != "" {
 		s.Prefs.Format = session.Format(v)

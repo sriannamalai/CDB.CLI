@@ -226,6 +226,12 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 		bare = false
 	}
 	profile = env.Apply(profile)
+	// The flag wins over CDB_REPLICATION_URL, which Env.Apply has just layered
+	// over the profile key — the same order --url, CDB_URL and the profile's
+	// url follow.
+	if s.Prefs.ReplicationURL != "" {
+		profile.ReplicationURL = s.Prefs.ReplicationURL
+	}
 
 	// CDB_PASSWORD and CDB_TOKEN bypass the keyring entirely: the environment
 	// is the override of last resort and must not be second-guessed by, or
@@ -298,13 +304,14 @@ const anonymousNotice = "Connected anonymously; pass --anonymous to silence this
 // report, which is "" for a connection that is not (yet) saved.
 func dial(ctx context.Context, s *session.Session, profile config.Profile, attachAs, secret string) (connection, error) {
 	cc, err := couch.New(couch.Config{
-		URL:         profile.URL,
-		Auth:        couch.AuthKind(profile.Auth),
-		Username:    profile.Username,
-		Secret:      secret,
-		InsecureTLS: profile.InsecureTLS,
-		CAFile:      profile.CAFile,
-		UserAgent:   "cdb",
+		URL:            profile.URL,
+		Auth:           couch.AuthKind(profile.Auth),
+		Username:       profile.Username,
+		Secret:         secret,
+		InsecureTLS:    profile.InsecureTLS,
+		CAFile:         profile.CAFile,
+		ReplicationURL: profile.ReplicationURL,
+		UserAgent:      "cdb",
 	})
 	if err != nil {
 		return connection{}, err

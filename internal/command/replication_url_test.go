@@ -1,0 +1,153 @@
+package command
+
+import (
+	"bytes"
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/sriannamalai/CDB.CLI/internal/config"
+	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
+	"github.com/sriannamalai/CDB.CLI/internal/session"
+)
+
+// newSession returns a disconnected session with buffered streams.
+func newSession(t *testing.T) *session.Session {
+	t.Helper()
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	return s
+}
+
+func TestReplicationURLComesFromTheProfile(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/_replicator", 201, `{"ok":true,"id":"job1","rev":"1-a"}`)
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{
+		Name:           "local",
+		URL:            srv.URL(),
+		Auth:           "none",
+		ReplicationURL: "http://couchdb:5984",
+	})
+	withDeps(t, cfg, nil)
+
+	s := newSession(t)
+	if err := Open(context.Background(), s, "local"); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Detach()
+
+	if _, err := invoke(t, Replicate(), s, "/src", "/dst"); err != nil {
+		t.Fatal(err)
+	}
+	body := string(srv.Last("POST", "/_replicator").Body)
+	if !strings.Contains(body, `"url":"http://couchdb:5984/src"`) {
+		t.Errorf("_replicator body did not use the replication URL: %s", body)
+	}
+	if strings.Contains(body, srv.URL()) {
+		t.Errorf("_replicator body still names the client URL: %s", body)
+	}
+}
+
+func TestReplicationURLEnvironmentBeatsTheProfile(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/_replicator", 201, `{"ok":true,"id":"job1","rev":"1-a"}`)
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "local", URL: srv.URL(), Auth: "none", ReplicationURL: "http://from-file:5984"})
+	withDeps(t, cfg, map[string]string{"CDB_REPLICATION_URL": "http://from-env:5984"})
+
+	s := newSession(t)
+	if err := Open(context.Background(), s, "local"); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Detach()
+	if got := s.Client.ReplicationURL(); got != "http://from-env:5984" {
+		t.Errorf("ReplicationURL() = %q, want the environment's value", got)
+	}
+}
+
+func TestReplicationURLFlagBeatsTheEnvironment(t *testing.T) {
+	srv := couchtest.New(t)
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "local", URL: srv.URL(), Auth: "none", ReplicationURL: "http://from-file:5984"})
+	withDeps(t, cfg, map[string]string{"CDB_REPLICATION_URL": "http://from-env:5984"})
+
+	s := newSession(t)
+	s.Prefs.ReplicationURL = "http://from-flag:5984"
+	if err := Open(context.Background(), s, "local"); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Detach()
+	if got := s.Client.ReplicationURL(); got != "http://from-flag:5984" {
+		t.Errorf("ReplicationURL() = %q, want the flag's value", got)
+	}
+}
+
+func TestInfoShowsTheReplicationURLOnlyWhenItDiffers(t *testing.T) {
+	srv := couchtest.New(t)
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "local", URL: srv.URL(), Auth: "none"})
+	withDeps(t, cfg, nil)
+
+	s := newSession(t)
+	if err := Open(context.Background(), s, "local"); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Detach()
+
+	res, err := invoke(t, Info(), s, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range res.(Rows).Items {
+		if row.Cells[0] == "replication url" {
+			t.Fatal("info / showed a replication url row when none is configured")
+		}
+	}
+
+	s.Detach()
+	withDeps(t, cfg, map[string]string{"CDB_REPLICATION_URL": "http://couchdb:5984"})
+	if err := Open(context.Background(), s, "local"); err != nil {
+		t.Fatal(err)
+	}
+	res, err = invoke(t, Info(), s, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, row := range res.(Rows).Items {
+		if row.Cells[0] == "replication url" {
+			found = true
+			if row.Cells[1] != "http://couchdb:5984" {
+				t.Errorf("replication url row = %v", row.Cells)
+			}
+		}
+	}
+	if !found {
+		t.Error("info / did not show the configured replication url")
+	}
+}
+
+func TestProfileRoundTripsTheReplicationURL(t *testing.T) {
+	path := withDeps(t, config.Defaults(), nil)
+	stored, err := storeProfile("local", config.Profile{
+		Name:           "local",
+		URL:            "http://localhost:15984",
+		Auth:           "none",
+		ReplicationURL: "http://couchdb:5984",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ReplicationURL != "http://couchdb:5984" {
+		t.Errorf("stored profile = %+v", stored)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := cfg.Profile("local")
+	if p.ReplicationURL != "http://couchdb:5984" {
+		t.Errorf("reloaded profile = %+v", p)
+	}
+}

@@ -381,9 +381,11 @@ func (sh *Shell) RunLine(ctx context.Context, input string) error {
 	// (--json is not a preference; it reaches the renderer as forceJSON below.)
 	prevYes, prevVerbose := sh.sess.Prefs.Yes, sh.sess.Prefs.Verbose
 	prevAnon := sh.sess.Prefs.Anonymous
+	prevReplication := sh.sess.Prefs.ReplicationURL
 	defer func() {
 		sh.sess.Prefs.Yes, sh.sess.Prefs.Verbose = prevYes, prevVerbose
 		sh.sess.Prefs.Anonymous = prevAnon
+		sh.sess.Prefs.ReplicationURL = prevReplication
 	}()
 	if v, ferr := fs.GetBool("yes"); ferr == nil && v {
 		sh.sess.Prefs.Yes = true
@@ -395,6 +397,11 @@ func (sh *Shell) RunLine(ctx context.Context, input string) error {
 	// before "connect" runs: openProfile is what acts on it.
 	if v, ferr := fs.GetBool("anonymous"); ferr == nil && v {
 		sh.sess.Prefs.Anonymous = true
+	}
+	// Like --anonymous, this has to be on the session before the auto-connect
+	// below: openProfile is what acts on it.
+	if v, ferr := fs.GetString("replication-url"); ferr == nil && v != "" {
+		sh.sess.Prefs.ReplicationURL = v
 	}
 	if c.NeedsClient && !sh.sess.Connected() {
 		if err := command.Open(ctx, sh.sess, ""); err != nil {
