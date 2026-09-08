@@ -48,6 +48,28 @@ func (sh *Shell) CompleteLine(ctx context.Context, line string, cursor int) (str
 		return word, nil
 	}
 
+	// An attached flag value ("--fields=na") is not a flag name: it is a value
+	// for a declared flag, and only the command's own Complete knows what
+	// belongs there. Without this the word falls into the flag-name branch
+	// below and matches nothing, because no flag is called "fields=na".
+	if name, value, ok := attachedFlagValue(sh.reg.NewFlagSet(c), word); ok {
+		if c.Complete == nil {
+			return word, nil
+		}
+		settled := append(append([]string{}, fields[1:]...), "--"+name)
+		cands := c.Complete(ctx, sh.sess, settled, value)
+		prefix := "--" + name + "="
+		for i := range cands {
+			// Only the value the editor will insert carries the prefix;
+			// Display is left alone so the menu still shows bare names.
+			if cands[i].Display == "" {
+				cands[i].Display = cands[i].Value
+			}
+			cands[i].Value = prefix + cands[i].Value
+		}
+		return word, cands
+	}
+
 	// Completing a flag name.
 	if strings.HasPrefix(word, "-") {
 		var out []command.Candidate
@@ -95,6 +117,24 @@ func splitForCompletion(head string) ([]string, string) {
 		return nil, ""
 	}
 	return parsed.Argv[:len(parsed.Argv)-1], parsed.Argv[len(parsed.Argv)-1]
+}
+
+// attachedFlagValue splits "--name=value" when name is a declared flag of the
+// command that takes a value. A bool flag is excluded: "--explain=true" is
+// legal pflag syntax, but there is nothing to complete after the "=".
+func attachedFlagValue(fs *pflag.FlagSet, word string) (name, value string, ok bool) {
+	if !strings.HasPrefix(word, "--") {
+		return "", "", false
+	}
+	name, value, found := strings.Cut(strings.TrimPrefix(word, "--"), "=")
+	if !found || name == "" {
+		return "", "", false
+	}
+	f := fs.Lookup(name)
+	if f == nil || f.Value.Type() == "bool" {
+		return "", "", false
+	}
+	return name, value, true
 }
 
 // unquotedPipe reports the index of the first "|" outside quotes, or -1.

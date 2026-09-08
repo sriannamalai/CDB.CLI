@@ -618,10 +618,18 @@ func CompleteFields(ctx context.Context, s *session.Session, args []string, cur 
 	if err != nil {
 		return nil
 	}
+	// --fields and --sort are StringSlice flags, so "title,ye" is one word.
+	// Everything up to and including the last comma is already settled; only
+	// the remainder is matched, and each candidate carries the settled part
+	// back so accepting one does not throw the earlier fields away.
+	prefix, match := "", cur
+	if i := strings.LastIndex(cur, ","); i >= 0 {
+		prefix, match = cur[:i+1], cur[i+1:]
+	}
 	var out []Candidate
 	for _, f := range fields {
-		if strings.HasPrefix(f, cur) {
-			out = append(out, Candidate{Value: f, Tag: "fields"})
+		if strings.HasPrefix(f, match) {
+			out = append(out, Candidate{Value: prefix + f, Display: f, Tag: "fields"})
 		}
 	}
 	return out
