@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/spf13/pflag"
+	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/path"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
@@ -109,7 +110,16 @@ func Cp() Command {
 				if src.Database != dst.Database {
 					return nil, Usagef("cp", "COPY only works inside one database; use \"cat %s | put %s\" to move a document between databases", src.Path, dst.Path)
 				}
-				rev, err := s.Client.CopyDocument(ctx, src.Database, src.DocID, dst.DocID, "")
+				dstRev, err := s.Client.GetRev(ctx, dst.Database, dst.DocID)
+				if err != nil {
+					// A missing destination is the create case, not a failure:
+					// CopyDocument is then told to create rather than overwrite.
+					if ce, ok := couch.AsError(err); !ok || ce.Status != 404 {
+						return nil, err
+					}
+					dstRev = ""
+				}
+				rev, err := s.Client.CopyDocument(ctx, src.Database, src.DocID, dst.DocID, dstRev)
 				if err != nil {
 					return nil, err
 				}
@@ -123,9 +133,18 @@ func Cp() Command {
 
 // copyDatabase writes a one-shot _replicator document. Task 20 replaces the
 // body of this function with a call to replicate.Create.
+//
+// source and target are the bare, encoded database names, not full URLs.
+// Client.URL() is deliberately stripped of userinfo (it is safe to print,
+// log, or put in an error message), so building a URL from it here would
+// hand the replicator a remote HTTP endpoint with no credentials attached; on
+// any authenticated server the replication then fails asynchronously with a
+// 401 that "cp" never sees, while still reporting success. A bare name tells
+// CouchDB to replicate the local database directly, with no credentials in
+// the document at all.
 func copyDatabase(ctx context.Context, s *session.Session, src, dst path.Target) (Result, error) {
-	source := s.Client.URL() + "/" + path.Encode(src.Database)
-	target := s.Client.URL() + "/" + path.Encode(dst.Database)
+	source := path.Encode(src.Database)
+	target := path.Encode(dst.Database)
 	doc := map[string]any{
 		"source":        source,
 		"target":        target,

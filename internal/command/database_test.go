@@ -103,6 +103,42 @@ func TestCpCopiesADocument(t *testing.T) {
 	}
 }
 
+func TestCpOnAFreshDestinationSendsNoRev(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.On("HEAD", "/mydb/doc2", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) })
+	srv.JSON("COPY", "/mydb/doc1", 201, `{"ok":true,"id":"doc2","rev":"1-x"}`)
+	s := connected(t, srv)
+	s.SetPath("/mydb")
+	if _, err := invoke(t, Cp(), s, "doc1", "doc2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.Last("COPY", "/mydb/doc1").Header.Get("Destination"); got != "doc2" {
+		t.Errorf("Destination = %q, want no rev for a fresh destination", got)
+	}
+}
+
+func TestCpOverwritesAnExistingDestination(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.On("HEAD", "/mydb/doc2", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("ETag", `"3-old"`)
+		w.WriteHeader(200)
+	})
+	srv.JSON("COPY", "/mydb/doc1", 201, `{"ok":true,"id":"doc2","rev":"4-new"}`)
+	s := connected(t, srv)
+	s.SetPath("/mydb")
+	res, err := invoke(t, Cp(), s, "doc1", "doc2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, ok := res.(Message)
+	if !ok || !strings.Contains(msg.Text, "4-new") {
+		t.Errorf("result = %#v", res)
+	}
+	if got := srv.Last("COPY", "/mydb/doc1").Header.Get("Destination"); got != "doc2?rev=3-old" {
+		t.Errorf("Destination = %q, want doc2?rev=3-old (overwrite the current revision)", got)
+	}
+}
+
 func TestCpPreservesADestinationIDWithASpace(t *testing.T) {
 	srv := couchtest.New(t)
 	srv.JSON("COPY", "/mydb/doc1", 201, `{"ok":true,"id":"doc 2","rev":"1-x"}`)
@@ -130,9 +166,16 @@ func TestCpBetweenDatabasesStartsAReplication(t *testing.T) {
 		t.Fatalf("result is %T, want Message", res)
 	}
 	body := string(srv.Last("POST", "/_replicator").Body)
-	for _, want := range []string{`"source"`, `"target"`, "/src", "/dst"} {
+	// The document must name the databases locally ("src", "dst"), not as full
+	// URLs: Client.URL() carries no credentials, so a URL-shaped source/target
+	// would make the replicator hit an authenticated server with none and fail
+	// asynchronously while cp still reports success.
+	for _, want := range []string{`"source":"src"`, `"target":"dst"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("_replicator body %s is missing %s", body, want)
 		}
+	}
+	if strings.Contains(body, "http") {
+		t.Errorf("_replicator body %s embeds a URL; want bare database names", body)
 	}
 }
