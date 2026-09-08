@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/path"
+	"github.com/sriannamalai/CDB.CLI/internal/replicate"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
 
@@ -136,28 +137,28 @@ func Cp() Command {
 	}
 }
 
-// copyDatabase writes a one-shot _replicator document. Task 20 replaces the
-// body of this function with a call to replicate.Create.
-//
-// source and target are built by Client.ReplicationEndpoint, which is a full
-// URL plus a per-endpoint credential object, not a bare database name: CouchDB
-// 3.x rejects a bare name outright (403 local_endpoints_not_supported), and
-// Client.URL() alone carries no credentials, so either one on its own either
-// fails the write or fails the replication later with an unseen 401. The
-// endpoint map may hold a plaintext password or bearer token, so it is handed
-// straight to DoJSON and never touches the Result this function returns.
+// copyDatabase starts a one-shot replication from src to dst. It is the same
+// replication "replicate" performs, and it goes through the same package, so
+// that the endpoint rules live in exactly one place: CouchDB 3.x rejects a
+// bare database name (403 local_endpoints_not_supported), so each endpoint is
+// a full URL plus a per-endpoint credential object that never leaves the
+// request body.
 func copyDatabase(ctx context.Context, s *session.Session, src, dst path.Target) (Result, error) {
-	doc := map[string]any{
-		"source":        s.Client.ReplicationEndpoint(src.Database),
-		"target":        s.Client.ReplicationEndpoint(dst.Database),
-		"create_target": true,
-		"continuous":    false,
+	source, err := replicate.ResolveEndpoint(s.Client, s.Path(), src.Path)
+	if err != nil {
+		return nil, Usagef("cp", "%v", err)
 	}
-	var out struct {
-		ID string `json:"id"`
+	target, err := replicate.ResolveEndpoint(s.Client, s.Path(), dst.Path)
+	if err != nil {
+		return nil, Usagef("cp", "%v", err)
 	}
-	if err := s.Client.DoJSON(ctx, "POST", "/_replicator", doc, &out, "create", "replication"); err != nil {
+	id, err := replicate.Create(ctx, s.Client, replicate.Request{
+		Source:       source,
+		Target:       target,
+		CreateTarget: true,
+	})
+	if err != nil {
 		return nil, err
 	}
-	return Message{Text: fmt.Sprintf("Started replication %s from %s to %s. Run \"cdb replications\" to watch it.", out.ID, src.Path, dst.Path)}, nil
+	return Message{Text: fmt.Sprintf("Started replication %s from %s to %s. Run \"cdb replications\" to watch it.", id, src.Path, dst.Path)}, nil
 }

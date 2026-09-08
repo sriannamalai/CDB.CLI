@@ -100,6 +100,10 @@ type Command struct {
 	Summary string
 	// Usage is the argument synopsis, e.g. "<path> [file]".
 	Usage string
+	// Details is optional prose shown by "help <command>" and by "cdb help
+	// <command>", under the one-line summary. It is where a command documents
+	// a caveat that does not fit on the summary line.
+	Details string
 	// Flags declares the command's flags on a fresh flag set.
 	Flags   func(*pflag.FlagSet)
 	MinArgs int

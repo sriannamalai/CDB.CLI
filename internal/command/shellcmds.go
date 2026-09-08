@@ -71,6 +71,9 @@ func Help(reg *Registry) Command {
 				if len(c.Aliases) > 0 {
 					text += "\n  aliases: " + strings.Join(c.Aliases, ", ")
 				}
+				if c.Details != "" {
+					text += "\n\n" + c.Details
+				}
 				if c.Flags != nil {
 					fs := reg.NewFlagSet(c)
 					text += "\n\n" + fs.FlagUsages()

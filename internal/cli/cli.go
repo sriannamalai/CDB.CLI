@@ -90,10 +90,15 @@ func newSubcommand(reg *command.Registry, c command.Command, s *session.Session)
 	if c.Usage != "" {
 		use += " " + c.Usage
 	}
+	long := c.Summary
+	if c.Details != "" {
+		long += "\n\n" + c.Details
+	}
 	sub := &cobra.Command{
 		Use:                use,
 		Aliases:            c.Aliases,
 		Short:              c.Summary,
+		Long:               long,
 		SilenceUsage:       true,
 		SilenceErrors:      true,
 		DisableFlagParsing: false,

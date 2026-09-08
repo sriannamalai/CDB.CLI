@@ -23,6 +23,8 @@ func Default() *Registry {
 	r.Register(Cp())
 	r.Register(Conflicts())
 	r.Register(Resolve())
+	r.Register(Replicate())
+	r.Register(Replications())
 	r.Register(Backup())
 	r.Register(Restore())
 	r.Register(History())
