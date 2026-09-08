@@ -14,6 +14,7 @@ import (
 
 	"github.com/reeflective/readline"
 	"github.com/sriannamalai/CDB.CLI/internal/command"
+	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/render"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
@@ -36,9 +37,10 @@ type Shell struct {
 }
 
 // filteredHistory wraps a readline history source so that only lines cdb could
-// parse, and that differ from the line before them, are recorded. Spec section
-// 7 requires the history to be deduplicated and to exclude unparseable lines,
-// and readline writes every accepted line straight through to its source.
+// parse, and that differ from the line before them, are recorded, and so that
+// no line it records carries a credential. Spec section 7 requires the history
+// to be deduplicated and to exclude unparseable lines, and readline writes
+// every accepted line straight through to its source.
 type filteredHistory struct{ src readline.History }
 
 func (h *filteredHistory) Write(line string) (int, error) {
@@ -49,12 +51,92 @@ func (h *filteredHistory) Write(line string) (int, error) {
 	if _, err := Parse(line); err != nil {
 		return h.src.Len(), nil
 	}
+	// Redact before the dedup check, so what is compared is what is stored.
+	line = redactLine(line)
 	if n := h.src.Len(); n > 0 {
 		if last, err := h.src.GetLine(n - 1); err == nil && last == line {
 			return n, nil
 		}
 	}
 	return h.src.Write(line)
+}
+
+// redactLine rewrites any credential a typed line carries. The history file
+// outlives the session and the "history" command prints every stored line to
+// stdout, so `connect https://admin:pw@host` would otherwise put a password in
+// both — and the global rule is that a secret never reaches stdout, stderr, a
+// log or a file. The line is rewritten rather than dropped so that what is
+// stored is still a command the operator can re-run, and only the tokens that
+// are recognisably a server URL are touched: a document id that merely
+// contains an "@" must survive intact.
+func redactLine(line string) string {
+	var b strings.Builder
+	b.Grow(len(line))
+	start := -1
+	for i := 0; i <= len(line); i++ {
+		if i < len(line) && !isLineSpace(line[i]) {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 {
+			b.WriteString(redactToken(line[start:i]))
+			start = -1
+		}
+		if i < len(line) {
+			b.WriteByte(line[i])
+		}
+	}
+	return b.String()
+}
+
+func isLineSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+
+// redactToken strips the userinfo from one word of a command line, leaving
+// anything that is not a credential-carrying URL exactly as it was.
+func redactToken(tok string) string {
+	if !carriesUserinfo(tok) {
+		return tok
+	}
+	return couch.RedactURL(tok)
+}
+
+// carriesUserinfo reports whether tok is a URL, or a schemeless
+// "user:pass@host", whose authority holds userinfo. Surrounding shell quotes
+// are part of the token and are left in place by couch.RedactURL, which cuts
+// only the authority.
+func carriesUserinfo(tok string) bool {
+	authority := tok
+	if i := strings.Index(tok, "://"); i >= 0 {
+		authority = tok[i+3:]
+	} else if !schemelessCredential(tok) {
+		return false
+	}
+	if j := strings.IndexAny(authority, "/?#"); j >= 0 {
+		authority = authority[:j]
+	}
+	return strings.Contains(authority, "@")
+}
+
+// schemelessCredential recognises "user:pass@host", which url.Parse reads as a
+// scheme plus an opaque part rather than as an authority. A password is what
+// makes such a token worth rewriting: a bare "name@host" is an email address or
+// a document id far more often than it is a credential, and rewriting those
+// would corrupt the stored command.
+func schemelessCredential(tok string) bool {
+	at := strings.LastIndex(tok, "@")
+	if at <= 0 || at == len(tok)-1 {
+		return false
+	}
+	userinfo, host := tok[:at], tok[at+1:]
+	if !strings.Contains(userinfo, ":") {
+		return false
+	}
+	if strings.ContainsAny(userinfo, "/?#") {
+		return false
+	}
+	return !strings.ContainsAny(host, "@/?#")
 }
 
 func (h *filteredHistory) GetLine(pos int) (string, error) { return h.src.GetLine(pos) }

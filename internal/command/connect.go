@@ -352,15 +352,26 @@ func Connect() Command {
 }
 
 // saveConnection writes the live connection to the config file under name, and
-// its secret to the keyring. The secret never reaches the config file, and
-// neither does a password carried in the URL's userinfo: that moves into the
-// keyring too, leaving a profile that reconnects the same way.
+// its secret to the keyring, then records the profile on the session.
 func saveConnection(s *session.Session, name string, conn connection) error {
-	cfg, err := loadConfig()
-	if err != nil {
+	if _, err := storeProfile(s, name, conn.Profile, conn.Secret); err != nil {
 		return err
 	}
-	profile, secret := conn.Profile, conn.Secret
+	s.Profile = name
+	return nil
+}
+
+// storeProfile is the single path a profile takes into config.toml. Every
+// caller goes through it, because the rule it enforces has to hold for all of
+// them: the secret never reaches the config file, and neither does a password
+// carried in the URL's userinfo — that moves into the keyring too, leaving a
+// profile that reconnects the same way. It returns the profile as stored, so a
+// caller can report a URL that is known to carry no credentials.
+func storeProfile(s *session.Session, name string, profile config.Profile, secret string) (config.Profile, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return config.Profile{}, err
+	}
 	clean, urlUser, urlSecret := splitURLCredentials(profile.URL)
 	profile.URL = clean
 	if profile.Username == "" {
@@ -378,7 +389,7 @@ func saveConnection(s *session.Session, name string, conn connection) error {
 	var store config.Secrets
 	if secret != "" && profile.Auth != "none" {
 		if store, err = CurrentDeps().SecretStore(); err != nil {
-			return err
+			return config.Profile{}, err
 		}
 	}
 	profile.Name = name
@@ -387,15 +398,14 @@ func saveConnection(s *session.Session, name string, conn connection) error {
 		cfg.Default = name
 	}
 	if err := cfg.Save(CurrentDeps().ConfigPath); err != nil {
-		return err
+		return config.Profile{}, err
 	}
 	if store != nil {
 		if err := store.Set(name, secret); err != nil {
 			fmt.Fprintf(s.Stderr, "warning: could not save the secret in the keyring: %v\n", err)
 		}
 	}
-	s.Profile = name
-	return nil
+	return profile, nil
 }
 
 // profileNameFor derives a profile name from a server URL when the operator
@@ -586,15 +596,15 @@ func Profiles() Command {
 				if err := checkProfileName("profiles", name); err != nil {
 					return nil, err
 				}
-				p := config.Profile{Name: name, URL: serverURL, Auth: "session"}
-				cfg.SetProfile(p)
-				if cfg.Default == "" {
-					cfg.Default = name
-				}
-				if err := cfg.Save(CurrentDeps().ConfigPath); err != nil {
+				// The URL argument may carry userinfo. storeProfile splits it
+				// out, so neither the config file nor the message below can
+				// hold a password: it is the same write path "connect --save"
+				// uses, deliberately, rather than a second one to keep in step.
+				stored, err := storeProfile(s, name, config.Profile{Name: name, URL: serverURL, Auth: "session"}, "")
+				if err != nil {
 					return nil, err
 				}
-				return Message{Text: fmt.Sprintf("Saved profile %q for %s. Run \"cdb connect %s\" to use it.", name, serverURL, name)}, nil
+				return Message{Text: fmt.Sprintf("Saved profile %q for %s. Run \"cdb connect %s\" to use it.", name, stored.URL, name)}, nil
 
 			case "remove":
 				name := inv.Arg(1)
