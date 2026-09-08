@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `replicate --filter` refuses a filter that is not `<design>/<name>` with both
   halves, the way `tail --filter` already did, rather than passing it to the
   server and reporting the resulting 400 as a command failure.
+- Tab completion inside a partition completes a document id typed with its
+  partition key already in front (`p1:ord<Tab>`), a form `cat` and `cd` have
+  always accepted; it used to offer nothing.
 
 ### Changed
 
