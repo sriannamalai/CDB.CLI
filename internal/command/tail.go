@@ -1,7 +1,9 @@
 package command
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -240,8 +242,9 @@ func shortSeq(seq string) string {
 
 // tailRow renders one change. Row.JSON is the machine-readable contract:
 // {"seq":…,"id":…,"rev":…,"deleted":…} with "doc" present only under
-// --include-docs, so "tail --json" emits one change per line. "seq" is always
-// the full sequence; only the table cell is shortened.
+// --include-docs and only when there is a document, so "tail --json" emits one
+// change per line. "seq" is always the full sequence; only the table cell is
+// shortened.
 func tailRow(r couch.ChangeRow, includeDocs bool) Row {
 	rev := ""
 	if len(r.Revs) > 0 {
@@ -251,13 +254,23 @@ func tailRow(r couch.ChangeRow, includeDocs bool) Row {
 	payload := map[string]any{"seq": r.Seq, "id": r.ID, "rev": rev, "deleted": r.Deleted}
 	if includeDocs {
 		doc := ""
-		if len(r.Doc) > 0 {
+		if hasDoc(r.Doc) {
 			doc = summarise(r.Doc)
+			payload["doc"] = r.Doc
 		}
 		cells = append(cells, doc)
-		payload["doc"] = r.Doc
 	}
 	return Row{Cells: cells, JSON: mustJSON(payload)}
+}
+
+// hasDoc reports whether a change carried a document at all. CouchDB answers
+// include_docs on a deleted document with "doc":null, which is the absence of
+// a document rather than one whose content is null: the cell is left empty and
+// the key is left out of the row JSON, so nothing downstream has to tell a
+// document apart from a hole where one was.
+func hasDoc(doc json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(doc)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
 // tailSleeper waits out one reconnect backoff, returning ctx.Err() if the

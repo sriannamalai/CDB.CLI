@@ -119,6 +119,46 @@ func TestTailWithIncludeDocsAddsTheDocColumn(t *testing.T) {
 	}
 }
 
+// A deleted document read with --include-docs comes back as "doc":null: the
+// change is real, the document is gone. The literal word "null" in the cell
+// reads like a document with that content, and "doc":null in the row JSON asks
+// every consumer to tell a missing document from a present one. Neither is
+// written.
+func TestTailRendersAMissingDocAsAnEmptyCell(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/_changes", 200, `{"results":[
+		{"seq":"1-x","id":"a","deleted":true,"changes":[{"rev":"2-aa"}],"doc":null},
+		{"seq":"2-y","id":"b","changes":[{"rev":"1-bb"}],"doc":{"_id":"b"}}],
+		"last_seq":"2-y","pending":0}`)
+	s := connected(t, srv)
+
+	res, err := invoke(t, Tail(), s, "/mydb", "--include-docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := drain(t, res.(Stream))
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+	if got := rows[0].Cells[4]; got != "" {
+		t.Errorf("doc cell = %q, want an empty cell", got)
+	}
+	if got := string(rows[0].JSON); strings.Contains(got, `"doc"`) {
+		t.Errorf("row JSON = %s, want no doc key at all", got)
+	}
+	// The row is otherwise a normal row, and a change that does carry a
+	// document is untouched.
+	if got := string(rows[0].JSON); !strings.Contains(got, `"deleted":true`) {
+		t.Errorf("row JSON = %s, want the change itself", got)
+	}
+	if got := rows[1].Cells[4]; got != `{"_id":"b"}` {
+		t.Errorf("doc cell = %q", got)
+	}
+	if got := string(rows[1].JSON); !strings.Contains(got, `"doc":{"_id":"b"}`) {
+		t.Errorf("row JSON = %s", got)
+	}
+}
+
 func TestTailNoHintOnAShortPage(t *testing.T) {
 	srv := tailServer(t)
 	s := connected(t, srv)
