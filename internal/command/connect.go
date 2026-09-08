@@ -367,7 +367,7 @@ func Connect() Command {
 		Name:    "connect",
 		Summary: "Open a connection to a server",
 		Example: `$ cdb connect --save --as local http://admin:password@localhost:5984/
-Connected to CouchDB 3.5.2 at localhost:5984 as admin.
+Connected to CouchDB 3.5.2 at localhost:5984 as admin. Saved as profile "local".
 
 $ cdb connect local
 Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
