@@ -211,12 +211,18 @@ func mangoCondition(op, value string) (any, error) {
 	}
 }
 
-// typedValue converts a text value to a number or bool when it looks like one.
+// typedValue converts a text value to the JSON scalar it looks like. A
+// JSON-quoted answer ("bob") must come back as the string bob: keeping the
+// quotes would send {"name":"\"bob\""}, which CouchDB accepts and then matches
+// nothing — a silent wrong answer, the worst outcome for a guided prompt.
+// Anything that is not a JSON scalar (a bare word, a date, an id) is taken
+// literally, and so are JSON arrays and objects, which have no meaning as a
+// Mango operand here.
 func typedValue(v string) any {
 	var out any
 	if err := json.Unmarshal([]byte(v), &out); err == nil {
 		switch out.(type) {
-		case float64, bool, nil:
+		case string, float64, bool, nil:
 			return out
 		}
 	}

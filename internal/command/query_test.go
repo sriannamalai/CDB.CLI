@@ -111,6 +111,48 @@ func TestFindGuidedBuilder(t *testing.T) {
 	}
 }
 
+// TestFindGuidedBuilderUnquotesAJSONString covers the operator who types a
+// JSON-quoted value. Sending {"name":"\"bob\""} to CouchDB is not an error: it
+// silently matches nothing, which is the worst possible failure mode for a
+// guided prompt.
+func TestFindGuidedBuilderUnquotesAJSONString(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/mydb/_find", 200, `{"docs":[]}`)
+	s := connected(t, srv)
+	s.SetPath("/mydb")
+	s.Prefs.Interactive = true
+	s.SetStdin(strings.NewReader("name\n=\n\"bob\"\nn\n"))
+	if _, err := invoke(t, Find(), s); err != nil {
+		t.Fatal(err)
+	}
+	body := string(srv.Last("POST", "/mydb/_find").Body)
+	if !strings.Contains(body, `"selector":{"name":"bob"}`) {
+		t.Errorf("guided builder produced %s, want the value unquoted", body)
+	}
+	if strings.Contains(body, `\"bob\"`) {
+		t.Errorf("guided builder kept the JSON quotes: %s", body)
+	}
+}
+
+// TestFindGuidedBuilderKeepsNumbersTyped guards the non-"=" operator path: a
+// numeric value must reach Mango as a number, not as a string, or a $gt
+// comparison silently compares strings.
+func TestFindGuidedBuilderKeepsNumbersTyped(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/mydb/_find", 200, `{"docs":[]}`)
+	s := connected(t, srv)
+	s.SetPath("/mydb")
+	s.Prefs.Interactive = true
+	s.SetStdin(strings.NewReader("n\n>\n3\nn\n"))
+	if _, err := invoke(t, Find(), s); err != nil {
+		t.Fatal(err)
+	}
+	body := string(srv.Last("POST", "/mydb/_find").Body)
+	if !strings.Contains(body, `"selector":{"n":{"$gt":3}}`) {
+		t.Errorf("guided builder produced %s, want a numeric $gt", body)
+	}
+}
+
 func TestFindWithoutASelectorOnANonTerminalIsAUsageError(t *testing.T) {
 	srv := couchtest.New(t)
 	s := connected(t, srv)
