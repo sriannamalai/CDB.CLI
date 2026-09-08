@@ -125,9 +125,11 @@ func Restore() Command {
 
 			var (
 				header              *backup.Header
+				footer              *backup.Footer
 				prepared            bool
 				pending             []*pendingDoc
 				pendingBytes        int64
+				inlineBytes         int64
 				current             *pendingDoc
 				docs, atts, written int64
 				bumped              []string
@@ -186,6 +188,7 @@ func Restore() Command {
 				}
 				pending = pending[:0]
 				pendingBytes = 0
+				inlineBytes = 0
 				// Spec section 9: progress carries document and byte counts.
 				fmt.Fprintf(s.Stderr, "\r%d documents, %d attachments, %s…", docs, atts, humanBytes(written))
 				progressed = true
@@ -214,6 +217,9 @@ func Restore() Command {
 				switch rec.Kind {
 				case backup.KindHeader:
 					header = rec.Header
+
+				case backup.KindFooter:
+					footer = rec.Footer
 
 				case backup.KindDoc:
 					if !prepared {
@@ -253,7 +259,17 @@ func Restore() Command {
 					if a.Length < 0 {
 						return nil, fmt.Errorf("restore: %s: attachment %q of %s@%s declares a length of %d", file, a.Name, a.ID, a.Rev, a.Length)
 					}
-					if a.Length <= inlineAttachmentLimit {
+					// The batch is only closed at a document boundary, so a
+					// single document carrying many small attachments could
+					// hold unbounded base64 in memory however low the bound
+					// was set. What the batch actually holds is the encoded
+					// form, which is a third larger than the payload, so that
+					// is what is counted; once the bound is reached the rest of
+					// the document's attachments take the streamed path, at the
+					// cost of the revision — the same trade the oversized ones
+					// already make, and reported the same way.
+					encoded := int64(base64.StdEncoding.EncodedLen(int(a.Length)))
+					if a.Length <= inlineAttachmentLimit && inlineBytes+encoded <= restoreBatchBytes {
 						entry, err := inlineEntry(rec.Content, a)
 						if err != nil {
 							return nil, fmt.Errorf("restore: reading %s: %w", file, err)
@@ -262,6 +278,8 @@ func Restore() Command {
 							current.inline = map[string]json.RawMessage{}
 						}
 						current.inline[a.Name] = entry
+						inlineBytes += encoded
+						pendingBytes += encoded
 					} else {
 						name, err := spillAttachment(rec.Content, a.Length)
 						if err != nil {
@@ -274,10 +292,13 @@ func Restore() Command {
 							size:        a.Length,
 							file:        name,
 						})
+						// A spilled attachment is on disk rather than in the
+						// batch body, but its temp file lives until the batch
+						// closes, so it still counts towards flushing early.
+						pendingBytes += a.Length
 					}
 					atts++
 					written += a.Length
-					pendingBytes += a.Length
 				}
 			}
 			if !prepared {
@@ -289,6 +310,19 @@ func Restore() Command {
 			}
 			if err := flush(); err != nil {
 				return nil, err
+			}
+			// The footer is the backup's own count of what it wrote. A complete
+			// dump that yields fewer records than it claims has lost some
+			// between the two, and reporting success would hide it. A dump read
+			// under --partial is deliberately truncated, so there is nothing to
+			// compare against.
+			if footer != nil && !inv.Bool("partial") {
+				if footer.Docs != docs {
+					return nil, fmt.Errorf("restore: %s: the footer records %d document(s) but %d were restored; the dump is damaged", file, footer.Docs, docs)
+				}
+				if footer.Attachments != atts {
+					return nil, fmt.Errorf("restore: %s: the footer records %d attachment(s) but %d were restored; the dump is damaged", file, footer.Attachments, atts)
+				}
 			}
 
 			text := fmt.Sprintf("Restored %d document(s), %d attachment(s) and %s into %q.", docs, atts, humanBytes(written), t.Database)
