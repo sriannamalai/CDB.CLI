@@ -31,3 +31,9 @@ func TestExitCode(t *testing.T) {
 		})
 	}
 }
+
+func TestExitCodeForADeclinedConfirmation(t *testing.T) {
+	if got := ExitCode(command.ErrDeclined); got != ExitError {
+		t.Errorf("ExitCode(ErrDeclined) = %d, want %d", got, ExitError)
+	}
+}

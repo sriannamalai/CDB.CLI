@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,20 @@ import (
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
+
+// TestMain points config.ApplyOutputPrefs' XDG lookup at an empty directory
+// for the whole package, so no test's rendered output or Prefs depends on
+// whatever config.toml happens to exist on the machine running the tests.
+// Tests that need a specific config file override this with their own
+// t.Setenv, which restores this default afterwards.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "cdb-cli-test-config")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	os.Exit(m.Run())
+}
 
 func testRegistry() *command.Registry {
 	r := command.NewRegistry()
@@ -280,5 +295,84 @@ func TestExecuteVersionExtraArgExitsTwo(t *testing.T) {
 	}
 	if errOut.String() == "" {
 		t.Error("stderr is empty, want the unexpected-argument message")
+	}
+}
+
+// TestExecutePrintsNothingOnACancelledContext covers the controller ruling
+// that Ctrl-C during a command, or replications --watch interrupted, must
+// print nothing: Execute only exits 130. The command below stands in for
+// either case, returning context.Canceled the way both do.
+func TestExecutePrintsNothingOnACancelledContext(t *testing.T) {
+	reg := testRegistry()
+	reg.Register(command.Command{
+		Name:    "cancel-me",
+		Summary: "Reports the operator interrupted it",
+		Run: func(context.Context, *session.Session, command.Invocation) (command.Result, error) {
+			return command.Empty{}, context.Canceled
+		},
+	})
+	var out, errOut bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &errOut)
+	code := Execute(context.Background(), reg, s, BuildInfo{}, []string{"cancel-me"})
+	if code != ExitInterrupted {
+		t.Fatalf("exit code = %d, want %d", code, ExitInterrupted)
+	}
+	if errOut.String() != "" {
+		t.Errorf("stderr = %q, want nothing printed on a cancelled context", errOut.String())
+	}
+}
+
+// TestExecuteHonoursConfiguredOutputFormatWithoutTheJSONFlag covers the
+// controller ruling that a one-shot run must honour config.toml's [output]
+// section the same way the shell does. render.OptionsFor forces raw output
+// whenever the destination is not a terminal (true of every test's
+// bytes.Buffer, regardless of Prefs.Format), so the observable effect of the
+// config file here is Prefs.Format itself, exactly as TestGlobalFlagsReachPrefs
+// asserts on Prefs for command-line flags.
+func TestExecuteHonoursConfiguredOutputFormatWithoutTheJSONFlag(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Output.Format = "json"
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &errOut)
+	code := Execute(context.Background(), testRegistry(), s, BuildInfo{}, []string{"pwd"})
+	if code != ExitOK {
+		t.Fatalf("exit code = %d (stderr: %s)", code, errOut.String())
+	}
+	if s.Prefs.Format != session.FormatJSON {
+		t.Errorf("Prefs.Format = %q, want %q from config.toml with no --json flag", s.Prefs.Format, session.FormatJSON)
+	}
+}
+
+// TestExecuteColorFlagOverridesConfiguredColor covers the other half of the
+// same ruling: a flag must still win over the config file.
+func TestExecuteColorFlagOverridesConfiguredColor(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Output.Color = "always"
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &errOut)
+	code := Execute(context.Background(), testRegistry(), s, BuildInfo{}, []string{"--color", "never", "pwd"})
+	if code != ExitOK {
+		t.Fatalf("exit code = %d (stderr: %s)", code, errOut.String())
+	}
+	if s.Prefs.Color != session.ColorNever {
+		t.Errorf("Prefs.Color = %q, want %q: --color=never must override config.toml's \"always\"", s.Prefs.Color, session.ColorNever)
 	}
 }

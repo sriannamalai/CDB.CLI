@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -104,6 +105,31 @@ func TestRunLineExitReturnsErrExit(t *testing.T) {
 	sh, _ := testShell(t, &out)
 	if err := sh.RunLine(context.Background(), "exit"); err != command.ErrExit {
 		t.Fatalf("exit returned %v, want command.ErrExit", err)
+	}
+}
+
+// TestReportErrorPrintsNothingOnACancelledContext covers the controller ruling
+// that Ctrl-C during a command, or replications --watch interrupted, must
+// print nothing and just return to the prompt. Run's readline loop needs a
+// real terminal, so the print-or-not decision lives in reportError, which is
+// exercised directly here the same way RunLine is exercised above.
+func TestReportErrorPrintsNothingOnACancelledContext(t *testing.T) {
+	var out bytes.Buffer
+	sh, _ := testShell(t, &out)
+	sh.reportError(context.Canceled)
+	if out.String() != "" {
+		t.Errorf("stderr = %q, want nothing printed on a cancelled context", out.String())
+	}
+}
+
+// TestReportErrorPrintsOtherErrors is the control for the test above: a
+// cancelled context is the only case reportError swallows.
+func TestReportErrorPrintsOtherErrors(t *testing.T) {
+	var out bytes.Buffer
+	sh, _ := testShell(t, &out)
+	sh.reportError(errors.New("boom"))
+	if !strings.Contains(out.String(), "boom") {
+		t.Errorf("stderr = %q, want it to contain the error", out.String())
 	}
 }
 

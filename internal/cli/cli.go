@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/sriannamalai/CDB.CLI/internal/command"
+	"github.com/sriannamalai/CDB.CLI/internal/config"
 	"github.com/sriannamalai/CDB.CLI/internal/render"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
@@ -168,6 +169,11 @@ func Execute(ctx context.Context, reg *command.Registry, s *session.Session, bui
 	// confirmation, the connect walk-through, find's guided builder and
 	// rmdir's retype step would be unreachable outside the shell.
 	s.Prefs.Interactive = render.IsTerminal(s.Stdout) && render.IsTerminalReader(s.Stdin())
+	// Load the configured output format/color/pager before any flag is
+	// applied (applyGlobalFlags, below, runs inside each subcommand's RunE),
+	// so a one-shot run honours config.toml the same way the shell does, and
+	// a flag still overrides it.
+	config.ApplyOutputPrefs(s)
 	root := NewRoot(reg, s, build)
 	root.SetArgs(args)
 
@@ -185,6 +191,11 @@ func Execute(ctx context.Context, reg *command.Registry, s *session.Session, bui
 	if err == nil {
 		return ExitOK
 	}
+	// Ctrl-C during a command, or replications --watch interrupted, wraps
+	// context.Canceled: the operator asked to stop, so nothing is printed.
+	if errors.Is(err, context.Canceled) {
+		return ExitCode(err)
+	}
 	var ue *command.UsageError
 	if errors.As(err, &ue) {
 		fmt.Fprintln(s.Stderr, ue.Error())
@@ -194,7 +205,5 @@ func Execute(ctx context.Context, reg *command.Registry, s *session.Session, bui
 	return ExitCode(err)
 }
 
-// errorText renders an error for the terminal. Task 21 replaces the body with
-// a call to render.ErrorMessage, which maps CouchDB errors to plain sentences;
-// the signature does not change.
-func errorText(err error, verbose bool) string { return err.Error() }
+// errorText renders an error for the terminal.
+func errorText(err error, verbose bool) string { return render.ErrorMessage(err, verbose) }

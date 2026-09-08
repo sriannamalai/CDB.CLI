@@ -52,15 +52,7 @@ func runShell(ctx context.Context, reg *command.Registry, s *session.Session) in
 	// This must be set before the auto-connect below, or the connect
 	// walk-through cannot ask for a URL on a first run.
 	s.Prefs.Interactive = true
-	cfgPath, err := config.ConfigPath()
-	if err == nil {
-		if cfg, lerr := config.Load(cfgPath); lerr == nil {
-			s.Prefs.Format = session.Format(cfg.Output.Format)
-			s.Prefs.Color = session.ColorMode(cfg.Output.Color)
-			s.Prefs.Pager = cfg.Output.Pager
-			s.Prefs.Keymap = cfg.Shell.Keymap
-		}
-	}
+	config.ApplyOutputPrefs(s)
 	histPath, _ := config.HistoryPath()
 	sh, err := shell.New(reg, s, shell.Config{HistoryFile: histPath, Keymap: s.Prefs.Keymap})
 	if err != nil {

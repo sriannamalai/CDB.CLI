@@ -13,6 +13,7 @@ import (
 	"github.com/knadh/koanf/providers/confmap"
 	kfile "github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
+	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
 
 // Profile is one saved connection.
@@ -163,4 +164,24 @@ func (c *Config) ProfileNames() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ApplyOutputPrefs loads config.toml's [output] format/color/pager and
+// [shell] keymap into s.Prefs. A config file that does not exist, or cannot
+// be read, leaves Prefs untouched. Both front-ends call this before applying
+// command-line flags or per-line overrides, so a flag still wins over the
+// config file.
+func ApplyOutputPrefs(s *session.Session) {
+	cfgPath, err := ConfigPath()
+	if err != nil {
+		return
+	}
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		return
+	}
+	s.Prefs.Format = session.Format(cfg.Output.Format)
+	s.Prefs.Color = session.ColorMode(cfg.Output.Color)
+	s.Prefs.Pager = cfg.Output.Pager
+	s.Prefs.Keymap = cfg.Shell.Keymap
 }

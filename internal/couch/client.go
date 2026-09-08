@@ -171,6 +171,10 @@ func (c *Client) doDecode(req *http.Request, out any, op, target string) error {
 		if e.Error == "" {
 			e.Error = nameForStatus(res.StatusCode)
 		}
+		if res.StatusCode == http.StatusUnauthorized {
+			return NewError(res.StatusCode, "unauthorized", e.Reason, op,
+				fmt.Sprintf("user %q at %s", c.cfg.Username, c.host))
+		}
 		return NewError(res.StatusCode, e.Error, e.Reason, op, target)
 	}
 	if out == nil {

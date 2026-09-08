@@ -165,15 +165,23 @@ func (sh *Shell) Run(ctx context.Context) error {
 		if errors.Is(runErr, command.ErrExit) {
 			return nil
 		}
-		if runErr != nil {
-			fmt.Fprintln(sh.sess.Stderr, errorText(runErr, sh.sess.Prefs.Verbose))
-		}
+		sh.reportError(runErr)
 	}
 }
 
-// errorText renders an error for the shell. Task 21 replaces the body with a
-// call to render.ErrorMessage; the signature does not change.
-func errorText(err error, verbose bool) string { return err.Error() }
+// reportError prints a command's error to the shell's stderr, unless it is a
+// cancelled context: Ctrl-C during a command, or replications --watch
+// interrupted, wraps context.Canceled, and that means the operator asked to
+// stop, so nothing is printed and the shell just returns to the prompt.
+func (sh *Shell) reportError(err error) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	fmt.Fprintln(sh.sess.Stderr, errorText(err, sh.sess.Prefs.Verbose))
+}
+
+// errorText renders an error for the shell.
+func errorText(err error, verbose bool) string { return render.ErrorMessage(err, verbose) }
 
 // RunLine parses and runs one line, rendering the result.
 func (sh *Shell) RunLine(ctx context.Context, input string) error {

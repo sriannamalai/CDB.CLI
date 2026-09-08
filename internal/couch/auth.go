@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -55,7 +56,7 @@ func (t *sessionTransport) login(ctx context.Context) error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return loginError(res)
+		return loginError(res, fmt.Sprintf("user %q at %s", t.username, hostOf(t.baseURL)))
 	}
 	t.authed = true
 	return nil
@@ -64,7 +65,7 @@ func (t *sessionTransport) login(ctx context.Context) error {
 // loginError turns a failed POST /_session into an *Error. The server's own
 // error and reason are used when it sent them; the credentials message is only
 // claimed for a 401, since any other status means something else went wrong.
-func loginError(res *http.Response) error {
+func loginError(res *http.Response, target string) error {
 	var body struct {
 		Error  string `json:"error"`
 		Reason string `json:"reason"`
@@ -81,7 +82,17 @@ func loginError(res *http.Response) error {
 			reason = strings.ToLower(http.StatusText(res.StatusCode))
 		}
 	}
-	return NewError(res.StatusCode, name, reason, "authenticate", "")
+	return NewError(res.StatusCode, name, reason, "authenticate", target)
+}
+
+// hostOf returns the host:port of a base URL, or the URL itself if it cannot be
+// parsed.
+func hostOf(base string) string {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return base
+	}
+	return u.Host
 }
 
 func (t *sessionTransport) authenticated() bool {
