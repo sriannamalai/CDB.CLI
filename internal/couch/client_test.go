@@ -4,8 +4,11 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
 )
@@ -101,6 +104,108 @@ func TestSessionAuthReplaysBodyOn401(t *testing.T) {
 	}
 	if bodies[1] != bodies[0] {
 		t.Errorf("replayed body = %q, want the original %q", bodies[1], bodies[0])
+	}
+}
+
+func TestSessionAuthLogsInOnceUnderConcurrency(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_all_dbs", 200, `["mydb"]`)
+	c, err := New(Config{URL: srv.URL(), Auth: AuthSession, Username: "admin", Secret: "password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// The goroutines wait on a barrier so they really do reach the transport
+	// together; without it the first one finishes logging in before the rest
+	// start, and a stampede never gets a chance to happen.
+	const n = 8
+	var wg, ready sync.WaitGroup
+	start := make(chan struct{})
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		ready.Add(1)
+		go func() {
+			defer wg.Done()
+			ready.Done()
+			<-start
+			var out []string
+			errs[i] = c.DoJSON(context.Background(), "GET", "/_all_dbs", nil, &out, "list", "databases")
+		}()
+	}
+	ready.Wait()
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+
+	logins := 0
+	for _, r := range srv.Requests() {
+		if r.Method == "POST" && r.Path == "/_session" {
+			logins++
+		}
+	}
+	if logins != 1 {
+		t.Errorf("%d parallel requests on a cold client caused %d POST /_session, want 1", n, logins)
+	}
+}
+
+func TestURLAndErrorsRedactCredentials(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/nope", 404, `{"error":"not_found","reason":"Database does not exist."}`)
+	u, err := url.Parse(srv.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword("admin", "secret")
+
+	c, err := New(Config{URL: u.String(), Auth: AuthNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if got := c.URL(); strings.Contains(got, "secret") {
+		t.Errorf("URL() = %q, must not contain the password", got)
+	}
+	if got := c.URL(); strings.Contains(got, "admin") {
+		t.Errorf("URL() = %q, must not contain the user name either", got)
+	}
+	// The credentials must still reach the wire, or basic auth would break.
+	if _, err := c.ServerInfo(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.Last("GET", "/").Header.Get("Authorization"); got == "" {
+		t.Error("no Authorization header sent; the userinfo was dropped from the request URL too")
+	}
+
+	// A server error must not carry the password.
+	err = c.DoJSON(context.Background(), "GET", "/nope", nil, nil, "read", `database "nope"`)
+	if err == nil {
+		t.Fatal("GET /nope returned no error")
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("server error %q leaks the password", err)
+	}
+
+	// A connect failure must not carry the password either.
+	dead, err := New(Config{URL: "http://admin:secret@127.0.0.1:1/", Auth: AuthNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dead.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = dead.ServerInfo(ctx)
+	if err == nil {
+		t.Fatal("connecting to 127.0.0.1:1 returned no error")
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("connect error %q leaks the password", err)
 	}
 }
 

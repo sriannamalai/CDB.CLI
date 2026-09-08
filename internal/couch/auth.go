@@ -29,6 +29,12 @@ type sessionTransport struct {
 func (t *sessionTransport) login() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.authed {
+		// Another goroutine logged in while this one waited for the lock. Without
+		// this check every request made on a cold client sends its own
+		// POST /_session.
+		return nil
+	}
 	body, err := json.Marshal(map[string]string{"name": t.username, "password": t.password})
 	if err != nil {
 		return err

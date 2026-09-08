@@ -36,10 +36,16 @@ type Config struct {
 // Client talks to one CouchDB server. Its Kivik client and its raw HTTP client
 // share one transport, so both are authenticated the same way.
 type Client struct {
-	kc   *kivik.Client
-	hc   *http.Client
-	cfg  Config
+	kc  *kivik.Client
+	hc  *http.Client
+	cfg Config
+	// base is the URL requests are built against. It keeps any userinfo the
+	// operator supplied, so net/http can turn it into a Basic auth header. It
+	// must never be printed, logged, or put in an error message.
 	base string
+	// safe is base with the userinfo stripped. Everything operator-visible —
+	// Client.URL, error targets — uses this one.
+	safe string
 	host string
 }
 
@@ -56,6 +62,13 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("server URL %q must start with http:// or https://", cfg.URL)
 	}
 	base := strings.TrimRight(u.String(), "/")
+	// A URL may carry credentials (https://user:pass@host). Keep them on base so
+	// requests still authenticate, and derive a redacted form for anything the
+	// operator can see. url.URL.Redacted is not used: it substitutes "xxxxx",
+	// which is noise in a prompt. The whole userinfo goes instead.
+	redacted := *u
+	redacted.User = nil
+	safe := strings.TrimRight(redacted.String(), "/")
 
 	tr, err := newTransport(cfg)
 	if err != nil {
@@ -79,16 +92,17 @@ func New(cfg Config) (*Client, error) {
 	}
 	kc, err := kivik.New("couch", base+"/", couchdb.OptionHTTPClient(hc), couchdb.OptionUserAgent(ua))
 	if err != nil {
-		return nil, Wrap(err, "connect to", base)
+		return nil, Wrap(err, "connect to", safe)
 	}
-	return &Client{kc: kc, hc: hc, cfg: cfg, base: base, host: u.Host}, nil
+	return &Client{kc: kc, hc: hc, cfg: cfg, base: base, safe: safe, host: u.Host}, nil
 }
 
 // Close releases the underlying Kivik client.
 func (c *Client) Close() error { return c.kc.Close() }
 
-// URL is the server URL with no trailing slash.
-func (c *Client) URL() string { return c.base }
+// URL is the server URL with no trailing slash and no embedded credentials. It
+// is safe to print, log, or put in an error message.
+func (c *Client) URL() string { return c.safe }
 
 // Host is the host:port of the server, for prompts and messages.
 func (c *Client) Host() string { return c.host }
