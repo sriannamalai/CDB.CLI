@@ -8,8 +8,11 @@ import (
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
 
-// ErrDeclined means the operator answered no.
-var ErrDeclined = errors.New("cancelled")
+// ErrDeclined means the operator answered no. Its text is a section 11
+// sentence rather than the bare word "cancelled", because it is printed as it
+// stands: every other operator-facing message is a sentence, and a lone
+// lower-case word reads like a crash.
+var ErrDeclined = errors.New("Cancelled: nothing was changed.")
 
 // Confirm asks a yes/no question. It returns nil to proceed, ErrDeclined when
 // the operator says no, and a UsageError when there is no terminal to ask on.

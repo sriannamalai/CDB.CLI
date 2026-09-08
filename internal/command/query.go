@@ -300,7 +300,7 @@ func Query() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindView {
-				return nil, Usagef("query", "%s is a %s; a view path looks like /db/_design/app/_view/name", t.Path, t.Kind)
+				return nil, Usagef("query", "%s is %s %s; a view path looks like /db/_design/app/_view/name", t.Path, t.Kind.Article(), t.Kind)
 			}
 			opts := couch.ViewOptions{
 				Limit:       inv.Int("limit"),

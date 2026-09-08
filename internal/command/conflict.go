@@ -44,7 +44,7 @@ func Conflicts() Command {
 				}
 				return conflictRows(ctx, s, t, winnerBody, winner, revs)
 			default:
-				return nil, Usagef("conflicts", "%s is a %s; conflicts works on a database or a document", t.Path, t.Kind)
+				return nil, Usagef("conflicts", "%s is %s %s; conflicts works on a database or a document", t.Path, t.Kind.Article(), t.Kind)
 			}
 		},
 	}
@@ -147,7 +147,7 @@ func Resolve() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindDocument && t.Kind != path.KindDesignDoc {
-				return nil, Usagef("resolve", "%s is a %s; resolve works on one document", t.Path, t.Kind)
+				return nil, Usagef("resolve", "%s is %s %s; resolve works on one document", t.Path, t.Kind.Article(), t.Kind)
 			}
 			_, winner, conflicts, err := conflictRevisions(ctx, s, t)
 			if err != nil {

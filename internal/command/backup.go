@@ -42,7 +42,7 @@ func Backup() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindDatabase {
-				return nil, Usagef("backup", "%s is a %s; backup takes a database path", t.Path, t.Kind)
+				return nil, Usagef("backup", "%s is %s %s; backup takes a database path", t.Path, t.Kind.Article(), t.Kind)
 			}
 			file := inv.Arg(1)
 			batch := inv.Int("batch")

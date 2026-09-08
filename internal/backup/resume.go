@@ -52,6 +52,12 @@ func (c *countingReader) ReadByte() (byte, error) {
 // error rather than passing this package's sentence through.
 var ErrNotADump = errors.New("is not a cdb dump")
 
+// notADumpError names the file and wraps ErrNotADump. It is wrapped rather
+// than formatted in, so a caller can recognise this without matching on the
+// sentence: naming the wrong file is a usage mistake, and the command that
+// reports it is the one the operator ran, not this package.
+func notADumpError(name string) error { return fmt.Errorf("%s %w", name, ErrNotADump) }
+
 // Scan walks an existing dump file member by member and reports the last point
 // at which it can be safely resumed. A partially written trailing member is
 // ignored.
@@ -79,19 +85,20 @@ func Scan(f *os.File) (Resume, error) {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return res, nil
 		}
+		if errors.Is(err, gzip.ErrHeader) {
+			// Not gzip at all, which is the commonest form of naming the wrong
+			// file. It is the same operator mistake as a gzip file that holds
+			// no dump, so it gets the same sentence and the same exit code
+			// rather than a bare "gzip: invalid header".
+			return Resume{}, notADumpError(f.Name())
+		}
 		return res, err
 	}
 	defer gz.Close()
 	// notADump reports a file whose first member does not open with a header
 	// record. Returning Resume{Offset: 0} for one would invite the caller to
 	// truncate an unrelated gzip file to nothing.
-	notADump := func() (Resume, error) {
-		// Wrapped rather than formatted in, so a caller can recognise this
-		// without matching on the sentence: naming the wrong file is a usage
-		// mistake, and the command that reports it is the one the operator
-		// ran, not this package.
-		return Resume{}, fmt.Errorf("%s %w", f.Name(), ErrNotADump)
-	}
+	notADump := func() (Resume, error) { return Resume{}, notADumpError(f.Name()) }
 	first := true
 	for {
 		gz.Multistream(false)

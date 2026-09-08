@@ -286,6 +286,32 @@ func TestRestoreRejectsAFileThatIsNotADump(t *testing.T) {
 	}
 }
 
+// Naming a file that is not gzip at all is the commonest form of the same
+// mistake, and it used to surface as a bare "gzip: invalid header" at exit 1.
+func TestRestoreRejectsAFileThatIsNotEvenGzip(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(name, []byte("these are my notes, not a dump\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := couchtest.New(t)
+	s := connected(t, srv)
+
+	_, err := invoke(t, Restore(), s, name, "/target")
+	if err == nil {
+		t.Fatal("restore accepted a plain text file")
+	}
+	if !strings.Contains(err.Error(), "not a cdb dump") {
+		t.Errorf("error = %v, want the plain sentence, not a gzip internal", err)
+	}
+	if strings.Contains(err.Error(), "gzip") {
+		t.Errorf("error = %v, still leaks the compression library's wording", err)
+	}
+	var ue *UsageError
+	if !errors.As(err, &ue) {
+		t.Errorf("error is %T, want a *UsageError so the front-ends exit 2", err)
+	}
+}
+
 func TestRestoreReportsATruncatedAttachmentPayload(t *testing.T) {
 	// An att record declaring more bytes than the dump holds: the tail was
 	// lost. Reading only what is there would silently restore a short

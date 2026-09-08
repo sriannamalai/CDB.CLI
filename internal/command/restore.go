@@ -72,7 +72,7 @@ func Restore() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindDatabase {
-				return nil, Usagef("restore", "%s is a %s; restore takes a database path", t.Path, t.Kind)
+				return nil, Usagef("restore", "%s is %s %s; restore takes a database path", t.Path, t.Kind.Article(), t.Kind)
 			}
 			batch := inv.Int("batch")
 			if batch <= 0 {

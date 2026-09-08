@@ -32,7 +32,7 @@ func Mkdir() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindDatabase {
-				return nil, Usagef("mkdir", "%s is a %s; mkdir creates databases, as in \"mkdir /mydb\"", t.Path, t.Kind)
+				return nil, Usagef("mkdir", "%s is %s %s; mkdir creates databases, as in \"mkdir /mydb\"", t.Path, t.Kind.Article(), t.Kind)
 			}
 			if err := s.Client.CreateDatabase(ctx, t.Database, inv.Bool("partitioned"), inv.Int("q")); err != nil {
 				return nil, err
@@ -62,7 +62,7 @@ func Rmdir() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindDatabase {
-				return nil, Usagef("rmdir", "%s is a %s; rmdir deletes databases, as in \"rmdir /mydb\"", t.Path, t.Kind)
+				return nil, Usagef("rmdir", "%s is %s %s; rmdir deletes databases, as in \"rmdir /mydb\"", t.Path, t.Kind.Article(), t.Kind)
 			}
 			info, err := s.Client.DatabaseInfo(ctx, t.Database)
 			if err != nil {

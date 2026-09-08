@@ -136,7 +136,7 @@ func Ls() Command {
 			case path.KindDesignDoc:
 				return lsDesignDoc(ctx, s, t)
 			default:
-				return nil, Usagef("ls", "%s is a %s, not something that can be listed. Use \"cat\" to read it.", t.Path, t.Kind)
+				return nil, Usagef("ls", "%s is %s %s, not something that can be listed. Use \"cat\" to read it.", t.Path, t.Kind.Article(), t.Kind)
 			}
 		},
 	}

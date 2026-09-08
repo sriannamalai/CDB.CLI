@@ -33,7 +33,7 @@ func Attach() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindDocument && t.Kind != path.KindDesignDoc {
-				return nil, Usagef("attach", "%s is a %s; attach needs a document path", t.Path, t.Kind)
+				return nil, Usagef("attach", "%s is %s %s; attach needs a document path", t.Path, t.Kind.Article(), t.Kind)
 			}
 			file := inv.Arg(1)
 			// The file is opened, never read: it goes straight into the request
@@ -88,7 +88,7 @@ func Fetch() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindAttachment {
-				return nil, Usagef("fetch", "%s is a %s; fetch needs an attachment path such as /mydb/doc1/photo.jpg", t.Path, t.Kind)
+				return nil, Usagef("fetch", "%s is %s %s; fetch needs an attachment path such as /mydb/doc1/photo.jpg", t.Path, t.Kind.Article(), t.Kind)
 			}
 			out := inv.Arg(1)
 			if out != "-" {

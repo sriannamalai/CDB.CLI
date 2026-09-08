@@ -51,7 +51,7 @@ func Cat() Command {
 			case path.KindAttachment:
 				return catAttachment(ctx, s, t, inv.String("rev"))
 			default:
-				return nil, Usagef("cat", "%s is a %s; use \"ls\" to list it.", t.Path, t.Kind)
+				return nil, Usagef("cat", "%s is %s %s; use \"ls\" to list it.", t.Path, t.Kind.Article(), t.Kind)
 			}
 		},
 	}
@@ -84,7 +84,7 @@ func Put() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindDocument && t.Kind != path.KindDesignDoc {
-				return nil, Usagef("put", "%s is a %s, not a document", t.Path, t.Kind)
+				return nil, Usagef("put", "%s is %s %s, not a document", t.Path, t.Kind.Article(), t.Kind)
 			}
 			raw, err := readDocSource(s, inv.Arg(1))
 			if err != nil {
@@ -166,7 +166,7 @@ func Rm() Command {
 			case path.KindDatabase:
 				return nil, Usagef("rm", "%s is a database; use \"rmdir\" to delete it.", t.Path)
 			default:
-				return nil, Usagef("rm", "%s is a %s; only documents and attachments can be deleted.", t.Path, t.Kind)
+				return nil, Usagef("rm", "%s is %s %s; only documents and attachments can be deleted.", t.Path, t.Kind.Article(), t.Kind)
 			}
 			// An attachment is deleted at the revision of the document that
 			// carries it, so both branches look the rev up the same way.
@@ -265,7 +265,7 @@ func Edit() Command {
 				return nil, err
 			}
 			if t.Kind != path.KindDocument && t.Kind != path.KindDesignDoc {
-				return nil, Usagef("edit", "%s is a %s, not a document", t.Path, t.Kind)
+				return nil, Usagef("edit", "%s is %s %s, not a document", t.Path, t.Kind.Article(), t.Kind)
 			}
 			editor := editorCommand()
 			if editor == "" {

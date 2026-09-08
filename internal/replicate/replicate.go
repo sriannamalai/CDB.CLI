@@ -307,7 +307,7 @@ func ResolveEndpoint(cl *couch.Client, base, s string) (Endpoint, error) {
 		return Endpoint{}, err
 	}
 	if t.Kind != path.KindDatabase {
-		return Endpoint{}, fmt.Errorf("%s is a %s; replication endpoints are databases or full URLs", t.Path, t.Kind)
+		return Endpoint{}, fmt.Errorf("%s is %s %s; replication endpoints are databases or full URLs", t.Path, t.Kind.Article(), t.Kind)
 	}
 	doc := cl.ReplicationEndpoint(t.Database)
 	safe, _ := doc["url"].(string)

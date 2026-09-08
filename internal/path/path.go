@@ -41,6 +41,17 @@ func (k Kind) String() string {
 	return "unknown"
 }
 
+// Article returns the indefinite article for the kind's name, so the messages
+// that say "%s is a %s" do not read "is a attachment". It is a method rather
+// than a helper in one command package because every package that renders a
+// kind needs it.
+func (k Kind) Article() string {
+	if name := k.String(); name != "" && strings.ContainsRune("aeiou", rune(name[0])) {
+		return "an"
+	}
+	return "a"
+}
+
 // Target is a resolved virtual path.
 type Target struct {
 	Kind Kind
