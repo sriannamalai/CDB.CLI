@@ -111,7 +111,7 @@ func (c *Client) GetRev(ctx context.Context, db, docID string) (string, error) {
 			// user-and-host target as doDecode's 401, not the document target,
 			// so the rendered sentence names the real user rather than the
 			// document being read.
-			return "", NewError(res.StatusCode, "unauthorized", http.StatusText(res.StatusCode), "read", unauthorizedTarget(c.cfg.Username, c.host))
+			return "", c.unauthorized(http.StatusText(res.StatusCode), "read", docTarget(db, docID))
 		}
 		return "", NewError(res.StatusCode, nameForStatus(res.StatusCode), http.StatusText(res.StatusCode), "read", docTarget(db, docID))
 	}

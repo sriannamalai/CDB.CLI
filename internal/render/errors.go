@@ -35,6 +35,11 @@ func plainSentence(e *couch.Error) string {
 		return fmt.Sprintf("Could not find the server %s. Check the URL in the profile.", hostFromTarget(e.Target))
 	case e.Status == couch.StatusUnreachable && e.Name == "tls":
 		return fmt.Sprintf("The TLS connection to %s failed: %s", hostFromTarget(e.Target), e.Reason)
+	case e.Status == 401 && e.Auth == couch.AuthNone:
+		// --anonymous, or a profile with auth = "none", sends no credentials
+		// at all. Telling the operator to check the password is advice about a
+		// password that does not exist.
+		return fmt.Sprintf("The server requires credentials for %s %s. Connect with a username and password, or set CDB_USER and CDB_PASSWORD.", e.Op, e.Target)
 	case e.Status == 401:
 		user, host := userAndHost(e.Target)
 		return fmt.Sprintf("Login failed for %s at %s. Check the password with \"profiles\" or \"connect\".", user, host)

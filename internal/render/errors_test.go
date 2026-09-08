@@ -24,6 +24,18 @@ func TestErrorMessage(t *testing.T) {
 			want: `Login failed for admin at localhost:5984. Check the password with "profiles" or "connect".`,
 		},
 		{
+			// --anonymous, or a profile with auth = "none", sends nothing at
+			// all. "Check the password" is advice about a password that does
+			// not exist; what the operator needs is to supply one.
+			name: "401 with no credentials",
+			err: func() error {
+				e := couch.NewError(401, "unauthorized", "You are not authorized to access this db.", "read", `document "doc1" in "mydb"`)
+				e.Auth = couch.AuthNone
+				return e
+			}(),
+			want: `The server requires credentials for read document "doc1" in "mydb". Connect with a username and password, or set CDB_USER and CDB_PASSWORD.`,
+		},
+		{
 			name: "403",
 			err:  couch.NewError(403, "forbidden", "You are not a db or server admin.", "delete", `database "mydb"`),
 			want: `You do not have permission to delete database "mydb".`,

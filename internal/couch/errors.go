@@ -28,6 +28,12 @@ type Error struct {
 	Op string
 	// Target is what the operation was about, e.g. `document "doc1" in "mydb"`.
 	Target string
+	// Auth is the authentication kind behind a 401, so the message can tell a
+	// wrong password apart from no credentials at all. AuthNone means the
+	// client sent nothing — no session, no token, no userinfo on the URL. It
+	// is "" for every other error, and for a 401 from a client that did send
+	// credentials in a form with no kind of its own (a URL's userinfo).
+	Auth AuthKind
 
 	err error
 }

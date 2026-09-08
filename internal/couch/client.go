@@ -114,6 +114,36 @@ func New(cfg Config) (*Client, error) {
 	return &Client{hc: hc, cfg: cfg, userAgent: ua, base: base, safe: safe, host: u.Host}, nil
 }
 
+// anonymous reports whether the client sends no credentials at all: no session
+// login, no bearer token, and no userinfo on the base URL for net/http to turn
+// into a Basic header. A 401 then means the server wants credentials, not that
+// the ones supplied were wrong.
+func (c *Client) anonymous() bool {
+	return (c.cfg.Auth == AuthNone || c.cfg.Auth == "") && c.base == c.safe
+}
+
+// unauthorized builds the *Error for a 401. An authenticated client's 401 is
+// retargeted at the user and host, so the sentence names the real user rather
+// than whatever the call was about; an anonymous client has no user to name, so
+// the call's own target is kept and the auth kind carries the distinction.
+func (c *Client) unauthorized(reason, op, target string) *Error {
+	if c.anonymous() {
+		e := NewError(http.StatusUnauthorized, "unauthorized", reason, op, target)
+		e.Auth = AuthNone
+		return e
+	}
+	e := NewError(http.StatusUnauthorized, "unauthorized", reason, op,
+		unauthorizedTarget(c.cfg.Username, c.host))
+	// A URL's own userinfo authenticates through net/http while the configured
+	// kind is still "none", so the kind is only recorded when it is one that
+	// sends credentials of its own. Leaving it unset says "credentials were
+	// sent", which is all the message needs.
+	if c.cfg.Auth != AuthNone && c.cfg.Auth != "" {
+		e.Auth = c.cfg.Auth
+	}
+	return e
+}
+
 // Close releases the connections the client is holding open.
 func (c *Client) Close() error {
 	c.hc.CloseIdleConnections()
@@ -189,8 +219,7 @@ func (c *Client) doDecode(req *http.Request, out any, op, target string) error {
 			e.Error = nameForStatus(res.StatusCode)
 		}
 		if res.StatusCode == http.StatusUnauthorized {
-			return NewError(res.StatusCode, "unauthorized", e.Reason, op,
-				unauthorizedTarget(c.cfg.Username, c.host))
+			return c.unauthorized(e.Reason, op, target)
 		}
 		return NewError(res.StatusCode, e.Error, e.Reason, op, target)
 	}
