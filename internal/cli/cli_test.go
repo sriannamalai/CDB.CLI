@@ -123,3 +123,39 @@ func TestExecuteMarksANonTerminalRunNonInteractive(t *testing.T) {
 		t.Error("Prefs.Interactive = true with buffers for stdin and stdout")
 	}
 }
+
+func TestExecuteUnknownFlagExitsTwo(t *testing.T) {
+	var out, errOut bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &errOut)
+	code := Execute(context.Background(), testRegistry(), s, BuildInfo{}, []string{"pwd", "--bogus-flag"})
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, ExitUsage, errOut.String())
+	}
+	if errOut.String() == "" {
+		t.Error("stderr is empty, want the flag error message")
+	}
+}
+
+func TestExecuteUnknownCommandExitsTwo(t *testing.T) {
+	var out, errOut bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &errOut)
+	code := Execute(context.Background(), testRegistry(), s, BuildInfo{}, []string{"no-such-command"})
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, ExitUsage, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "no-such-command") {
+		t.Errorf("stderr = %q, want it to name the unknown command", errOut.String())
+	}
+}
+
+func TestExecuteVersionExtraArgExitsTwo(t *testing.T) {
+	var out, errOut bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &errOut)
+	code := Execute(context.Background(), testRegistry(), s, BuildInfo{}, []string{"version", "extra-arg"})
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, ExitUsage, errOut.String())
+	}
+	if errOut.String() == "" {
+		t.Error("stderr is empty, want the unexpected-argument message")
+	}
+}

@@ -32,6 +32,12 @@ func NewRoot(reg *command.Registry, s *session.Session, build BuildInfo) *cobra.
 	root.SetOut(s.Stdout)
 	root.SetErr(s.Stderr)
 	root.SetIn(s.Stdin())
+	// A malformed or unknown flag is a usage error, not a command error: map it
+	// to command.UsageError so Execute reports exit code 2. FlagErrorFunc is
+	// inherited by every subcommand that does not set its own.
+	root.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return command.Usagef(c.Name(), "%s", err)
+	})
 
 	pf := root.PersistentFlags()
 	pf.String("profile", "", "connection profile to use")
@@ -47,7 +53,16 @@ func NewRoot(reg *command.Registry, s *session.Session, build BuildInfo) *cobra.
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the version, commit and build date",
-		Args:  cobra.NoArgs,
+		// cobra.NoArgs reports an unexpected argument as a plain error, which
+		// Execute would otherwise map to exit code 1. Wrap it as a
+		// command.UsageError so it takes the same exit-2 path as every other
+		// usage mistake.
+		Args: func(c *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return command.Usagef(c.Name(), "unknown command %q for %q", args[0], c.CommandPath())
+			}
+			return nil
+		},
 		RunE: func(c *cobra.Command, _ []string) error {
 			_, err := fmt.Fprintf(s.Stdout, "cdb %s (commit %s, built %s)\n", orUnknown(build.Version), orUnknown(build.Commit), orUnknown(build.Date))
 			return err
@@ -144,7 +159,18 @@ func Execute(ctx context.Context, reg *command.Registry, s *session.Session, bui
 	s.Prefs.Interactive = render.IsTerminal(s.Stdout) && render.IsTerminalReader(s.Stdin())
 	root := NewRoot(reg, s, build)
 	root.SetArgs(args)
-	err := root.ExecuteContext(ctx)
+
+	// cobra reports an unrecognised top-level command (e.g. "cdb frobnicate")
+	// as a plain error out of Find, before ExecuteContext ever calls a RunE.
+	// Detect it the same way cobra does and map it to command.UsageError so it
+	// takes the exit-2 path below instead of falling through to ExitCode's
+	// generic exit-1 branch.
+	var err error
+	if _, _, findErr := root.Find(args); findErr != nil {
+		err = command.Usagef(root.Name(), "%s", findErr)
+	} else {
+		err = root.ExecuteContext(ctx)
+	}
 	if err == nil {
 		return ExitOK
 	}
