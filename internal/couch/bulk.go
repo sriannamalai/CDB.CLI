@@ -1,9 +1,13 @@
 package couch
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 
@@ -151,6 +155,98 @@ func seqString(raw json.RawMessage) string {
 		return s
 	}
 	return string(raw)
+}
+
+// changesScanBuffer is the largest single line ChangesFollow will accept. One
+// line is one change, and with include_docs that line carries a whole
+// document; 4 MiB is well past any document CouchDB will hand back in a feed
+// and still a bound, which bufio.Scanner requires.
+const changesScanBuffer = 4 << 20
+
+// ChangesFollow reads the continuous changes feed, calling fn for each change
+// as it arrives. It returns when the body ends, when fn returns an error, when
+// the server answers with a non-2xx status, or when ctx is cancelled.
+//
+// It never retries. A dropped feed is reported as a nil error (the body simply
+// ended) or as a transport *Error, and the caller decides whether to reconnect
+// — the backoff policy belongs to the command, not the client.
+//
+// Blank lines are the server's heartbeat and are ignored; so is the trailing
+// {"last_seq":…} line, which carries no id.
+func (c *Client) ChangesFollow(ctx context.Context, db string, opts ChangesOptions, fn func(ChangeRow) error) error {
+	target := fmt.Sprintf("changes for %q", db)
+	apiPath := "/" + path.Encode(db) + "/_changes?" + opts.changesQuery(true).Encode()
+	req, err := c.NewRequest(ctx, http.MethodGet, apiPath, nil)
+	if err != nil {
+		return Wrap(err, "read", target)
+	}
+	res, err := c.HTTP().Do(req)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return Wrap(err, "read", target)
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 400 {
+		// The feed never started, so the error body is small and complete.
+		// Decode it exactly as doDecode would, including the 401 retarget, so
+		// a dead feed reads like every other failure.
+		var e struct {
+			Error  string `json:"error"`
+			Reason string `json:"reason"`
+		}
+		_ = json.NewDecoder(res.Body).Decode(&e)
+		if e.Error == "" {
+			e.Error = nameForStatus(res.StatusCode)
+		}
+		if res.StatusCode == http.StatusUnauthorized {
+			return c.unauthorized(e.Reason, "read", target)
+		}
+		return NewError(res.StatusCode, e.Error, e.Reason, "read", target)
+	}
+
+	sc := bufio.NewScanner(res.Body)
+	sc.Buffer(make([]byte, 0, 64*1024), changesScanBuffer)
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue // heartbeat
+		}
+		var l changeLine
+		if err := json.Unmarshal(line, &l); err != nil {
+			// A line that will not decode is not worth ending a tail over:
+			// the next one usually will. Skipping keeps a long-running follow
+			// alive across anything unexpected the server writes.
+			continue
+		}
+		if l.ID == "" {
+			continue // the trailing {"last_seq":…} line
+		}
+		if err := fn(l.toRow()); err != nil {
+			return err
+		}
+	}
+	if err := sc.Err(); err != nil {
+		// A cancelled context surfaces here as a read error on the body. The
+		// caller has to see context.Canceled itself, because that is what maps
+		// to exit 130 and to "print nothing".
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if errors.Is(err, bufio.ErrTooLong) {
+			// A change too large to read is terminal, not a dropped feed:
+			// reconnecting from the same sequence would meet the same line
+			// again, every time, forever. A 413 is not retried by the
+			// command's reconnect rule (only StatusUnreachable and 5xx are),
+			// and it says plainly what the limit was.
+			return NewError(http.StatusRequestEntityTooLarge, "too_large",
+				fmt.Sprintf("a change was larger than the %d MiB this feed can read; re-run without --include-docs", changesScanBuffer>>20),
+				"read", target)
+		}
+		return Wrap(err, "read", target)
+	}
+	return nil
 }
 
 // BulkRef names one document revision for BulkGet.
