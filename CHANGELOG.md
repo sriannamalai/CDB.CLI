@@ -106,9 +106,6 @@ CouchDB 3.2 through 3.5.
 - Attachments over 4 MiB are restored in a separate step after the
   document, which bumps the document's revision from the one recorded in
   the dump.
-- The Homebrew tap (`sriannamalai/homebrew-tap`) and Scoop bucket
-  (`sriannamalai/scoop-bucket`) are not yet published; install a release
-  binary from the GitHub Releases page instead.
 
 [Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/sriannamalai/CDB.CLI/compare/dc010ee...v1.0.0

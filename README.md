@@ -9,7 +9,7 @@ subcommands for scripts.
 Homebrew:
 
 ```
-brew install sriannamalai/tap/cdb
+brew install --cask sriannamalai/tap/cdb
 ```
 
 Scoop:
@@ -28,9 +28,8 @@ go install github.com/sriannamalai/CDB.CLI/cmd/cdb@latest
 Or download a binary from the [releases page](https://github.com/sriannamalai/CDB.CLI/releases)
 and verify it against `checksums.txt`.
 
-The Homebrew and Scoop lines above will work once the tap and bucket are
-published; until then, release binaries are available from the GitHub
-Releases page.
+The Homebrew and Scoop lines above work now. A release binary is also
+available from the GitHub Releases page.
 
 ## Quickstart
 
