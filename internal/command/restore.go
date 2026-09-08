@@ -384,6 +384,9 @@ $ cdb restore movies.cdb.gz /movies --merge`,
 				if footer.Attachments != atts {
 					return nil, fmt.Errorf("restore: %s: the footer records %d attachment(s) but %d were restored; the dump is damaged", file, footer.Attachments, atts)
 				}
+				if footer.Deleted != deleted {
+					return nil, fmt.Errorf("restore: %s: the footer records %d deletion(s) but %d were restored; the dump is damaged", file, footer.Deleted, deleted)
+				}
 			}
 
 			text := fmt.Sprintf("Restored %d document(s)", docs)

@@ -85,6 +85,44 @@ func TestRestoreRefusesAFooterAttachmentCountThatDisagrees(t *testing.T) {
 	}
 }
 
+// A footer whose deletion count was corrupted independently of Docs and
+// Attachments — for example by hand-editing the file, or a bug that only
+// touches the tombstone bookkeeping — must be caught too, not just the two
+// older counters.
+func TestRestoreRefusesAFooterDeletionCountThatDisagrees(t *testing.T) {
+	srv := restoreTarget(t)
+	name := filepath.Join(t.TempDir(), "dump.cdb.gz")
+	f, err := os.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := backup.NewWriter(f)
+	if err := w.WriteHeader(backup.Header{Version: backup.FormatVersion, DB: "mydb", Tombstones: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteDoc(json.RawMessage(`{"_id":"gone","_rev":"2-bb","_deleted":true,"_revisions":{"start":2,"ids":["bb","aa"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteFooter(backup.Footer{Docs: 1, Deleted: 2, LastSeq: "1-y"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	s := connected(t, srv)
+	_, err = invoke(t, Restore(), s, name, "/target")
+	if err == nil {
+		t.Fatal("restore accepted a dump whose footer over-counts deletions")
+	}
+	for _, want := range []string{"2", "1", "deletion"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q", err, want)
+		}
+	}
+}
+
 // A dump with no footer is read under --partial, where there is nothing to
 // cross-check against.
 func TestRestorePartialSkipsTheFooterCheck(t *testing.T) {
