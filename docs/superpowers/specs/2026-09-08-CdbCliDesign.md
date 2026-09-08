@@ -290,10 +290,14 @@ newline-delimited JSON records. Record kinds:
 - `{"kind":"checkpoint","seq":"…"}` after every batch.
 - `{"kind":"footer","docs":N,"attachments":M,"last_seq":"…"}`
 
-Backup reads `_changes?feed=normal&include_docs=true&style=all_docs`
-in batches with `revs=true`, fetches attachments via `_bulk_get` or
-per-attachment GET streamed straight to the file, and writes a
-checkpoint after each batch. `--resume` reads the last checkpoint in an
+Backup reads `_changes?feed=normal&style=all_docs` in batches for the ids
+and leaf revisions, then fetches each revision's full body through
+`_bulk_get?revs=true`. It deliberately does not ask `_changes` for
+`include_docs=true`: CouchDB ignores `revs=true` on that endpoint
+(verified on 3.5.2), so the documents it returns carry no `_revisions`
+and a restore could not preserve their revision history. Attachments are
+fetched per-attachment and streamed straight to the file, and a
+checkpoint is written after each batch. `--resume` reads the last checkpoint in an
 existing file and continues from that sequence, appending.
 
 Restore streams the file, writes documents through `_bulk_docs` with

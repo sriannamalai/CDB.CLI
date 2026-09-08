@@ -101,8 +101,14 @@ admin@localhost:5984:/movies> cat tt0111161 | .title
 Press Tab at any point to complete command names, flags, database names,
 document ids, view names, and document field names sampled from the database.
 `history` lists the lines you have run; repeated and unparseable lines are not
-recorded. Ctrl-C abandons the running command and returns to the prompt; Ctrl-D
+recorded, and any credential in a URL you typed is stripped before the line is
+stored. Ctrl-C abandons the running command and returns to the prompt; Ctrl-D
 exits.
+
+The history file is `$XDG_STATE_HOME/cdb/history`, which is
+`~/.local/state/cdb/history` on macOS and Linux and
+`%LOCALAPPDATA%\cdb\history` on Windows. Delete it to forget everything you
+have typed.
 
 ## One-shot use
 
@@ -121,6 +127,22 @@ cdb replications
 
 Exit codes: `0` success, `1` command error, `2` usage error, `3` connection or
 authentication error, `130` interrupted.
+
+### Global flags
+
+Every subcommand accepts these, before or after its own flags:
+
+| Flag | What it does |
+|---|---|
+| `--profile <name>` | connect with a saved profile instead of the default |
+| `--url <url>` | connect with a server URL instead of a profile |
+| `--path <path>` | start at a virtual path, so `cdb --path /movies ls` lists that database |
+| `--format table\|json` | output format on a terminal |
+| `--json` | raw JSON, one document per line, as when piped |
+| `--color auto\|always\|never` | ANSI colour; `NO_COLOR` overrides it |
+| `--pager <cmd>` | pager command, or `off` |
+| `--yes` | skip confirmation prompts |
+| `--verbose` | append the raw status, error name and server reason to errors |
 
 ## Configuration
 
