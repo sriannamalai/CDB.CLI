@@ -67,6 +67,14 @@ There is deliberately no `--password` flag. Three ways to authenticate:
    These override any profile and never touch the keychain. `CDB_TOKEN` does
    the same for JWT.
 
+A URL typed with no user name and password — `cdb connect
+http://localhost:5984` — is asked about rather than assumed. A CouchDB with
+an admin configured accepts an anonymous connection and then refuses every
+command, so on a terminal `connect` asks for a username and password first;
+press Enter at the password to connect anonymously anyway. Pass
+`--anonymous` to skip the questions. Without a terminal there is nobody to
+ask, so the connection is made anonymously and says so once on stderr.
+
 Once a default profile exists, `cdb` alone opens the shell already connected,
 and `cdb session` shows who you are logged in as. Profile names may not
 contain a dot, so use `local` rather than a hostname.

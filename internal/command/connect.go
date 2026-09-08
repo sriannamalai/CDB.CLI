@@ -146,7 +146,12 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 
 	switch {
 	case strings.HasPrefix(nameOrURL, "http://"), strings.HasPrefix(nameOrURL, "https://"):
-		profile = config.Profile{Name: "", URL: nameOrURL, Auth: "none"}
+		// Userinfo in the URL is a credential: net/http turns it into a Basic
+		// auth header. Record the user name it carries so the connection
+		// reports who it is, instead of calling an authenticated session
+		// anonymous.
+		_, urlUser, _ := splitURLCredentials(nameOrURL)
+		profile = config.Profile{Name: "", URL: nameOrURL, Auth: "none", Username: urlUser}
 	case nameOrURL != "":
 		p, ok := cfg.Profile(nameOrURL)
 		if !ok {
@@ -292,9 +297,14 @@ func Connect() Command {
 		Usage:   "[profile | url]",
 		MinArgs: 0,
 		MaxArgs: 1,
+		Details: "A server URL with no user name and password is asked about: a CouchDB with an admin\n" +
+			"accepts an anonymous connection and then refuses every command, so connect asks for\n" +
+			"credentials first. Pass --anonymous to connect without any, or set CDB_USER and\n" +
+			"CDB_PASSWORD.",
 		Flags: func(fs *pflag.FlagSet) {
 			fs.Bool("save", false, "save the connection as a profile after connecting")
 			fs.String("as", "", "profile name to save under")
+			fs.Bool("anonymous", false, "connect without credentials, and do not ask for any")
 		},
 		Complete: func(_ context.Context, _ *session.Session, _ []string, cur string) []Candidate {
 			cfg, err := loadConfig()
@@ -322,7 +332,14 @@ func Connect() Command {
 			var conn connection
 			var err error
 			guided := false
-			if arg == "" && !hasAnyProfile() && s.Prefs.Interactive {
+			// A bare URL with no credentials anywhere is the trap I3 named: it
+			// connects, reports success, and then 401s on every command. Ask
+			// for the credentials when there is somebody to ask, and say what
+			// happened when there is not.
+			bare := !inv.Bool("anonymous") && bareURLNeedsCredentials(arg)
+			sayAnonymous := false
+			switch {
+			case arg == "" && !hasAnyProfile() && s.Prefs.Interactive:
 				// Spec 6.1: ask, verify, and only then offer to save. Nothing
 				// reaches config.toml or the keyring until the server has
 				// accepted the answers, so a mistyped password leaves no
@@ -333,11 +350,28 @@ func Connect() Command {
 				}
 				guided = true
 				conn, err = dial(ctx, s, p, "", secret)
-			} else {
+			case bare && s.Prefs.Interactive:
+				user, secret, promptErr := promptForCredentials(s)
+				if promptErr != nil {
+					return nil, promptErr
+				}
+				if secret == "" {
+					// Enter at the password means "none": connect anonymously
+					// rather than sending an empty password the server can
+					// only reject.
+					conn, err = openProfile(ctx, s, arg)
+				} else {
+					conn, err = dial(ctx, s, config.Profile{URL: arg, Auth: "session", Username: user}, "", secret)
+				}
+			default:
+				sayAnonymous = bare
 				conn, err = openProfile(ctx, s, arg)
 			}
 			if err != nil {
 				return nil, err
+			}
+			if sayAnonymous {
+				fmt.Fprintln(s.Stderr, "Connected anonymously; pass --anonymous to silence this or set CDB_USER/CDB_PASSWORD.")
 			}
 			who := s.Client.Username()
 			if who == "" {
@@ -440,25 +474,67 @@ func hasAnyProfile() bool {
 	return err == nil && len(cfg.Profiles) > 0
 }
 
+// bareURLNeedsCredentials reports whether nameOrURL is a server URL that
+// carries no credentials of its own and has none waiting in the environment.
+// Such a connection succeeds against a stock CouchDB — GET / and GET /_session
+// both answer an anonymous client with 200 — and then every command 401s with
+// a sentence about a password that was never supplied. Whoever asks for one of
+// these has to be told, or asked, before that happens.
+func bareURLNeedsCredentials(nameOrURL string) bool {
+	if !strings.HasPrefix(nameOrURL, "http://") && !strings.HasPrefix(nameOrURL, "https://") {
+		return false
+	}
+	if _, user, secret := splitURLCredentials(nameOrURL); user != "" || secret != "" {
+		return false
+	}
+	env := config.LoadEnv(CurrentDeps().LookupEnv)
+	if env.User != "" {
+		return false
+	}
+	_, fromEnv := env.Secret()
+	return !fromEnv
+}
+
+// askLine puts one question to the operator and returns the answer, or def
+// when the answer is empty. Both prompts share it, so both read through the
+// session's single buffered reader.
+func askLine(s *session.Session, label, def string) (string, error) {
+	if def != "" {
+		fmt.Fprintf(s.Stdout, "%s [%s]: ", label, def)
+	} else {
+		fmt.Fprintf(s.Stdout, "%s: ", label)
+	}
+	line, err := s.Reader().ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return def, nil
+	}
+	return line, nil
+}
+
+// promptForCredentials asks for the user name and password of a server URL
+// typed with neither. It is the walk-through's own two questions, reused, so
+// the two flows look and behave the same. An empty password means "connect
+// anonymously"; the caller acts on that.
+func promptForCredentials(s *session.Session) (user, secret string, err error) {
+	fmt.Fprintln(s.Stdout, "This server may need a login. Press Enter at the password to connect anonymously.")
+	user, err = askLine(s, "Username", "admin")
+	if err != nil {
+		return "", "", err
+	}
+	secret, err = readSecret(s, "Password")
+	if err != nil {
+		return "", "", err
+	}
+	return user, secret, nil
+}
+
 // promptForProfile walks an operator through creating the first profile.
 func promptForProfile(s *session.Session) (config.Profile, string, error) {
-	r := s.Reader()
-	ask := func(label, def string) (string, error) {
-		if def != "" {
-			fmt.Fprintf(s.Stdout, "%s [%s]: ", label, def)
-		} else {
-			fmt.Fprintf(s.Stdout, "%s: ", label)
-		}
-		line, err := r.ReadString('\n')
-		if err != nil && line == "" {
-			return "", err
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			return def, nil
-		}
-		return line, nil
-	}
+	ask := func(label, def string) (string, error) { return askLine(s, label, def) }
 	serverURL, err := ask("Server URL", "http://localhost:5984")
 	if err != nil {
 		return config.Profile{}, "", err
