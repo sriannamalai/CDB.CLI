@@ -81,7 +81,10 @@ an admin configured accepts an anonymous connection and then refuses every
 command, so on a terminal `connect` asks for a username and password first;
 press Enter at the password to connect anonymously anyway. Pass
 `--anonymous` to skip the questions. Without a terminal there is nobody to
-ask, so the connection is made anonymously and says so once on stderr.
+ask, so the connection is made anonymously and says so once on stderr. A
+command that is then refused says what to do about it: *The server requires
+credentials for … . Connect with a username and password, or set CDB_USER and
+CDB_PASSWORD.*
 
 Once a default profile exists, `cdb` alone opens the shell already connected,
 and `cdb session` shows who you are logged in as. Profile names may not
