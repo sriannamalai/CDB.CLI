@@ -90,41 +90,83 @@ func Fetch() Command {
 			if t.Kind != path.KindAttachment {
 				return nil, Usagef("fetch", "%s is a %s; fetch needs an attachment path such as /mydb/doc1/photo.jpg", t.Path, t.Kind)
 			}
+			out := inv.Arg(1)
+			if out != "-" {
+				if out == "" {
+					out = t.Attachment
+				}
+				// Refuse before opening the connection: there is no point
+				// downloading a gigabyte only to find there is nowhere to put it.
+				if !inv.Bool("force") {
+					switch _, err := os.Stat(out); {
+					case err == nil:
+						return nil, Usagef("fetch", "%s already exists; pass --force to overwrite it", out)
+					case !os.IsNotExist(err):
+						return nil, err
+					}
+				}
+			}
 			att, err := s.Client.GetAttachment(ctx, t.Database, t.DocID, t.Attachment, inv.String("rev"))
 			if err != nil {
 				return nil, err
 			}
-			out := inv.Arg(1)
 			if out == "-" {
 				return Raw{Reader: &closeAfterRead{rc: att.Content}, ContentType: att.ContentType, Name: t.Attachment}, nil
 			}
 			defer att.Content.Close()
-			if out == "" {
-				out = t.Attachment
-			}
-			flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-			if !inv.Bool("force") {
-				flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
-			}
-			f, err := os.OpenFile(out, flags, 0o644)
-			if err != nil {
-				if os.IsExist(err) {
-					return nil, Usagef("fetch", "%s already exists; pass --force to overwrite it", out)
-				}
-				return nil, err
-			}
-			defer f.Close()
-			// io.Copy, not io.ReadAll: the attachment is streamed to disk in
-			// fixed-size chunks whatever its size. The count it returns is the
-			// only trustworthy byte count, because CouchDB's reported length
-			// can be the gzip-compressed one.
-			n, err := io.Copy(f, att.Content)
+			n, err := downloadTo(out, att.Content)
 			if err != nil {
 				return nil, err
 			}
 			return Message{Text: fmt.Sprintf("Wrote %s (%s) from %s.", out, humanBytes(n), t.Path)}, nil
 		},
 	}
+}
+
+// downloadTo streams src into a temporary file beside dst and renames it over
+// dst only once every byte has arrived and been flushed to disk. It returns the
+// number of bytes written, which is the only trustworthy byte count: CouchDB's
+// reported length can be the gzip-compressed one.
+//
+// Writing straight into dst would be shorter and would lose data: a dropped
+// connection or a Ctrl-C part way through a large attachment would leave a
+// truncated file, and with --force the operator's previous good copy would
+// already have been destroyed before the first byte arrived. The temporary file
+// goes in the same directory so the rename stays on one filesystem, and it is
+// removed again on any failure, leaving dst exactly as it was.
+//
+// io.Copy, not io.ReadAll: the attachment reaches disk in fixed-size chunks
+// whatever its size.
+func downloadTo(dst string, src io.Reader) (int64, error) {
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".*.part")
+	if err != nil {
+		return 0, err
+	}
+	name := tmp.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = tmp.Close()
+			_ = os.Remove(name)
+		}
+	}()
+	n, err := io.Copy(tmp, src)
+	if err != nil {
+		return 0, err
+	}
+	// Sync before the rename: without it a crash could leave the renamed file
+	// present but empty.
+	if err := tmp.Sync(); err != nil {
+		return 0, err
+	}
+	if err := tmp.Close(); err != nil {
+		return 0, err
+	}
+	if err := os.Rename(name, dst); err != nil {
+		return 0, err
+	}
+	renamed = true
+	return n, nil
 }
 
 // closeAfterRead closes the underlying stream when it reaches EOF. render.Render

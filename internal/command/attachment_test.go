@@ -115,6 +115,68 @@ func TestFetchWritesToAFile(t *testing.T) {
 	}
 }
 
+// leftovers lists the part files fetch has left behind in dir.
+func leftovers(t *testing.T, dir string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, "*.part"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matches
+}
+
+func TestFetchLeavesNoTempFileOnSuccess(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.On("GET", "/mydb/doc1/photo.jpg", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "JPEGDATA")
+	})
+	dir := t.TempDir()
+	out := filepath.Join(dir, "downloaded.jpg")
+	s := connected(t, srv)
+	if _, err := invoke(t, Fetch(), s, "/mydb/doc1/photo.jpg", out); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(out); err != nil || string(b) != "JPEGDATA" {
+		t.Fatalf("file = %q, err = %v", b, err)
+	}
+	if left := leftovers(t, dir); len(left) != 0 {
+		t.Errorf("fetch left %v behind", left)
+	}
+}
+
+func TestFetchKeepsTheExistingFileWhenTheDownloadFails(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.On("GET", "/mydb/doc1/photo.jpg", func(w http.ResponseWriter, _ *http.Request) {
+		// Promise more bytes than the handler writes. net/http closes the
+		// connection when the handler returns short, so the client sees the
+		// stream break part way through the body, exactly as a dropped network
+		// connection would.
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, strings.Repeat("x", 16))
+	})
+	dir := t.TempDir()
+	out := filepath.Join(dir, "downloaded.jpg")
+	if err := os.WriteFile(out, []byte("OLD"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := connected(t, srv)
+	if _, err := invoke(t, Fetch(), s, "/mydb/doc1/photo.jpg", out, "--force"); err == nil {
+		t.Fatal("fetch reported success on a truncated download")
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("fetch destroyed the existing file: %v", err)
+	}
+	if string(b) != "OLD" {
+		t.Errorf("file = %q, want the previous contents left intact", b)
+	}
+	if left := leftovers(t, dir); len(left) != 0 {
+		t.Errorf("fetch left %v behind", left)
+	}
+}
+
 func TestFetchRefusesToOverwriteWithoutForce(t *testing.T) {
 	srv := couchtest.New(t)
 	srv.On("GET", "/mydb/doc1/photo.jpg", func(w http.ResponseWriter, _ *http.Request) {
