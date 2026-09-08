@@ -315,9 +315,182 @@ func Info() Command {
 	}
 }
 
-// completePath is a stub until Task 16 replaces it with live completion.
-func completePath(_ context.Context, _ *session.Session, _ []string, _ string) []Candidate {
-	return nil
+// completePath keeps the short internal name every command already refers to.
+func completePath(ctx context.Context, s *session.Session, args []string, cur string) []Candidate {
+	return CompletePath(ctx, s, args, cur)
+}
+
+// completionPageSize bounds a completion lookup. Completion runs while the
+// line editor owns the terminal, so it asks for one small page and never
+// pages further.
+const completionPageSize = 50
+
+// idSentinel is the highest code point CouchDB sorts document ids against, so
+// "prefix" to "prefix\ufff0" is the whole prefix range. It is what turns a
+// startkey/endkey pair into a prefix query, with no skip involved.
+const idSentinel = "\ufff0"
+
+// CompletePath completes database, document, design-document and view names
+// for a virtual path prefix.
+func CompletePath(ctx context.Context, s *session.Session, _ []string, cur string) []Candidate {
+	if !s.Connected() {
+		return nil
+	}
+	// Split the prefix into the directory part that already exists and the
+	// partial last segment being typed.
+	dir, partial := splitPathPrefix(cur)
+	join := func(name string) string {
+		if dir == "" {
+			return name
+		}
+		if strings.HasSuffix(dir, "/") {
+			return dir + name
+		}
+		return dir + "/" + name
+	}
+
+	// "/db/_design/app/_view/" is not a resolvable path on its own, so trim the
+	// trailing _view/ and complete view names against the design document.
+	if trimmed := strings.TrimSuffix(dir, "_view/"); trimmed != dir {
+		base, err := path.Resolve(s.Path(), trimmed)
+		if err != nil || base.Kind != path.KindDesignDoc {
+			return nil
+		}
+		return viewCandidates(ctx, s, base, partial, func(n string) string { return dir + path.Encode(n) })
+	}
+
+	base, err := path.Resolve(s.Path(), dir)
+	if err != nil {
+		return nil
+	}
+	switch base.Kind {
+	case path.KindServer:
+		names, err := s.Cache().Databases(ctx, s.Client)
+		if err != nil {
+			return nil
+		}
+		var out []Candidate
+		for _, n := range names {
+			enc := path.Encode(n)
+			if strings.HasPrefix(enc, partial) {
+				out = append(out, Candidate{Value: join(enc), Display: enc, Tag: "databases"})
+			}
+		}
+		return out
+
+	case path.KindDatabase, path.KindPartition:
+		page, err := s.Client.AllDocs(ctx, base.Database, couch.AllDocsOptions{
+			Partition:     base.Partition,
+			Limit:         completionPageSize,
+			StartKeyDocID: partial,
+			EndKeyDocID:   partial + idSentinel,
+		})
+		if err != nil {
+			return nil
+		}
+		var out []Candidate
+		for _, r := range page.Rows {
+			if !strings.HasPrefix(r.ID, partial) {
+				continue
+			}
+			out = append(out, Candidate{Value: join(encodeDocID(r.ID)), Display: r.ID, Description: r.Rev, Tag: "documents"})
+		}
+		return out
+
+	case path.KindDesignDoc:
+		// Offer the _view segment before the view names themselves.
+		if partial != "_view" && strings.HasPrefix("_view", partial) {
+			return []Candidate{{Value: join("_view"), Display: "_view", Tag: "views"}}
+		}
+		return viewCandidates(ctx, s, base, partial, join)
+
+	default:
+		return nil
+	}
+}
+
+// viewCandidates lists the view names of a design document that start with
+// partial, mapping each through join to build the completion value.
+func viewCandidates(ctx context.Context, s *session.Session, base path.Target, partial string, join func(string) string) []Candidate {
+	raw, err := s.Client.DesignDoc(ctx, base.Database, base.DocID)
+	if err != nil {
+		return nil
+	}
+	var ddoc struct {
+		Views map[string]json.RawMessage `json:"views"`
+	}
+	if err := json.Unmarshal(raw, &ddoc); err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(ddoc.Views))
+	for n := range ddoc.Views {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var out []Candidate
+	for _, n := range names {
+		if strings.HasPrefix(n, partial) {
+			out = append(out, Candidate{Value: join(path.Encode(n)), Display: n, Tag: "views"})
+		}
+	}
+	return out
+}
+
+// encodeDocID escapes a document id for use as the tail of a virtual path. A
+// design document keeps its "_design/" prefix as a real separator: the rest of
+// cdb speaks /db/_design/app, and percent-escaping the slash would produce
+// /db/_design%2Fapp, which resolves to a plain document instead.
+func encodeDocID(id string) string {
+	const designPrefix = "_design/"
+	if strings.HasPrefix(id, designPrefix) {
+		return designPrefix + path.Encode(strings.TrimPrefix(id, designPrefix))
+	}
+	return path.Encode(id)
+}
+
+// splitPathPrefix separates the settled directory part of a path prefix from
+// the partial segment the cursor is inside.
+func splitPathPrefix(cur string) (dir, partial string) {
+	i := strings.LastIndex(cur, "/")
+	if i < 0 {
+		return "", cur
+	}
+	return cur[:i+1], cur[i+1:]
+}
+
+// CompleteFields completes document field names sampled from the database the
+// session or one of the arguments points at.
+func CompleteFields(ctx context.Context, s *session.Session, args []string, cur string) []Candidate {
+	if !s.Connected() {
+		return nil
+	}
+	target, err := s.Resolve("")
+	if err != nil {
+		return nil
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if t, terr := s.Resolve(a); terr == nil && t.Database != "" {
+			target = t
+			break
+		}
+	}
+	if target.Database == "" {
+		return nil
+	}
+	fields, err := s.Cache().Fields(ctx, s.Client, target.Database)
+	if err != nil {
+		return nil
+	}
+	var out []Candidate
+	for _, f := range fields {
+		if strings.HasPrefix(f, cur) {
+			out = append(out, Candidate{Value: f, Tag: "fields"})
+		}
+	}
+	return out
 }
 
 // fieldString reads a top-level field out of a document as display text.

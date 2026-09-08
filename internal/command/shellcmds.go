@@ -14,11 +14,11 @@ import (
 // ErrExit tells the shell loop to stop.
 var ErrExit = errors.New("exit")
 
-// destructiveMarker is what help puts in the "!" column of a command that is
-// marked Destructive, and destructiveNote is the line help prints when it
-// explains one such command.
+// DestructiveMarker is what help puts in the "!" column of a command that is
+// marked Destructive, and what completion puts in front of its description.
+// destructiveNote is the line help prints when it explains one such command.
 const (
-	destructiveMarker = "!"
+	DestructiveMarker = "!"
 	destructiveNote   = "This command is destructive; it asks for confirmation unless --yes is given."
 )
 
@@ -81,7 +81,7 @@ func Help(reg *Registry) Command {
 			for _, c := range reg.All() {
 				marker := ""
 				if c.Destructive {
-					marker = destructiveMarker
+					marker = DestructiveMarker
 				}
 				rows.Items = append(rows.Items, Row{
 					Cells: []string{c.Name, marker, c.Summary},

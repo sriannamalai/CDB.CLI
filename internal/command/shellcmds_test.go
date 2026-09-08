@@ -44,7 +44,7 @@ func TestHelpMarksDestructiveCommands(t *testing.T) {
 	}
 	for _, name := range []string{"rm", "rmdir", "resolve"} {
 		row := helpRow(t, rows, name)
-		if !strings.Contains(strings.Join(row.Cells, " "), destructiveMarker) {
+		if !strings.Contains(strings.Join(row.Cells, " "), DestructiveMarker) {
 			t.Errorf("help row for %q is missing the destructive marker: %v", name, row.Cells)
 		}
 		var payload struct {
@@ -59,7 +59,7 @@ func TestHelpMarksDestructiveCommands(t *testing.T) {
 	}
 
 	row := helpRow(t, rows, "pwd")
-	if strings.Contains(strings.Join(row.Cells, " "), destructiveMarker) {
+	if strings.Contains(strings.Join(row.Cells, " "), DestructiveMarker) {
 		t.Errorf("help marked the harmless pwd command as destructive: %v", row.Cells)
 	}
 	var payload struct {

@@ -65,6 +65,9 @@ type Session struct {
 	in    *bufio.Reader
 
 	cwd string
+
+	// cache backs shell completion. Cache() creates it on first use.
+	cache *Cache
 }
 
 // New returns a disconnected session at the server root.
@@ -103,6 +106,9 @@ func (s *Session) Attach(c *couch.Client, profile string) {
 	s.Client = c
 	s.Profile = profile
 	s.cwd = "/"
+	// A new connection invalidates every cached lookup: database names and
+	// sampled fields belong to the server that was just replaced.
+	s.Cache().Reset()
 }
 
 // Detach closes and drops the current client and returns to the root.
@@ -114,6 +120,7 @@ func (s *Session) Detach() error {
 	s.Client = nil
 	s.Profile = ""
 	s.cwd = "/"
+	s.Cache().Reset()
 	return err
 }
 

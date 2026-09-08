@@ -36,6 +36,9 @@ func Mkdir() Command {
 			if err := s.Client.CreateDatabase(ctx, t.Database, inv.Bool("partitioned"), inv.Int("q")); err != nil {
 				return nil, err
 			}
+			// Completion caches the database list for the whole session, so the
+			// new database has to be announced to it.
+			s.Cache().InvalidateDatabases()
 			return Message{Text: fmt.Sprintf("Created database %q.", t.Database)}, nil
 		},
 	}
@@ -71,6 +74,8 @@ func Rmdir() Command {
 			if err := s.Client.DestroyDatabase(ctx, t.Database); err != nil {
 				return nil, err
 			}
+			s.Cache().InvalidateDatabases()
+			s.Cache().InvalidateFields(t.Database)
 			// Match the database itself or something inside it, never a
 			// sibling whose name merely starts with the same text: deleting
 			// /mydb must not move you out of /mydb2.

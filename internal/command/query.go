@@ -21,7 +21,17 @@ func Find() Command {
 		MinArgs:     0,
 		MaxArgs:     2,
 		NeedsClient: true,
-		Complete:    completePath,
+		// --fields and --sort take document field names; everything else on
+		// the line is a path.
+		Complete: func(ctx context.Context, s *session.Session, args []string, cur string) []Candidate {
+			if len(args) > 0 {
+				switch args[len(args)-1] {
+				case "--fields", "--sort":
+					return CompleteFields(ctx, s, args, cur)
+				}
+			}
+			return CompletePath(ctx, s, args, cur)
+		},
 		Flags: func(fs *pflag.FlagSet) {
 			fs.StringSlice("fields", nil, "fields to return")
 			fs.StringSlice("sort", nil, "sort keys, as field:asc or field:desc")

@@ -288,8 +288,3 @@ func resultJSON(res command.Result) ([]json.RawMessage, error) {
 		return nil, fmt.Errorf("a %s result cannot be filtered", res.ResultKind())
 	}
 }
-
-// complete is replaced with the real engine in Task 16.
-func (sh *Shell) complete(line []rune, cursor int) readline.Completions {
-	return readline.Completions{}
-}
