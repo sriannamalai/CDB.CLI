@@ -41,8 +41,8 @@ func NewRoot(reg *command.Registry, s *session.Session, build BuildInfo) *cobra.
 	})
 
 	pf := root.PersistentFlags()
-	pf.String("profile", "", "connection profile to use")
-	pf.String("url", "", "server URL, overriding the profile")
+	pf.String("profile", "", "connection profile to use, overriding CDB_PROFILE and the default")
+	pf.String("url", "", "server URL, overriding the profile and CDB_URL")
 	pf.String("path", "", "starting virtual path")
 	pf.String("format", "", "output format: table or json")
 	pf.String("color", "", "colour: auto, always or never")

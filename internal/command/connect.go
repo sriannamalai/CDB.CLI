@@ -203,6 +203,17 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 		}
 	}
 
+	// An explicit target wins over the environment, which wins over the config
+	// file. Without this, CDB_URL — which a shell may export for convenience —
+	// silently redirected a command the operator aimed at a named profile or a
+	// named URL, and "cdb --url a rmdir /db" could delete a database on server
+	// b. CDB_USER, CDB_PASSWORD, CDB_TOKEN and CDB_INSECURE_TLS are
+	// credentials and transport settings rather than a target, so they still
+	// apply: naming a profile does not mean declining the environment's
+	// password.
+	if nameOrURL != "" {
+		env.URL = ""
+	}
 	profile = env.Apply(profile)
 
 	// CDB_PASSWORD and CDB_TOKEN bypass the keyring entirely: the environment
