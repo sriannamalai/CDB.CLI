@@ -55,11 +55,7 @@ func (o FindOptions) body() map[string]any {
 }
 
 func mangoPath(db, partition, endpoint string) string {
-	base := "/" + path.Encode(db)
-	if partition != "" {
-		base += "/_partition/" + path.Encode(partition)
-	}
-	return base + endpoint
+	return dbBase(db, partition) + endpoint
 }
 
 // Find runs POST /db/_find.
@@ -147,11 +143,7 @@ func (o ViewOptions) query() url.Values {
 
 // Query runs a map/reduce view. ddocID includes the "_design/" prefix.
 func (c *Client) Query(ctx context.Context, db, ddocID, view string, opts ViewOptions) (ViewPage, error) {
-	base := "/" + path.Encode(db)
-	if opts.Partition != "" {
-		base += "/_partition/" + path.Encode(opts.Partition)
-	}
-	apiPath := base + "/" + ddocID + "/_view/" + path.Encode(view)
+	apiPath := dbBase(db, opts.Partition) + "/" + encodeDocID(ddocID) + "/_view/" + path.Encode(view)
 	if enc := opts.query().Encode(); enc != "" {
 		apiPath += "?" + enc
 	}

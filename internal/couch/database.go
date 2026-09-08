@@ -208,11 +208,7 @@ type allDocsBody struct {
 
 // allDocsPath builds /db/_all_docs or /db/_partition/p/_all_docs.
 func allDocsPath(db, partition string) string {
-	base := "/" + path.Encode(db)
-	if partition != "" {
-		base += "/_partition/" + path.Encode(partition)
-	}
-	return base + "/_all_docs"
+	return dbBase(db, partition) + "/_all_docs"
 }
 
 // AllDocs reads one page of _all_docs.
@@ -264,7 +260,7 @@ func (c *Client) AllDocsStream(ctx context.Context, db string, opts AllDocsOptio
 func (c *Client) DesignDoc(ctx context.Context, db, ddocID string) (json.RawMessage, error) {
 	var raw json.RawMessage
 	target := fmt.Sprintf("design document %q in %q", ddocID, db)
-	if err := c.DoJSON(ctx, "GET", "/"+path.Encode(db)+"/"+ddocID, nil, &raw, "read", target); err != nil {
+	if err := c.DoJSON(ctx, "GET", docPath(db, ddocID), nil, &raw, "read", target); err != nil {
 		return nil, err
 	}
 	return raw, nil

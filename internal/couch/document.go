@@ -21,17 +21,34 @@ type GetOptions struct {
 	Latest    bool
 }
 
-// docPath builds /db/docid. The database name is escaped; a document id keeps
-// its "_design/" or "_local/" prefix unescaped because the slash is meaningful,
-// and the remainder is escaped.
-func docPath(db, docID string) string {
-	base := "/" + path.Encode(db) + "/"
+// dbBase builds /db, or /db/_partition/key for a partitioned request. It is
+// the single place the partition prefix is spelled out.
+func dbBase(db, partition string) string {
+	base := "/" + path.Encode(db)
+	if partition != "" {
+		base += "/_partition/" + path.Encode(partition)
+	}
+	return base
+}
+
+// encodeDocID escapes a document id for a URL path. A "_design/" or "_local/"
+// prefix keeps its slash, which is meaningful, and the remainder is escaped.
+// Every design-document URL — GetDocument, DesignDoc, Query — must go through
+// here: an unescaped "#" truncates the path at the fragment and a "?" at the
+// query string, which is how "cat" and "ls" came to disagree about the same
+// document.
+func encodeDocID(docID string) string {
 	for _, prefix := range []string{"_design/", "_local/"} {
 		if strings.HasPrefix(docID, prefix) {
-			return base + prefix + path.Encode(strings.TrimPrefix(docID, prefix))
+			return prefix + path.Encode(strings.TrimPrefix(docID, prefix))
 		}
 	}
-	return base + path.Encode(docID)
+	return path.Encode(docID)
+}
+
+// docPath builds /db/docid.
+func docPath(db, docID string) string {
+	return dbBase(db, "") + "/" + encodeDocID(docID)
 }
 
 func docTarget(db, docID string) string {
