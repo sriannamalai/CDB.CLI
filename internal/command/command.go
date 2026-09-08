@@ -215,6 +215,10 @@ func NewFlagSet(c Command) *pflag.FlagSet {
 	fs.Bool("json", false, "print raw JSON instead of a table")
 	fs.Bool("yes", false, "skip confirmation prompts")
 	fs.Bool("verbose", false, "include raw status codes and reasons in errors")
+	// Shared rather than declared on "connect": every command auto-connects,
+	// so every command can be the one that reaches a server URL carrying no
+	// credentials.
+	fs.Bool("anonymous", false, "connect without credentials, and do not ask for any")
 	if c.Flags != nil {
 		c.Flags(fs)
 	}

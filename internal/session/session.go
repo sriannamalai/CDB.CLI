@@ -42,6 +42,9 @@ type Prefs struct {
 	Verbose bool
 	// Interactive is true when stdin and stdout are both terminals.
 	Interactive bool
+	// Anonymous means the operator asked to connect without credentials, so a
+	// server URL that carries none must neither be questioned nor warned about.
+	Anonymous bool
 }
 
 // DefaultPrefs are the settings used before any config or flag is applied.

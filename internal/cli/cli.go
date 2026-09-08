@@ -50,6 +50,7 @@ func NewRoot(reg *command.Registry, s *session.Session, build BuildInfo) *cobra.
 	pf.Bool("json", false, "print raw JSON instead of a table")
 	pf.Bool("yes", false, "skip confirmation prompts")
 	pf.Bool("verbose", false, "include raw status codes and reasons in errors")
+	pf.Bool("anonymous", false, "connect without credentials, and do not ask for any")
 
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
@@ -159,6 +160,10 @@ func applyGlobalFlags(c *cobra.Command, s *session.Session) {
 	}
 	if v, err := flags.GetBool("verbose"); err == nil && v {
 		s.Prefs.Verbose = true
+	}
+	// Read before the auto-connect below, which is what acts on it.
+	if v, err := flags.GetBool("anonymous"); err == nil && v {
+		s.Prefs.Anonymous = true
 	}
 	if v, err := flags.GetString("format"); err == nil && v != "" {
 		s.Prefs.Format = session.Format(v)

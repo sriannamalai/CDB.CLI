@@ -318,12 +318,21 @@ func (sh *Shell) RunLine(ctx context.Context, input string) error {
 	// invocation only, and the session's own settings come back afterwards.
 	// (--json is not a preference; it reaches the renderer as forceJSON below.)
 	prevYes, prevVerbose := sh.sess.Prefs.Yes, sh.sess.Prefs.Verbose
-	defer func() { sh.sess.Prefs.Yes, sh.sess.Prefs.Verbose = prevYes, prevVerbose }()
+	prevAnon := sh.sess.Prefs.Anonymous
+	defer func() {
+		sh.sess.Prefs.Yes, sh.sess.Prefs.Verbose = prevYes, prevVerbose
+		sh.sess.Prefs.Anonymous = prevAnon
+	}()
 	if v, ferr := fs.GetBool("yes"); ferr == nil && v {
 		sh.sess.Prefs.Yes = true
 	}
 	if v, ferr := fs.GetBool("verbose"); ferr == nil && v {
 		sh.sess.Prefs.Verbose = true
+	}
+	// --anonymous has to be on the session before the auto-connect below, and
+	// before "connect" runs: openProfile is what acts on it.
+	if v, ferr := fs.GetBool("anonymous"); ferr == nil && v {
+		sh.sess.Prefs.Anonymous = true
 	}
 	if c.NeedsClient && !sh.sess.Connected() {
 		if err := command.Open(ctx, sh.sess, ""); err != nil {

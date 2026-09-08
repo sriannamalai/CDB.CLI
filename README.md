@@ -130,19 +130,25 @@ authentication error, `130` interrupted.
 
 ### Global flags
 
-Every subcommand accepts these, before or after its own flags:
+Every one-shot subcommand accepts these, before or after its own flags:
 
-| Flag | What it does |
-|---|---|
-| `--profile <name>` | connect with a saved profile instead of the default |
-| `--url <url>` | connect with a server URL instead of a profile |
-| `--path <path>` | start at a virtual path, so `cdb --path /movies ls` lists that database |
-| `--format table\|json` | output format on a terminal |
-| `--json` | raw JSON, one document per line, as when piped |
-| `--color auto\|always\|never` | ANSI colour; `NO_COLOR` overrides it |
-| `--pager <cmd>` | pager command, or `off` |
-| `--yes` | skip confirmation prompts |
-| `--verbose` | append the raw status, error name and server reason to errors |
+| Flag | What it does | In the shell |
+|---|---|---|
+| `--profile <name>` | connect with a saved profile instead of the default | use `connect <name>` |
+| `--url <url>` | connect with a server URL instead of a profile | use `connect <url>` |
+| `--anonymous` | connect without credentials, and do not ask for any | yes |
+| `--json` | raw JSON, one document per line, as when piped | yes |
+| `--yes` | skip confirmation prompts | yes |
+| `--verbose` | append the raw status, error name and server reason to errors | yes |
+| `--path <path>` | start at a virtual path, so `cdb --path /movies ls` lists that database | use `cd` |
+| `--format table\|json` | output format on a terminal | no |
+| `--color auto\|always\|never` | ANSI colour; `NO_COLOR` overrides it | no |
+| `--pager <cmd>` | pager command, or `off` | no |
+
+Inside the shell only the four marked "yes" are accepted on a line; the rest
+are one-shot flags, and their shell equivalents are the commands named above.
+`--format`, `--color` and `--pager` have no per-line form there and are read
+from `config.toml` for the whole session.
 
 ## Configuration
 

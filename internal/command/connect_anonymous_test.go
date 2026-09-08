@@ -12,8 +12,6 @@ import (
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
 
-const anonymousNotice = "Connected anonymously; pass --anonymous to silence this or set CDB_USER/CDB_PASSWORD"
-
 // connectWith runs "connect" with a parsed flag line.
 func connectWith(t *testing.T, s *session.Session, args ...string) (Result, error) {
 	t.Helper()

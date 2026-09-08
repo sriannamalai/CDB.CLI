@@ -154,14 +154,20 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 	var profile config.Profile
 	var profileName string
 
+	// bare records "a server URL was named that carries no credentials of its
+	// own". Whether that matters is decided below, once the environment has
+	// had its say.
+	bare := false
+
 	switch {
 	case strings.HasPrefix(nameOrURL, "http://"), strings.HasPrefix(nameOrURL, "https://"):
 		// Userinfo in the URL is a credential: net/http turns it into a Basic
 		// auth header. Record the user name it carries so the connection
 		// reports who it is, instead of calling an authenticated session
 		// anonymous.
-		_, urlUser, _ := splitURLCredentials(nameOrURL)
+		_, urlUser, urlSecret := splitURLCredentials(nameOrURL)
 		profile = config.Profile{Name: "", URL: nameOrURL, Auth: "none", Username: urlUser}
+		bare = urlUser == "" && urlSecret == ""
 	case nameOrURL != "":
 		p, ok := cfg.Profile(nameOrURL)
 		if !ok {
@@ -214,6 +220,11 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 	if nameOrURL != "" {
 		env.URL = ""
 	}
+	// Credentials in the environment are credentials: a URL that carries none
+	// of its own is not bare when CDB_USER or CDB_PASSWORD/CDB_TOKEN is set.
+	if _, hasEnvSecret := env.Secret(); env.User != "" || hasEnvSecret {
+		bare = false
+	}
 	profile = env.Apply(profile)
 
 	// CDB_PASSWORD and CDB_TOKEN bypass the keyring entirely: the environment
@@ -243,9 +254,44 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 		}
 	}
 
+	// A server URL with no credentials anywhere is the trap I3 named: a stock
+	// CouchDB answers GET / and GET /_session to an anonymous client with 200,
+	// so the connection reports success and then 401s on every command with a
+	// sentence about a password nobody supplied. It is handled here rather
+	// than in the "connect" command because this is the door every subcommand
+	// and the shell's own startup go through — "cdb --url http://host ls /" is
+	// the common case, not "cdb connect".
+	notice := false
+	if bare && !s.Prefs.Anonymous {
+		if s.Prefs.Interactive {
+			user, promptSecret, err := promptForCredentials(s)
+			if err != nil {
+				return connection{}, err
+			}
+			// An empty password means "none": connect anonymously rather than
+			// sending an empty password the server can only reject.
+			if promptSecret != "" {
+				profile.Auth, profile.Username, secret = "session", user, promptSecret
+			}
+		} else {
+			notice = true
+		}
+	}
+
 	profile.Name = profileName
-	return dial(ctx, s, profile, profileName, secret)
+	conn, err := dial(ctx, s, profile, profileName, secret)
+	if err != nil {
+		return conn, err
+	}
+	if notice {
+		fmt.Fprintln(s.Stderr, anonymousNotice)
+	}
+	return conn, nil
 }
+
+// anonymousNotice is said once, on stderr, when a connection was made with no
+// credentials because there was nobody to ask for any.
+const anonymousNotice = "Connected anonymously; pass --anonymous to silence this or set CDB_USER/CDB_PASSWORD."
 
 // dial builds a client for an already-resolved profile, proves it works, and
 // attaches it to the session. attachAs is the profile name the session should
@@ -330,7 +376,6 @@ func Connect() Command {
 		Flags: func(fs *pflag.FlagSet) {
 			fs.Bool("save", false, "save the connection as a profile after connecting")
 			fs.String("as", "", "profile name to save under")
-			fs.Bool("anonymous", false, "connect without credentials, and do not ask for any")
 		},
 		Complete: func(_ context.Context, _ *session.Session, _ []string, cur string) []Candidate {
 			cfg, err := loadConfig()
@@ -354,18 +399,18 @@ func Connect() Command {
 					return nil, err
 				}
 			}
+			// --anonymous is a shared flag, so both front-ends have already put
+			// it on the session before Run; honour it here too for a direct
+			// call that has only the flag set.
+			if inv.Bool("anonymous") && !s.Prefs.Anonymous {
+				s.Prefs.Anonymous = true
+				defer func() { s.Prefs.Anonymous = false }()
+			}
 			arg := inv.Arg(0)
 			var conn connection
 			var err error
 			guided := false
-			// A bare URL with no credentials anywhere is the trap I3 named: it
-			// connects, reports success, and then 401s on every command. Ask
-			// for the credentials when there is somebody to ask, and say what
-			// happened when there is not.
-			bare := !inv.Bool("anonymous") && bareURLNeedsCredentials(arg)
-			sayAnonymous := false
-			switch {
-			case arg == "" && !hasAnyProfile() && s.Prefs.Interactive:
+			if arg == "" && !hasAnyProfile() && s.Prefs.Interactive {
 				// Spec 6.1: ask, verify, and only then offer to save. Nothing
 				// reaches config.toml or the keyring until the server has
 				// accepted the answers, so a mistyped password leaves no
@@ -376,28 +421,13 @@ func Connect() Command {
 				}
 				guided = true
 				conn, err = dial(ctx, s, p, "", secret)
-			case bare && s.Prefs.Interactive:
-				user, secret, promptErr := promptForCredentials(s)
-				if promptErr != nil {
-					return nil, promptErr
-				}
-				if secret == "" {
-					// Enter at the password means "none": connect anonymously
-					// rather than sending an empty password the server can
-					// only reject.
-					conn, err = openProfile(ctx, s, arg)
-				} else {
-					conn, err = dial(ctx, s, config.Profile{URL: arg, Auth: "session", Username: user}, "", secret)
-				}
-			default:
-				sayAnonymous = bare
+			} else {
+				// openProfile owns the bare-URL question, because every other
+				// command reaches a server through it too.
 				conn, err = openProfile(ctx, s, arg)
 			}
 			if err != nil {
 				return nil, err
-			}
-			if sayAnonymous {
-				fmt.Fprintln(s.Stderr, "Connected anonymously; pass --anonymous to silence this or set CDB_USER/CDB_PASSWORD.")
 			}
 			who := s.Client.Username()
 			if who == "" {
@@ -511,27 +541,6 @@ func profileNameFor(raw string) string {
 func hasAnyProfile() bool {
 	cfg, err := loadConfig()
 	return err == nil && len(cfg.Profiles) > 0
-}
-
-// bareURLNeedsCredentials reports whether nameOrURL is a server URL that
-// carries no credentials of its own and has none waiting in the environment.
-// Such a connection succeeds against a stock CouchDB — GET / and GET /_session
-// both answer an anonymous client with 200 — and then every command 401s with
-// a sentence about a password that was never supplied. Whoever asks for one of
-// these has to be told, or asked, before that happens.
-func bareURLNeedsCredentials(nameOrURL string) bool {
-	if !strings.HasPrefix(nameOrURL, "http://") && !strings.HasPrefix(nameOrURL, "https://") {
-		return false
-	}
-	if _, user, secret := splitURLCredentials(nameOrURL); user != "" || secret != "" {
-		return false
-	}
-	env := config.LoadEnv(CurrentDeps().LookupEnv)
-	if env.User != "" {
-		return false
-	}
-	_, fromEnv := env.Secret()
-	return !fromEnv
 }
 
 // askLine puts one question to the operator and returns the answer, or def
