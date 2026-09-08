@@ -14,5 +14,7 @@ func Default() *Registry {
 	r.Register(Put())
 	r.Register(Rm())
 	r.Register(Edit())
+	r.Register(Find())
+	r.Register(Query())
 	return r
 }
