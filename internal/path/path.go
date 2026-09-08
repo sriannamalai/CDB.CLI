@@ -67,7 +67,8 @@ type Target struct {
 	// Attachment is the attachment file name. Set only when Kind is
 	// KindAttachment.
 	Attachment string
-	// Partition is the partition key. Set only when Kind is KindPartition.
+	// Partition is the partition key. Set on a KindPartition target and on
+	// every document, attachment and view addressed through one.
 	Partition string
 }
 
@@ -168,12 +169,59 @@ func Resolve(base, input string) (Target, error) {
 	t.Database = dec[0]
 
 	if dec[1] == "_partition" {
-		if len(segs) != 3 {
+		if len(segs) < 3 {
 			return Target{}, &Error{Input: input, Reason: "a partition path looks like /db/_partition/<key>"}
 		}
-		t.Kind = KindPartition
 		t.Partition = dec[2]
-		return t, nil
+		// After the key, the remaining segments follow the same rules as
+		// after /db, with two differences: a document id gets the partition
+		// prefix, and a design document alone is refused.
+		rest := dec[3:]
+		if len(rest) == 0 {
+			t.Kind = KindPartition
+			return t, nil
+		}
+		if rest[0] == "_design" {
+			if len(rest) < 2 {
+				return Target{}, &Error{Input: input, Reason: "a design document path needs a name, as in /db/_design/app"}
+			}
+			t.DocID = "_design/" + rest[1]
+			switch {
+			case len(rest) == 4 && rest[2] == "_view":
+				t.Kind = KindView
+				t.View = rest[3]
+				return t, nil
+			case len(rest) == 4:
+				return Target{}, &Error{Input: input, Reason: "expected _view after a design document name"}
+			case len(rest) > 4:
+				return Target{}, &Error{Input: input, Reason: "path has too many segments"}
+			default:
+				// The design document itself, or the document plus one
+				// segment that is not a complete view path. A design document
+				// is not partition-scoped — CouchDB answers 404 for
+				// /db/_partition/p1/_design/app — so say where it does live
+				// and how to run its view against this partition.
+				return Target{}, &Error{Input: input, Reason: fmt.Sprintf(
+					"a design document is not partition-scoped; use /%s/_design/%s, or add /_view/<name> to run the view against the partition",
+					segs[0], segs[4])}
+			}
+		}
+		// CouchDB's own convention: a document in partition p1 has an id of
+		// the form "p1:<rest>". There is no partition-scoped document
+		// endpoint, so the partition lives in the id and the request base
+		// does not carry it.
+		t.DocID = partitionDocID(t.Partition, rest[0])
+		switch len(rest) {
+		case 1:
+			t.Kind = KindDocument
+			return t, nil
+		case 2:
+			t.Kind = KindAttachment
+			t.Attachment = rest[1]
+			return t, nil
+		default:
+			return Target{}, &Error{Input: input, Reason: "path has too many segments"}
+		}
 	}
 
 	if dec[1] == "_design" {
@@ -214,4 +262,15 @@ func Resolve(base, input string) (Target, error) {
 	default:
 		return Target{}, &Error{Input: input, Reason: "path has too many segments"}
 	}
+}
+
+// partitionDocID applies CouchDB's partitioned-document convention. A segment
+// that already begins with "<key>:" is used as it is, so that
+// /db/_partition/p1/doc1 and /db/_partition/p1/p1:doc1 name the same document
+// and a path built by pasting an id straight out of "ls" works.
+func partitionDocID(key, seg string) string {
+	if strings.HasPrefix(seg, key+":") {
+		return seg
+	}
+	return key + ":" + seg
 }
