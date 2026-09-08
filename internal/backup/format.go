@@ -22,13 +22,24 @@ const (
 	KindFooter     = "footer"
 )
 
+// FormatVersion is the dump format this cdb writes. Every 1.1 backup records
+// it, whether or not --tombstones was given.
+const FormatVersion = "1.1"
+
 // Header is the first record in a dump.
 type Header struct {
-	Kind        string `json:"kind"`
+	Kind string `json:"kind"`
+	// Version is the dump format. A dump written by cdb 1.0 has none, which
+	// means "1.0"; a 1.1 dump always carries "1.1".
+	Version     string `json:"version,omitempty"`
 	DB          string `json:"db"`
 	Server      string `json:"server"`
 	Started     string `json:"started"`
 	Partitioned bool   `json:"partitioned"`
+	// Tombstones records whether deletions were dumped. It is what tells a
+	// reader whether the absence of a tombstone means "never deleted" or
+	// "deletions were not recorded".
+	Tombstones bool `json:"tombstones,omitempty"`
 }
 
 // Att describes an attachment payload that follows the record.
@@ -43,10 +54,48 @@ type Att struct {
 
 // Footer is the last record in a complete dump.
 type Footer struct {
-	Kind        string `json:"kind"`
-	Docs        int64  `json:"docs"`
+	Kind string `json:"kind"`
+	// Docs counts every doc record, tombstones included, so Docs - Deleted is
+	// the number of live revisions.
+	Docs int64 `json:"docs"`
+	// Deleted counts the doc records carrying _deleted:true. Absent means zero.
+	Deleted     int64  `json:"deleted,omitempty"`
 	Attachments int64  `json:"attachments"`
 	LastSeq     string `json:"last_seq"`
+}
+
+// VersionError reports a dump whose header declares a format version this cdb
+// does not read. Callers match on it with errors.As to report the mistake as
+// their own usage error, naming the file the operator typed.
+type VersionError struct{ Version string }
+
+func (e *VersionError) Error() string {
+	return fmt.Sprintf("dump format %q is not supported", e.Version)
+}
+
+// supportedVersion reports whether a header's version can be read. An empty
+// version means 1.0, the format cdb 1.0 wrote. Anything newer is refused
+// rather than read on a guess: a 1.2 dump may hold record kinds this binary
+// would silently skip.
+func supportedVersion(v string) bool {
+	switch v {
+	case "", "1.0", FormatVersion:
+		return true
+	}
+	return false
+}
+
+// IsTombstone reports whether a dump document records a deletion. A tombstone
+// is an ordinary doc record carrying _deleted:true — there is no separate
+// kind, so every reader that walks doc records already handles it.
+func IsTombstone(doc json.RawMessage) bool {
+	var d struct {
+		Deleted bool `json:"_deleted"`
+	}
+	if err := json.Unmarshal(doc, &d); err != nil {
+		return false
+	}
+	return d.Deleted
 }
 
 // Writer writes dump records.
@@ -230,6 +279,9 @@ func (r *Reader) Next() (*Record, error) {
 		var h Header
 		if err := json.Unmarshal(lineBytes, &h); err != nil {
 			return nil, err
+		}
+		if !supportedVersion(h.Version) {
+			return nil, &VersionError{Version: h.Version}
 		}
 		rec.Header = &h
 	case KindDoc:

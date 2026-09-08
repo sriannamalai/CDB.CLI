@@ -16,10 +16,14 @@ type Resume struct {
 	// Offset is the byte offset just past the gzip member that ended with that
 	// checkpoint. Truncate the file here before appending.
 	Offset int64
-	// Docs and Attachments are the counts recorded up to that checkpoint, and
+	// Docs, Deleted, Attachments and Bytes are the counts recorded up to that
+	// checkpoint; Deleted counts the doc records that were tombstones, and
 	// Bytes is the document and attachment payload size they add up to. The
 	// backup command resumes its progress counters from these.
-	Docs, Attachments, Bytes int64
+	Docs, Deleted, Attachments, Bytes int64
+	// Tombstones is the header's flag: whether this dump records deletions.
+	// backup --resume refuses to continue a dump in the other mode.
+	Tombstones bool
 	// Complete is true when the dump already contains a footer. A complete dump
 	// must not be resumed: it has nothing left to append.
 	Complete bool
@@ -74,11 +78,12 @@ func Scan(f *os.File) (Resume, error) {
 		return Resume{}, err
 	}
 	var (
-		res   Resume
-		cr    = &countingReader{br: bufio.NewReaderSize(f, 64*1024)}
-		docs  int64
-		atts  int64
-		bytes int64
+		res     Resume
+		cr      = &countingReader{br: bufio.NewReaderSize(f, 64*1024)}
+		docs    int64
+		deleted int64
+		atts    int64
+		bytes   int64
 	)
 	gz, err := gzip.NewReader(cr)
 	if err != nil {
@@ -121,6 +126,14 @@ func Scan(f *os.File) (Resume, error) {
 				break
 			}
 			if rerr != nil {
+				// Reader.Next refuses an unreadable header itself, so an
+				// unsupported version reaches Scan as an error on the first
+				// record. Report it rather than folding it into notADump: the
+				// file is a cdb dump, just not one this binary can resume.
+				var ve *VersionError
+				if errors.As(rerr, &ve) {
+					return Resume{}, ve
+				}
 				if first {
 					return notADump()
 				}
@@ -131,12 +144,22 @@ func Scan(f *os.File) (Resume, error) {
 				if rec.Kind != KindHeader {
 					return notADump()
 				}
+				// The version is refused here as well as in Reader.Next, so a
+				// resume cannot append 1.1 records to a dump this binary does
+				// not understand.
+				if !supportedVersion(rec.Header.Version) {
+					return Resume{}, &VersionError{Version: rec.Header.Version}
+				}
+				res.Tombstones = rec.Header.Tombstones
 				first = false
 			}
 			switch rec.Kind {
 			case KindDoc:
 				docs++
 				bytes += int64(len(rec.Doc))
+				if IsTombstone(rec.Doc) {
+					deleted++
+				}
 			case KindAtt:
 				atts++
 				bytes += rec.Att.Length
@@ -158,6 +181,7 @@ func Scan(f *os.File) (Resume, error) {
 		// Commit Offset, the counters, Seq and Complete together.
 		res.Offset = cr.n
 		res.Docs = docs
+		res.Deleted = deleted
 		res.Attachments = atts
 		res.Bytes = bytes
 		res.Seq = memberSeq
