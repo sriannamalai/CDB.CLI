@@ -23,9 +23,24 @@ type Secrets interface {
 
 type keyringSecrets struct{ ring keyring.Keyring }
 
+// resolvePrompt returns prompt as a keyring.PromptFunc, or
+// keyring.TerminalPrompt when prompt is nil. keyring v1.2.2's file backend
+// invokes FilePasswordFunc unconditionally the first time it unlocks
+// (file.go's unlock calls k.passwordFunc directly, with no nil check), so
+// passing a nil prompt straight through would panic instead of prompting.
+func resolvePrompt(prompt func(string) (string, error)) keyring.PromptFunc {
+	if prompt == nil {
+		return keyring.TerminalPrompt
+	}
+	return keyring.PromptFunc(prompt)
+}
+
 // OpenSecrets opens the OS keyring, falling back to an encrypted file in
-// dir/keyring. prompt is called for the file backend's passphrase. Setting
-// CDB_KEYRING_BACKEND forces one backend, which is useful in CI.
+// dir/keyring. prompt is called for the file backend's passphrase; a nil
+// prompt falls back to keyring.TerminalPrompt (interactive stdin), since
+// keyring v1.2.2's file backend calls FilePasswordFunc unconditionally on
+// first unlock and a nil func there panics rather than degrading gracefully.
+// Setting CDB_KEYRING_BACKEND forces one backend, which is useful in CI.
 func OpenSecrets(dir string, prompt func(string) (string, error)) (Secrets, error) {
 	fileDir := filepath.Join(dir, "keyring")
 	if err := os.MkdirAll(fileDir, 0o700); err != nil {
@@ -51,7 +66,7 @@ func OpenSecrets(dir string, prompt func(string) (string, error)) (Secrets, erro
 		KWalletFolder:            appName,
 		WinCredPrefix:            appName,
 		FileDir:                  fileDir,
-		FilePasswordFunc:         keyring.PromptFunc(prompt),
+		FilePasswordFunc:         resolvePrompt(prompt),
 	})
 	if err != nil {
 		return nil, err

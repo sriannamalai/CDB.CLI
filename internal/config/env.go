@@ -57,13 +57,15 @@ func (e Env) Apply(p Profile) Profile {
 	return p
 }
 
-// Secret returns the environment-supplied secret, preferring CDB_PASSWORD.
+// Secret returns the environment-supplied secret, preferring CDB_TOKEN so it
+// agrees with Apply: whichever one selects the auth kind is also the one
+// handed over as the credential.
 func (e Env) Secret() (string, bool) {
-	if e.Password != "" {
-		return e.Password, true
-	}
 	if e.Token != "" {
 		return e.Token, true
+	}
+	if e.Password != "" {
+		return e.Password, true
 	}
 	return "", false
 }

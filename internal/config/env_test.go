@@ -57,3 +57,18 @@ func TestEnvSecretPrefersPassword(t *testing.T) {
 		t.Error("Secret() = ok with no environment secret")
 	}
 }
+
+func TestEnvTokenWinsOverPasswordWhenBothSet(t *testing.T) {
+	// Apply picks "jwt" whenever CDB_TOKEN is set, regardless of CDB_PASSWORD.
+	// Secret must agree, or the profile would claim JWT auth while handing
+	// over the password as the bearer credential.
+	e := LoadEnv(lookupFrom(map[string]string{"CDB_TOKEN": "tok.en.sig", "CDB_PASSWORD": "hunter2"}))
+	got := e.Apply(Profile{Name: "local", URL: "http://localhost:5984", Auth: "session"})
+	if got.Auth != "jwt" {
+		t.Errorf("Auth = %q, want jwt when both CDB_TOKEN and CDB_PASSWORD are set", got.Auth)
+	}
+	secret, ok := e.Secret()
+	if !ok || secret != "tok.en.sig" {
+		t.Errorf("Secret() = %q, %v, want the token", secret, ok)
+	}
+}
