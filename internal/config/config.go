@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 
 	ktoml "github.com/knadh/koanf/parsers/toml"
@@ -127,7 +128,52 @@ func (c *Config) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	return writeFileAtomic(path, b)
+}
+
+// writeFileAtomic writes b to path through a sibling temp file and a rename,
+// leaving the result mode 0600.
+//
+// os.WriteFile is not enough on either count. Its mode argument applies only
+// when it creates the file, so a config.toml the operator wrote themselves at
+// 0644 keeps 0644 and the profiles in it stay world-readable; and it truncates
+// before writing, so a crash mid-write loses the whole profile list. The
+// rename is atomic on POSIX and replaces the target on Windows, so a reader
+// sees one complete version or the other.
+func writeFileAtomic(path string, b []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	// Remove the temp file on every failure path. After a successful rename
+	// there is nothing at that name and the error is ignored.
+	defer func() { _ = os.Remove(name) }()
+	if err := tmp.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// An existing target may be laxer than 0600. Rename replaces the inode on
+	// POSIX so this is belt and braces there, but on Windows the mode of the
+	// destination can survive, and either way it costs one syscall.
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Chmod(path, 0o600); err != nil && runtime.GOOS != "windows" {
+			return err
+		}
+	}
+	return os.Rename(name, path)
 }
 
 // Profile looks a profile up by name.
