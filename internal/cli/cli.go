@@ -1,0 +1,163 @@
+// Package cli builds the cobra command tree from the command registry.
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/spf13/cobra"
+	"github.com/sriannamalai/CDB.CLI/internal/command"
+	"github.com/sriannamalai/CDB.CLI/internal/render"
+	"github.com/sriannamalai/CDB.CLI/internal/session"
+)
+
+// BuildInfo carries the ldflags-injected release identity.
+type BuildInfo struct {
+	Version string
+	Commit  string
+	Date    string
+}
+
+// NewRoot builds the cobra tree: one subcommand per registry entry that is not
+// ShellOnly, plus version and completion.
+func NewRoot(reg *command.Registry, s *session.Session, build BuildInfo) *cobra.Command {
+	root := &cobra.Command{
+		Use:           "cdb",
+		Short:         "Interactive CouchDB client",
+		Long:          "cdb is an interactive shell and one-shot command line client for Apache CouchDB 3.x.",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+	root.SetOut(s.Stdout)
+	root.SetErr(s.Stderr)
+	root.SetIn(s.Stdin())
+
+	pf := root.PersistentFlags()
+	pf.String("profile", "", "connection profile to use")
+	pf.String("url", "", "server URL, overriding the profile")
+	pf.String("path", "", "starting virtual path")
+	pf.String("format", "", "output format: table or json")
+	pf.String("color", "", "colour: auto, always or never")
+	pf.String("pager", "", "pager command, or off")
+	pf.Bool("json", false, "print raw JSON instead of a table")
+	pf.Bool("yes", false, "skip confirmation prompts")
+	pf.Bool("verbose", false, "include raw status codes and reasons in errors")
+
+	root.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print the version, commit and build date",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			_, err := fmt.Fprintf(s.Stdout, "cdb %s (commit %s, built %s)\n", orUnknown(build.Version), orUnknown(build.Commit), orUnknown(build.Date))
+			return err
+		},
+	})
+
+	for _, c := range reg.All() {
+		if c.ShellOnly {
+			continue
+		}
+		root.AddCommand(newSubcommand(reg, c, s))
+	}
+	return root
+}
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return s
+}
+
+func newSubcommand(reg *command.Registry, c command.Command, s *session.Session) *cobra.Command {
+	use := c.Name
+	if c.Usage != "" {
+		use += " " + c.Usage
+	}
+	sub := &cobra.Command{
+		Use:                use,
+		Aliases:            c.Aliases,
+		Short:              c.Summary,
+		SilenceUsage:       true,
+		SilenceErrors:      true,
+		DisableFlagParsing: false,
+		RunE: func(cc *cobra.Command, args []string) error {
+			if err := c.CheckArgsErr(args); err != nil {
+				return err
+			}
+			applyGlobalFlags(cc, s)
+			if c.NeedsClient && !s.Connected() {
+				return command.Usagef(c.Name, "not connected. Run \"cdb connect\" first.")
+			}
+			inv := command.Invocation{
+				Args:   args,
+				Flags:  cc.Flags(),
+				Stdin:  s.Stdin(),
+				Stdout: s.Stdout,
+				Stderr: s.Stderr,
+			}
+			res, err := c.Run(cc.Context(), s, inv)
+			if err != nil {
+				return err
+			}
+			forceJSON, _ := cc.Flags().GetBool("json")
+			r := render.New(s.Stdout, render.OptionsFor(s.Prefs, s.Stdout, forceJSON))
+			return r.Render(res)
+		},
+	}
+	fs := reg.NewFlagSet(c)
+	sub.Flags().AddFlagSet(fs)
+	return sub
+}
+
+// applyGlobalFlags copies persistent and shared flags into session prefs.
+func applyGlobalFlags(c *cobra.Command, s *session.Session) {
+	flags := c.Flags()
+	if v, err := flags.GetBool("yes"); err == nil && v {
+		s.Prefs.Yes = true
+	}
+	if v, err := flags.GetBool("verbose"); err == nil && v {
+		s.Prefs.Verbose = true
+	}
+	if v, err := flags.GetString("format"); err == nil && v != "" {
+		s.Prefs.Format = session.Format(v)
+	}
+	if v, err := flags.GetString("color"); err == nil && v != "" {
+		s.Prefs.Color = session.ColorMode(v)
+	}
+	if v, err := flags.GetString("pager"); err == nil && v != "" {
+		s.Prefs.Pager = v
+	}
+	if v, err := flags.GetString("path"); err == nil && v != "" {
+		s.SetPath(v)
+	}
+}
+
+// Execute runs one command line and returns the process exit code. It renders
+// errors to the session's stderr.
+func Execute(ctx context.Context, reg *command.Registry, s *session.Session, build BuildInfo, args []string) int {
+	// A one-shot run may prompt only when both ends are a real terminal. This
+	// is the only place the cobra front-end sets it, and without it every
+	// confirmation, the connect walk-through, find's guided builder and
+	// rmdir's retype step would be unreachable outside the shell.
+	s.Prefs.Interactive = render.IsTerminal(s.Stdout) && render.IsTerminalReader(s.Stdin())
+	root := NewRoot(reg, s, build)
+	root.SetArgs(args)
+	err := root.ExecuteContext(ctx)
+	if err == nil {
+		return ExitOK
+	}
+	var ue *command.UsageError
+	if errors.As(err, &ue) {
+		fmt.Fprintln(s.Stderr, ue.Error())
+		return ExitUsage
+	}
+	fmt.Fprintln(s.Stderr, errorText(err, s.Prefs.Verbose))
+	return ExitCode(err)
+}
+
+// errorText renders an error for the terminal. Task 21 replaces the body with
+// a call to render.ErrorMessage, which maps CouchDB errors to plain sentences;
+// the signature does not change.
+func errorText(err error, verbose bool) string { return err.Error() }
