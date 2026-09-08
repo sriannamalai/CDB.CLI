@@ -36,6 +36,15 @@ and verify it against `checksums.txt`.
 The Homebrew and Scoop lines above work now. A release binary is also
 available from the GitHub Releases page.
 
+## Documentation
+
+- [User guide](docs/UserGuide.md) — installing, connecting, the virtual
+  filesystem, documents, queries, attachments, conflicts, backup and restore,
+  replication, the shell, scripting, errors and troubleshooting.
+- [Command reference](docs/reference/README.md) — one page per command with
+  its flags, argument rules and a worked example, generated from the registry
+  the binary itself runs on.
+
 ## Quickstart
 
 `cdb` starts the interactive shell only when both stdin and stdout are a
