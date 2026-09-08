@@ -39,7 +39,10 @@ func (d *Deps) SecretStore() (config.Secrets, error) {
 		return d.Secrets, nil
 	}
 	if d.secretsErr != nil {
-		return nil, fmt.Errorf("could not open the system keyring: %w. Set CDB_PASSWORD or CDB_TOKEN to connect without saving", d.secretsErr)
+		// A ConnectionError, not a plain one: nothing ran, and the fix is in
+		// the connection rather than the command, so this exits 3 alongside the
+		// keyring read failure in openProfile.
+		return nil, Connectionf(d.secretsErr, "Could not open the system keyring: %v. Set CDB_PASSWORD or CDB_TOKEN to connect without saving.", d.secretsErr)
 	}
 	return nil, errors.New("no secret store is configured")
 }
@@ -192,8 +195,20 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 			return connection{}, err
 		}
 		stored, err := store.Get(profileName)
-		if err == nil {
+		switch {
+		case err == nil:
 			secret = stored
+		case errors.Is(err, config.ErrSecretNotFound):
+			// A profile may legitimately have no stored secret: an anonymous
+			// server, or one whose password arrives in the environment.
+		default:
+			// Everything else is the keyring refusing — a denied Keychain
+			// prompt, a locked Secret Service, a wrong file passphrase.
+			// Swallowing it leaves secret empty, the login 401s, and the
+			// operator is told their password is wrong when it was never read.
+			return connection{}, Connectionf(err,
+				"Could not read the password for profile %q from the system keyring: %v. Set CDB_PASSWORD to bypass it.",
+				profileName, err)
 		}
 	}
 

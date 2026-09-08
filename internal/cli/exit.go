@@ -30,6 +30,10 @@ func ExitCode(err error) int {
 	if errors.As(err, &ue) {
 		return ExitUsage
 	}
+	var ce *command.ConnectionError
+	if errors.As(err, &ce) {
+		return ExitConnection
+	}
 	if ce, ok := couch.AsError(err); ok {
 		if ce.Status == couch.StatusUnreachable || ce.Status == http.StatusUnauthorized {
 			return ExitConnection
