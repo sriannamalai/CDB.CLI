@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -12,6 +13,31 @@ import (
 
 // ErrExit tells the shell loop to stop.
 var ErrExit = errors.New("exit")
+
+// destructiveMarker is what help puts in the "!" column of a command that is
+// marked Destructive, and destructiveNote is the line help prints when it
+// explains one such command.
+const (
+	destructiveMarker = "!"
+	destructiveNote   = "This command is destructive; it asks for confirmation unless --yes is given."
+)
+
+// helpEntry is one row of the help table, in JSON form.
+type helpEntry struct {
+	Command     string `json:"command"`
+	Summary     string `json:"summary"`
+	Destructive bool   `json:"destructive"`
+}
+
+// helpJSON renders a help table row. jsonObject cannot be used here because
+// the destructive field is a bool, not a string.
+func helpJSON(c Command) json.RawMessage {
+	b, err := json.Marshal(helpEntry{Command: c.Name, Summary: c.Summary, Destructive: c.Destructive})
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return b
+}
 
 // Help returns the help command, which lists the registry it is built from.
 func Help(reg *Registry) Command {
@@ -39,6 +65,9 @@ func Help(reg *Registry) Command {
 					return nil, Usagef("help", "no command named %q", name)
 				}
 				text := fmt.Sprintf("%s %s\n  %s", c.Name, c.Usage, c.Summary)
+				if c.Destructive {
+					text += "\n  " + destructiveNote
+				}
 				if len(c.Aliases) > 0 {
 					text += "\n  aliases: " + strings.Join(c.Aliases, ", ")
 				}
@@ -48,14 +77,18 @@ func Help(reg *Registry) Command {
 				}
 				return Message{Text: text}, nil
 			}
-			rows := Rows{Columns: []Column{{Title: "command"}, {Title: "summary"}}}
+			rows := Rows{Columns: []Column{{Title: "command"}, {Title: "!"}, {Title: "summary"}}}
 			for _, c := range reg.All() {
+				marker := ""
+				if c.Destructive {
+					marker = destructiveMarker
+				}
 				rows.Items = append(rows.Items, Row{
-					Cells: []string{c.Name, c.Summary},
-					JSON:  jsonObject("command", c.Name, "summary", c.Summary),
+					Cells: []string{c.Name, marker, c.Summary},
+					JSON:  helpJSON(c),
 				})
 			}
-			rows.Hint = "help <command> explains one command"
+			rows.Hint = "help <command> explains one command; ! marks a destructive command"
 			return rows, nil
 		},
 	}
