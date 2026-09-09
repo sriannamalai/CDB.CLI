@@ -12,7 +12,7 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.6
 	github.com/mattn/go-isatty v0.0.24
-	github.com/reeflective/readline v1.3.0
+	github.com/reeflective/readline v1.3.1-0.20260802023205-4d8e27a037bd
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/term v0.45.0
