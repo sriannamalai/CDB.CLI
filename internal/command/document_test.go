@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -457,11 +458,11 @@ func TestEditGivesUpWhenTheReloadIsDeclined(t *testing.T) {
 	s.Stdout = &bytes.Buffer{}
 	s.Prefs.Interactive = true
 	_, err := invoke(t, Edit(), s, "doc1")
-	if err == nil {
-		t.Fatal("edit reported success after a declined conflict")
-	}
-	if !strings.Contains(err.Error(), "conflict") {
-		t.Errorf("error = %v, want the conflict to surface", err)
+	// The operator's "n" is the answer that ends the command, so it is the
+	// answer that names it: "Cancelled: nothing was changed.", not the 409
+	// that prompted the question.
+	if !errors.Is(err, ErrDeclined) {
+		t.Fatalf("error = %v, want ErrDeclined", err)
 	}
 	if srv.Last("HEAD", "/mydb/doc1") != nil {
 		t.Error("edit reloaded the revision even though the operator declined")
@@ -561,15 +562,48 @@ func TestRmInterruptedExitsSilently(t *testing.T) {
 	s.Prefs.Interactive = true
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
+	s.SetStdin(&cancelAtPrompt{cancel: cancel, rest: strings.NewReader("\n")})
 	_, err := invokeContext(ctx, Rm(), s, "doc1")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
-	if out := s.Stdout.(*bytes.Buffer).String(); out != "" && !strings.HasSuffix(out, "[y/N] ") {
+	if out := s.Stdout.(*bytes.Buffer).String(); !strings.HasSuffix(out, "[y/N] ") {
 		t.Errorf("stdout = %q, want nothing but the prompt itself", out)
 	}
 	if srv.Last("DELETE", "/mydb/doc1") != nil {
 		t.Fatal("rm deleted after an interrupted prompt")
+	}
+}
+
+// TestEditInterruptedAtTheReapplyPrompt is #32 at edit's second prompt. The
+// conflict that raised the question is not the answer to it: Ctrl-C means the
+// operator interrupted, so edit reports the interruption and exits 130 in
+// silence rather than blaming a 409 the operator never saw the end of.
+func TestEditInterruptedAtTheReapplyPrompt(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb/doc1", 200, `{"_id":"doc1","_rev":"1-a","n":1}`)
+	srv.JSON("PUT", "/mydb/doc1", 409, `{"error":"conflict","reason":"Document update conflict."}`)
+	editorScript(t, `printf '{"_id":"doc1","n":2}' > "$1"`)
+	s := connected(t, srv)
+	s.SetPath("/mydb")
+	s.Stdout = &bytes.Buffer{}
+	s.Prefs.Interactive = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.SetStdin(&cancelAtPrompt{cancel: cancel, rest: strings.NewReader("\n")})
+	_, err := invokeContext(ctx, Edit(), s, "doc1")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if strings.Contains(fmt.Sprint(err), "conflict") {
+		t.Errorf("error = %v, want no mention of the conflict", err)
+	}
+	if !strings.HasSuffix(s.Stdout.(*bytes.Buffer).String(), "[y/N] ") {
+		t.Errorf("stdout = %q, want it to end at the prompt", s.Stdout.(*bytes.Buffer).String())
+	}
+	if srv.Last("HEAD", "/mydb/doc1") != nil {
+		t.Error("edit reloaded the revision after an interrupted prompt")
 	}
 }

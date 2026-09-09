@@ -336,8 +336,12 @@ Wrote /movies/tt0211915 at revision 4-ceb91fedc93490095c3780efe46bfa19.`,
 					return nil, err
 				}
 				fmt.Fprintf(s.Stdout, "%s was changed by someone else while you were editing.\n", t.Path)
+				// The prompt's own verdict ends the command: a refusal is
+				// "Cancelled: nothing was changed." and an interrupt is
+				// silence and 130. Returning the 409 instead would answer a
+				// question the operator did not ask.
 				if cerr := Confirm(ctx, s, "Reapply your edits on top of the latest revision?"); cerr != nil {
-					return nil, err
+					return nil, cerr
 				}
 				latestRev, gerr := s.Client.GetRev(ctx, t.Database, t.DocID)
 				if gerr != nil {

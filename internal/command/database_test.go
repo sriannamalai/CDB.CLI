@@ -235,12 +235,13 @@ func TestRmdirInterruptedExitsSilently(t *testing.T) {
 	s.Prefs.Interactive = true
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
+	s.SetStdin(&cancelAtPrompt{cancel: cancel, rest: strings.NewReader("\n")})
 	_, err := invokeContext(ctx, Rmdir(), s, "/mydb")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
-	if out := s.Stdout.(*bytes.Buffer).String(); out != "" && !strings.HasSuffix(out, "(mydb): ") {
+	if out := s.Stdout.(*bytes.Buffer).String(); !strings.HasSuffix(out, "(mydb): ") {
 		t.Errorf("stdout = %q, want nothing but the prompt itself", out)
 	}
 	if srv.Last("DELETE", "/mydb") != nil {

@@ -27,8 +27,16 @@ func Confirm(ctx context.Context, s *session.Session, prompt string) error {
 	}
 	fmt.Fprintf(s.Stdout, "%s [y/N] ", prompt)
 	line, err := s.Reader().ReadString('\n')
-	if cerr := interrupted(ctx); cerr != nil {
-		return cerr
+	// Ctrl-C at a prompt cancels the command's context. It does not end the
+	// read: nothing here is in raw mode, so the terminal is still queueing a
+	// line and the read returns only once one arrives. Whatever comes back is
+	// therefore not an answer, and the cancelled context is the only record of
+	// what the operator asked for — the arrangement resolve's chooser adopted
+	// in 1.1.1. Reporting it as an interruption rather than as ErrDeclined is
+	// what makes the one-shot front end exit 130 in silence instead of
+	// printing a verdict the operator never gave.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
 	if err != nil && line == "" {
 		return ErrDeclined
@@ -51,8 +59,9 @@ func ConfirmPhrase(ctx context.Context, s *session.Session, prompt, want string)
 	}
 	fmt.Fprintf(s.Stdout, "%s (%s): ", prompt, want)
 	line, err := s.Reader().ReadString('\n')
-	if cerr := interrupted(ctx); cerr != nil {
-		return cerr
+	// Ctrl-C is an interruption, not a wrong phrase; see Confirm.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
 	if err != nil && line == "" {
 		return ErrDeclined
@@ -61,17 +70,6 @@ func ConfirmPhrase(ctx context.Context, s *session.Session, prompt, want string)
 		return ErrDeclined
 	}
 	return nil
-}
-
-// interrupted reports Ctrl-C at a prompt. It is checked after the read rather
-// than racing it, which is the arrangement resolve's chooser adopted in 1.1.1:
-// Ctrl-C cancels the command's context and readline lets the pending read
-// return, so by the time there is a line to look at the context already says
-// what happened. Returning ctx.Err() rather than ErrDeclined is what makes the
-// one-shot front end exit 130 in silence instead of printing a verdict — the
-// operator interrupted, they were not asked and did not answer.
-func interrupted(ctx context.Context) error {
-	return ctx.Err()
 }
 
 // askable reports whether a prompt can be shown at all. --yes answers every

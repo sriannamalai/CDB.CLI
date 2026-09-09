@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -209,4 +210,22 @@ func TestConfirmYesFlagSkipsTheRead(t *testing.T) {
 	if err := Confirm(ctx, s, "Delete it?"); err != nil {
 		t.Fatalf("got %v, want nil", err)
 	}
+}
+
+// cancelAtPrompt is a stdin that cancels the command's context as the prompt
+// reads it. That is what Ctrl-C at a confirmation looks like from inside the
+// helpers: the read is already blocked when the signal lands, so it comes back
+// with whatever the terminal had rather than with an error, and the cancelled
+// context is the only record that the operator asked to stop. Cancelling
+// before the command runs would not do — the request the command makes on the
+// way to the prompt would fail first, and the test would pass without ever
+// reaching a prompt.
+type cancelAtPrompt struct {
+	cancel context.CancelFunc
+	rest   io.Reader
+}
+
+func (c *cancelAtPrompt) Read(p []byte) (int, error) {
+	c.cancel()
+	return c.rest.Read(p)
 }
