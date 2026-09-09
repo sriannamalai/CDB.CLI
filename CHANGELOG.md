@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Homebrew cask installs on Linux. Its post-install step ran
+  `/usr/bin/xattr` to clear the macOS quarantine attribute and failed with
+  exit 127 where that file does not exist; it now runs on macOS only.
+
 ## [1.1.1] - 2026-09-09
 
 ### Fixed

@@ -84,8 +84,12 @@ homebrew_casks:
     skip_upload: '{{ if index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
     hooks:
       post:
+        # Strip the quarantine attribute Homebrew puts on a downloaded binary
+        # so macOS runs it without a Gatekeeper prompt. Only on macOS: Linux
+        # has no /usr/bin/xattr and system_command cannot spawn a missing
+        # file, which failed the whole install.
         install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+          if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cdb"]
           end
 
