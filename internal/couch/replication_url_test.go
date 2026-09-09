@@ -40,14 +40,14 @@ func TestReplicationURLOverridesTheEndpointOnly(t *testing.T) {
 	if got := endpoint["url"]; got != "http://couchdb:5984/my%20db" {
 		t.Errorf("endpoint url = %v", got)
 	}
-	// The credential object is untouched by the override.
-	auth, ok := endpoint["auth"].(map[string]any)
+	// The credential header is untouched by the override.
+	headers, ok := endpoint["headers"].(map[string]any)
 	if !ok {
-		t.Fatalf("endpoint has no auth object: %v", endpoint)
+		t.Fatalf("endpoint has no headers: %v", endpoint)
 	}
-	basic := auth["basic"].(map[string]any)
-	if basic["username"] != "admin" || basic["password"] != "password" {
-		t.Errorf("auth.basic = %v", basic)
+	// base64("admin:password")
+	if got := headers["Authorization"]; got != "Basic YWRtaW46cGFzc3dvcmQ=" {
+		t.Errorf("Authorization = %v", got)
 	}
 }
 

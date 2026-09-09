@@ -192,7 +192,7 @@ func TestDestroyDatabase(t *testing.T) {
 	}
 }
 
-func TestReplicationEndpointForSessionAuth(t *testing.T) {
+func TestReplicationEndpointCarriesBasicHeader(t *testing.T) {
 	srv := couchtest.New(t)
 	c, err := New(Config{URL: srv.URL(), Auth: AuthSession, Username: "admin", Secret: "s3cret"})
 	if err != nil {
@@ -202,11 +202,11 @@ func TestReplicationEndpointForSessionAuth(t *testing.T) {
 	got := c.ReplicationEndpoint("mydb")
 	want := map[string]any{
 		"url": srv.URL() + "/mydb",
-		"auth": map[string]any{
-			"basic": map[string]any{"username": "admin", "password": "s3cret"},
-		},
+		// base64("admin:s3cret")
+		"headers": map[string]any{"Authorization": "Basic YWRtaW46czNjcmV0"},
 	}
 	assertJSONEqual(t, got, want)
+	assertNoAuthObject(t, got)
 }
 
 func TestReplicationEndpointForJWTAuth(t *testing.T) {
@@ -222,9 +222,10 @@ func TestReplicationEndpointForJWTAuth(t *testing.T) {
 		"headers": map[string]any{"Authorization": "Bearer tok.en.sig"},
 	}
 	assertJSONEqual(t, got, want)
+	assertNoAuthObject(t, got)
 }
 
-func TestReplicationEndpointForNoAuth(t *testing.T) {
+func TestReplicationEndpointOmitsCredentialsWhenAnonymous(t *testing.T) {
 	srv := couchtest.New(t)
 	c, err := New(Config{URL: srv.URL(), Auth: AuthNone})
 	if err != nil {
@@ -234,9 +235,10 @@ func TestReplicationEndpointForNoAuth(t *testing.T) {
 	got := c.ReplicationEndpoint("mydb")
 	want := map[string]any{"url": srv.URL() + "/mydb"}
 	assertJSONEqual(t, got, want)
+	assertNoAuthObject(t, got)
 }
 
-func TestReplicationEndpointMovesURLUserinfoIntoAuthBasic(t *testing.T) {
+func TestReplicationEndpointCarriesBasicHeaderForURLUserinfo(t *testing.T) {
 	srv := couchtest.New(t)
 	u, err := url.Parse(srv.URL())
 	if err != nil {
@@ -250,12 +252,23 @@ func TestReplicationEndpointMovesURLUserinfoIntoAuthBasic(t *testing.T) {
 	defer c.Close()
 	got := c.ReplicationEndpoint("mydb")
 	want := map[string]any{
+		// The credentials moved into the header; the URL is still clean.
 		"url": srv.URL() + "/mydb",
-		"auth": map[string]any{
-			"basic": map[string]any{"username": "op", "password": "hunter2"},
-		},
+		// base64("op:hunter2")
+		"headers": map[string]any{"Authorization": "Basic b3A6aHVudGVyMg=="},
 	}
 	assertJSONEqual(t, got, want)
+	assertNoAuthObject(t, got)
+}
+
+// assertNoAuthObject pins the reason this changed at all: CouchDB only learned
+// the per-endpoint "auth" object in 3.2, and cdb supports 3.0 upwards, so the
+// key must not appear in any endpoint cdb writes.
+func assertNoAuthObject(t *testing.T, endpoint map[string]any) {
+	t.Helper()
+	if _, ok := endpoint["auth"]; ok {
+		t.Errorf("endpoint carries an \"auth\" object, which CouchDB 3.0 and 3.1 ignore: %#v", endpoint)
+	}
 }
 
 // assertJSONEqual compares two values by their JSON encoding, which is

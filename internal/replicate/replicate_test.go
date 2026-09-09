@@ -104,7 +104,8 @@ func TestCreateSendsPerEndpointCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(srv.Last("POST", "/_replicator").Body)
-	if !strings.Contains(body, `"basic":{"password":"s3cret","username":"admin"}`) {
+	// base64("admin:s3cret"); CouchDB 3.0 and 3.1 ignore the "auth" object.
+	if !strings.Contains(body, `"headers":{"Authorization":"Basic YWRtaW46czNjcmV0"}`) {
 		t.Errorf("body %s is missing the per-endpoint credentials", body)
 	}
 	if !strings.Contains(body, `"url":"`+srv.URL()+`/mydb"`) {

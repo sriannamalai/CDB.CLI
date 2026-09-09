@@ -2,6 +2,7 @@ package couch
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -303,19 +304,24 @@ func (c *Client) DestroyDatabase(ctx context.Context, db string) error {
 // CouchDB _replicator document: a full URL plus whatever credentials this
 // client authenticates with. CouchDB 3.x rejects a bare database name with
 // 403 "local_endpoints_not_supported", so even a same-server copy needs a
-// full URL; CouchDB's per-endpoint auth object lets that URL stay free of an
+// full URL; a per-endpoint Authorization header lets that URL stay free of an
 // embedded password, unlike putting the credentials in the URL itself.
+//
+// The credential is always a header. CouchDB's per-endpoint "auth" object
+// arrived in 3.2 and is ignored by 3.0 and 3.1, which then run the job
+// unauthenticated and fail it with 401; a Basic header is understood by every
+// 3.x, so it is the only form cdb writes.
 //
 // The URL is ReplicationURL, not the client URL: the server dials this address
 // itself, and the two disagree whenever cdb reaches CouchDB by an address
 // CouchDB does not know itself by — a published container port, a tunnel, a
 // reverse proxy.
 //
-// The returned map is for request bodies only — session auth puts the
-// plaintext password under "auth", and JWT puts the bearer token under
-// "headers" — and must never be rendered, logged, or surfaced in a
-// command.Result. It is handed straight to DoJSON, which marshals it as part
-// of the replicator document and nowhere else.
+// The returned map is for request bodies only — it carries the session
+// password as Basic credentials or the bearer token outright — and must never
+// be rendered, logged, or surfaced in a command.Result. It is handed straight
+// to DoJSON, which marshals it as part of the replicator document and nowhere
+// else.
 func (c *Client) ReplicationEndpoint(db string) map[string]any {
 	return c.ReplicationEndpointFor("", db)
 }
@@ -336,26 +342,28 @@ func (c *Client) ReplicationEndpointFor(base, db string) map[string]any {
 	endpoint := map[string]any{"url": base + "/" + path.Encode(db)}
 	switch c.cfg.Auth {
 	case AuthSession:
-		endpoint["auth"] = map[string]any{"basic": map[string]any{
-			"username": c.cfg.Username,
-			"password": c.cfg.Secret,
-		}}
+		endpoint["headers"] = basicAuthHeader(c.cfg.Username, c.cfg.Secret)
 	case AuthJWT:
 		endpoint["headers"] = map[string]any{"Authorization": "Bearer " + c.cfg.Secret}
 	default:
 		// AuthNone still authenticates when the raw URL carried userinfo
 		// (e.g. "cdb http://admin:pw@host"); c.base keeps that userinfo,
-		// c.safe never does. Moving it into auth.basic here means it never
-		// has to go back into a URL.
+		// c.safe never does. Moving it into a header here means it never has
+		// to go back into a URL.
 		if u, err := url.Parse(c.base); err == nil && u.User != nil {
 			password, _ := u.User.Password()
-			endpoint["auth"] = map[string]any{"basic": map[string]any{
-				"username": u.User.Username(),
-				"password": password,
-			}}
+			endpoint["headers"] = basicAuthHeader(u.User.Username(), password)
 		}
 	}
 	return endpoint
+}
+
+// basicAuthHeader builds the RFC 7617 credential CouchDB accepts on every 3.x
+// release. A username containing a colon is refused by CouchDB's own _session
+// login long before it reaches here, so there is nothing to validate.
+func basicAuthHeader(username, password string) map[string]any {
+	raw := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+	return map[string]any{"Authorization": "Basic " + raw}
 }
 
 func revFromValue(v json.RawMessage) string {

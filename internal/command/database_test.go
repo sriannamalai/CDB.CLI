@@ -205,8 +205,9 @@ func TestCpBetweenDatabasesSendsPerEndpointCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(srv.Last("POST", "/_replicator").Body)
-	if !strings.Contains(body, `"basic":{"password":"s3cret","username":"admin"}`) {
-		t.Errorf("_replicator body %s is missing auth.basic for the session profile", body)
+	// base64("admin:s3cret"); CouchDB 3.0 and 3.1 ignore the "auth" object.
+	if !strings.Contains(body, `"headers":{"Authorization":"Basic YWRtaW46czNjcmV0"}`) {
+		t.Errorf("_replicator body %s is missing the Basic header for the session profile", body)
 	}
 	msg, ok := res.(Message)
 	if !ok {
