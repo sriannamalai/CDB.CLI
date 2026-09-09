@@ -291,14 +291,6 @@ func (sh *Shell) initReadline() error {
 	// asked for; without this the secondary prompt above is never displayed
 	// and a continued line looks like a stray second line of input.
 	_ = rl.Config.Set("multiline-column", true)
-	// readline otherwise asks the terminal where the cursor is (ESC[6n) inside
-	// every redraw, which is once per keystroke: it flushes a half-drawn frame
-	// with the cursor hidden and then blocks on stdin for the answer. Over a
-	// link with any latency that is a visible flash per key, and a keystroke
-	// that arrives in the same read as the answer is discarded with it. cdb's
-	// prompt is a single line printed at column 0, so the position readline
-	// falls back on without the probe is exact.
-	_ = rl.Config.Set("cursor-position-probe", false)
 	rl.AcceptMultiline = func(line []rune) bool { return !NeedsMore(string(line)) }
 	rl.Completer = sh.complete
 	if sh.cfg.Keymap == "vi" {
