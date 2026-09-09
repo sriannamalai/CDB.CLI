@@ -230,3 +230,34 @@ func TestRejectedTokenOnASupportedServer(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestVerboseSyntheticJWT30DoesNotRepeatTheSentence pins the fix for the
+// pre-3.1 synthetic 401: it carries no real server reason (it is
+// command.dial's own literal), so --verbose must not print it a second time
+// in brackets.
+func TestVerboseSyntheticJWT30DoesNotRepeatTheSentence(t *testing.T) {
+	e := couch.NewError(http.StatusUnauthorized, "unauthorized",
+		"The server rejected the token.", "authenticate", "server localhost:15985")
+	e.Auth = couch.AuthJWT
+	e.Hint = "JWT authentication needs CouchDB 3.1 or later; this server is 3.0.0."
+
+	got := ErrorMessage(e, true)
+	if strings.Count(got, "The server rejected the token.") != 1 {
+		t.Errorf("verbose message repeats the sentence: %q", got)
+	}
+}
+
+// TestVerboseRealJWT401KeepsTheServerReason pins that a genuine 3.1+ 401
+// (a real server reason, distinct from the synthetic sentence) still gets
+// the bracketed detail --verbose exists to show.
+func TestVerboseRealJWT401KeepsTheServerReason(t *testing.T) {
+	e := couch.NewError(http.StatusUnauthorized, "unauthorized",
+		"exp not in future", "authenticate", "server localhost:15984")
+	e.Auth = couch.AuthJWT
+
+	got := ErrorMessage(e, true)
+	want := "The server rejected the token. [status 401 unauthorized: exp not in future]"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

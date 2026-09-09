@@ -340,7 +340,6 @@ func verifyLogin(ctx context.Context, profile config.Profile, secret string) (*c
 		var ce *couch.Error
 		if profile.Auth == string(couch.AuthJWT) && errors.As(err, &ce) && ce.Status == http.StatusUnauthorized {
 			ce.Auth = couch.AuthJWT
-			ce.Reason = "The server rejected the token."
 			ce.Hint = jwtVersionHint(info.Version)
 		}
 		return nil, couch.ServerInfo{}, err

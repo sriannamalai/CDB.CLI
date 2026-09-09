@@ -7,8 +7,16 @@ import (
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
 )
 
+// jwtRejectedSentence is the literal command.dial synthesizes for a bearer
+// token a pre-3.1 server silently ignores (there is no JWT handler to give a
+// real reason). plainSentence below builds the same literal for a genuine
+// server 401 with Auth == AuthJWT.
+const jwtRejectedSentence = "The server rejected the token."
+
 // ErrorMessage renders an error as a plain sentence. With verbose set, the raw
-// status, error name and server reason are appended.
+// status, error name and server reason are appended — unless that reason is
+// just the synthetic pre-3.1 sentence above, which plainSentence already
+// printed; repeating it in brackets adds nothing.
 func ErrorMessage(err error, verbose bool) string {
 	if err == nil {
 		return ""
@@ -18,7 +26,7 @@ func ErrorMessage(err error, verbose bool) string {
 		return err.Error()
 	}
 	msg := plainSentence(ce)
-	if verbose {
+	if verbose && !(ce.Auth == couch.AuthJWT && ce.Reason == jwtRejectedSentence) {
 		msg += fmt.Sprintf(" [status %d %s: %s]", ce.Status, ce.Name, ce.Reason)
 	}
 	return msg
@@ -45,7 +53,7 @@ func plainSentence(e *couch.Error) string {
 		// and "check the password" is advice about a password that does not
 		// exist. CouchDB below 3.1 has no JWT handler at all, so the token is
 		// ignored and the request is handled as anonymous; Hint carries that.
-		msg := "The server rejected the token."
+		msg := jwtRejectedSentence
 		if e.Hint != "" {
 			msg += " " + e.Hint
 		}
