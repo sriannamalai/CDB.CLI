@@ -526,6 +526,55 @@ func TestReplicateHelpDocumentsUnreachableEndpoints(t *testing.T) {
 	}
 }
 
+// TestReplicationsShowRedactsEndpointHeaders pins the one thing "replications
+// show" must never do. Since 1.2 cdb writes replication credentials as an
+// Authorization header on the endpoint object, so a server that echoes the
+// stored document back verbatim — rather than redacting it the way CouchDB
+// 3.5.2 does — would otherwise put a Basic credential on the screen.
+func TestReplicationsShowRedactsEndpointHeaders(t *testing.T) {
+	const secret = "YWRtaW46czNjcmV0"
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_scheduler/docs/_replicator/job1", 200, `{
+		"database":"_replicator","doc_id":"job1","id":"abc","state":"completed",
+		"source":{"url":"http://localhost:5984/src","headers":{"Authorization":"Basic `+secret+`"}},
+		"target":{"url":"http://localhost:5984/dst","auth":{"basic":{"username":"admin","password":"s3cret"}}},
+		"node":"n1","error_count":0,"last_updated":"2026-09-09T00:00:00Z"}`)
+	srv.JSON("GET", "/_scheduler/jobs/abc", 404, `{"error":"not_found","reason":"missing"}`)
+
+	s := connected(t, srv)
+	res, err := invoke(t, Replications(), s, "show", "job1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, ok := res.(Rows)
+	if !ok {
+		t.Fatalf("got %T, want Rows", res)
+	}
+	for _, banned := range []string{secret, "s3cret", "Authorization", "Basic ", "\"auth\""} {
+		for _, item := range rows.Items {
+			for _, cell := range item.Cells {
+				if strings.Contains(cell, banned) {
+					t.Errorf("rendered cell %q contains %q", cell, banned)
+				}
+			}
+			if strings.Contains(string(item.JSON), banned) {
+				t.Errorf("row JSON %s contains %q", item.JSON, banned)
+			}
+		}
+	}
+	// And the URLs still arrive, so the test cannot pass by rendering nothing.
+	var source string
+	for _, item := range rows.Items {
+		if len(item.Cells) == 2 && item.Cells[0] == "source" {
+			source = item.Cells[1]
+		}
+	}
+	if source != "http://localhost:5984/src" {
+		t.Errorf("source = %q, want %q", source, "http://localhost:5984/src")
+	}
+}
+
 func TestDefaultRegistersTheReplicationCommands(t *testing.T) {
 	reg := Default()
 	for _, name := range []string{"replicate", "replications"} {
