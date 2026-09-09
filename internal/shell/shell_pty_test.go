@@ -336,8 +336,11 @@ func TestPromptSurvivesOutputThatFillsTheWindow(t *testing.T) {
 		}
 	}()
 
-	// Answer every cursor-position request at once, and answer it truthfully:
-	// this test is about where the prompt lands, not about latency.
+	// Answer every cursor-position request at once, with the same constant
+	// dsrBottomReply each time. That reply is truthful, not a shortcut: the
+	// child prints exactly ptyBottomRows filler lines before it ever asks, so
+	// its cursor really is on that row for every request in this test — this
+	// test is about where the prompt lands, not about latency.
 	var transcript ptyTranscript
 	go func() {
 		buf := make([]byte, 4096)

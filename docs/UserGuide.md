@@ -664,7 +664,8 @@ A failure is one sentence that names what to do next, not a status code:
 `--verbose` appends the raw status, the CouchDB error name and the server's
 reason — `… [status 401 unauthorized: You are not a server admin.]`. Declining
 a confirmation prints `Cancelled: nothing was changed.` and exits `1`; nothing
-was sent to the server.
+was sent to the server. Ctrl-C at that same prompt exits `130` in silence,
+with no `Cancelled` line — same result, no server write, no message.
 
 ## Troubleshooting
 

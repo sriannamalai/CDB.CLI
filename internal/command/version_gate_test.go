@@ -15,6 +15,9 @@ func TestSupportedVersion(t *testing.T) {
 		{"3.5.2", true},
 		{"3.6.0", false},
 		{"4.0.0", false},
+		{"", false},
+		{"3", false},
+		{"3.x.1", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.version, func(t *testing.T) {

@@ -289,10 +289,11 @@ func rowsOf(t *testing.T, res Result) []Row {
 	return rows.Items
 }
 
-// TestReplicationsRedactEndpointCredentials: a _replicator document written by
-// cdb carries an auth object, and one written by hand may carry userinfo in
-// the URL. The scheduler repeats both on its job entry. None of it may reach a
-// rendered cell or a Row.JSON payload, on either subcommand.
+// TestReplicationsRedactEndpointCredentials: a _replicator document in the
+// legacy auth-object shape (predating this branch's header-based auth) may
+// still exist, and one written by hand may carry userinfo in the URL. The
+// scheduler repeats both on its job entry. None of it may reach a rendered
+// cell or a Row.JSON payload, on either subcommand.
 func TestReplicationsRedactEndpointCredentials(t *testing.T) {
 	const entry = `{"database":"_replicator","doc_id":"job1","id":"abc",
 		"source":{"url":"http://a.example.com/src","auth":{"basic":{"username":"admin","password":"s3cret"}}},

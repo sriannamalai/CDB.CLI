@@ -46,7 +46,10 @@ func serverVersion(t *testing.T, base string) string {
 	t.Helper()
 	res, err := http.Get(strings.TrimSuffix(base, "/") + "/")
 	if err != nil {
-		t.Fatalf("read the server banner at %s: %v", base, err)
+		// base is CDB_TEST_URL, which the README's own example sets to
+		// "http://admin:password@localhost:15984/" — redact before it can
+		// land a password in CI output.
+		t.Fatalf("read the server banner at %s: %v", couch.RedactURL(base), err)
 	}
 	defer res.Body.Close()
 	var banner struct {
