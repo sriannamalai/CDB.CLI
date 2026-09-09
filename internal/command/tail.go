@@ -177,7 +177,7 @@ func tailOptions(ctx context.Context, c *couch.Client, db string, inv Invocation
 		}
 		since = info.UpdateSeq
 		if since == "" {
-			// Unreachable on CouchDB 3.2 through 3.5, all of which report
+			// Unreachable on CouchDB 3.0 through 3.5, all of which report
 			// update_seq on GET /db. It is kept because the zero value of the
 			// field it guards means 0, and a follow starting at 0 would replay
 			// the whole database rather than show what happens next; "now" is

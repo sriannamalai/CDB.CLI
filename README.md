@@ -1,6 +1,6 @@
 # cdb
 
-`cdb` is a single-binary command line client for Apache CouchDB 3.2 through 3.5.
+`cdb` is a single-binary command line client for Apache CouchDB 3.0 through 3.5.
 It is an interactive shell with a filesystem metaphor and a set of one-shot
 subcommands for scripts.
 
@@ -202,7 +202,7 @@ default = "local"
 
 [profiles.local]
 url = "http://localhost:5984"
-auth = "session"          # session | jwt | none
+auth = "session"          # session | jwt (3.1+) | none
 username = "admin"
 insecure_tls = false
 ca_file = ""
@@ -301,8 +301,8 @@ then fails with `econnrefused`, which `replications show <id>` reports.
 Set `--replication-url http://couchdb:5984` (or `replication_url` in the
 profile, or `CDB_REPLICATION_URL`) to the address the server knows itself by.
 It is a server address, not a database one, and it must not carry a user name
-or password: `cdb` sends the profile's credentials in CouchDB's own
-per-endpoint auth object instead, where they are stored in the `_replicator`
+or password: `cdb` sends the profile's credentials as an Authorization header
+on the endpoint instead, where the header is stored in the `_replicator`
 database as CouchDB requires. `info /` shows the value when it differs from the
 connected URL; `profiles list` does not show it, so its columns stay stable for
 scripts.
@@ -341,7 +341,8 @@ container above publishes 5984 as 15984, so set
 `CDB_TEST_REPLICATION_URL=http://localhost:5984/` alongside `CDB_TEST_URL`. CI
 needs neither, because its service container reaches itself at the same address.
 
-The JWT integration test needs a server with the JWT handler enabled, which is
+The JWT integration test needs CouchDB 3.1 or later — the JWT handler does not
+exist before 3.1 — with the handler enabled, which is
 not CouchDB's default. Configure one and restart it — the handler list is read
 at start-up and never re-read:
 

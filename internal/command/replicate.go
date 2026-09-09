@@ -29,8 +29,8 @@ address the server knows itself by.`
 
 // replicateDetails is the long help for replicate.
 const replicateDetails = `Each endpoint is a database path on the connected server (/mydb) or a full
-http(s) URL. Credentials in a URL are moved into CouchDB's per-endpoint auth
-object, so they never reach the stored document's URL or the screen.
+http(s) URL. Credentials in a URL are sent as an Authorization header on the
+endpoint instead, so they never reach the stored document's URL or the screen.
 
 ` + unreachableEndpointNote
 

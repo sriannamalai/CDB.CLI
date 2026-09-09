@@ -1,6 +1,6 @@
 # cdb user guide
 
-`cdb` is a single-binary client for Apache CouchDB 3.2 through 3.5: an
+`cdb` is a single-binary client for Apache CouchDB 3.0 through 3.5: an
 interactive shell that treats a server as a filesystem, plus the same commands
 as one-shot subcommands for scripts. This guide is task-shaped; for the exact
 flags and argument rules of one command read its page in the
@@ -492,10 +492,10 @@ Each endpoint is a database path on the connected server (`/movies`) or a full
 `http(s)` URL. `--continuous` keeps the job running as changes arrive,
 `--create-target` creates a missing target, `--filter ddoc/name` applies a
 design-document filter, and `--id` names the `_replicator` document so you can
-find it again. Credentials in an endpoint URL are moved into CouchDB's
-per-endpoint auth object, so they never reach the stored document's URL or the
-screen — though they do live in the server's own `_replicator` database, as
-CouchDB requires.
+find it again. Credentials in an endpoint URL are sent as an Authorization
+header on the endpoint instead, so they never reach the stored document's URL
+or the screen — though the header does live in the server's own
+`_replicator` database, as CouchDB requires.
 
 ```
 $ cdb replications
@@ -531,7 +531,8 @@ $ cdb replicate /movies /movies-backup --replication-url http://couchdb:5984
 
 It is a server address, not a database one, and it must carry no user name or
 password: `cdb` refuses one that does — without echoing what you typed — and
-sends the profile's credentials in CouchDB's per-endpoint auth object instead.
+sends the profile's credentials as an Authorization header on the endpoint
+instead.
 Set it once as `replication_url` in the profile, or as `CDB_REPLICATION_URL` in
 the environment; the rule is the one the server URL follows, **flag beats
 environment variable beats the config file**. In the shell `--replication-url`
@@ -627,7 +628,7 @@ address the server should use to reach itself, as
 | `CDB_REPLICATION_URL` | address the server should use to reach itself for replication, unless `--replication-url` is given |
 | `CDB_USER` | username |
 | `CDB_PASSWORD` | password, selecting `session` auth |
-| `CDB_TOKEN` | JWT, selecting `jwt` auth; wins over `CDB_PASSWORD` |
+| `CDB_TOKEN` | JWT (CouchDB 3.1 or later), selecting `jwt` auth; wins over `CDB_PASSWORD` |
 | `CDB_INSECURE_TLS` | skip TLS certificate verification when true |
 | `CDB_KEYRING_BACKEND` | force one keyring backend, e.g. `file` |
 | `CDB_KEYRING_PASSPHRASE` | passphrase for the encrypted file backend |
@@ -651,6 +652,8 @@ A failure is one sentence that names what to do next, not a status code:
 | What happened | What you see |
 |---|---|
 | bad password | `Login failed for admin at localhost:5984. Check the password with "profiles" or "connect".` |
+| rejected token | `The server rejected the token.` |
+| rejected token, server too old | `The server rejected the token. JWT authentication needs CouchDB 3.1 or later; this server is 3.0.1.` |
 | no credentials sent | `The server requires credentials for list databases. Connect with a username and password, or set CDB_USER and CDB_PASSWORD.` |
 | not allowed | `You do not have permission to read document "doc1" in "mydb".` |
 | no such database | `Database "mydb" does not exist. "ls /" lists databases.` |
@@ -669,6 +672,13 @@ was sent to the server.
 and the password was rejected. Re-run `cdb connect <profile>` to retype it, or
 `cdb profiles list` to see which URL and username that profile holds. If you
 supply `CDB_PASSWORD`, remember it overrides the keychain.
+
+**"The server rejected the token."** The token itself was refused. On a server
+older than 3.1 the message continues "JWT authentication needs CouchDB 3.1 or
+later; this server is 3.0.1." — the JWT handler does not exist before 3.1, so
+no token can work there; switch that profile to `session` auth. On 3.1 or
+later, the token has likely expired or was signed with a key the server does
+not have configured.
 
 **"Could not reach …. Is CouchDB running?"** Nothing answered on that host and
 port. Check the port in `cdb profiles list` against the one the server is

@@ -7,16 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-09
+
+### Added
+
+- CouchDB **3.0 and 3.1** are supported. `cdb` now works with every CouchDB
+  3.x release, 3.0 through 3.5. JWT authentication still needs CouchDB 3.1 or
+  later, because the server has no JWT handler before then; `connect` says so
+  when a token is refused by a 3.0 server.
+
 ### Fixed
 
+- `replicate` and `cp` authenticate on CouchDB 3.0 and 3.1. Replication
+  credentials were written as CouchDB's per-endpoint `auth` object, which
+  arrived in 3.2: older servers ignore it, accept the job and then fail it
+  with 401. They are sent as an `Authorization` header now, which every 3.x
+  understands. Nothing changes in what `replications list` and
+  `replications show` display.
+- Ctrl-C at a confirmation prompt — `rm`, `rmdir`, `resolve`,
+  `replications cancel`, `put`'s overwrite question, and `edit`'s reapply
+  prompt — exits 130 without printing anything, instead of reporting
+  "Cancelled: nothing was changed." and exiting 1. Ctrl-D and a typed "no"
+  still report the cancellation.
+- The interactive shell draws its prompt in the right place on macOS again
+  after output fills the window. A change meant to stop the line flashing over
+  a slow link left the line editor unable to tell which row the prompt started
+  on, so its next redraw erased the prompt it had just printed. The flash over
+  a high-latency terminal is cosmetic and is tracked separately.
 - The Homebrew cask installs on Linux. Its post-install step ran
   `/usr/bin/xattr` to clear the macOS quarantine attribute and failed with
   exit 127 where that file does not exist; it now runs on macOS only.
-- The interactive shell no longer flashes the line and swallows typed
-  characters over a terminal with any latency, such as one across an SSH link.
-  It asked the terminal where the cursor was on every keystroke and waited for
-  the answer in the middle of the redraw, and a character typed during that
-  wait was thrown away with the answer.
+- The interactive shell no longer swallows typed characters over a terminal
+  with any latency, such as one across an SSH link. A character typed while
+  the editor was waiting for the terminal to answer a cursor-position request
+  was thrown away with the answer.
 
 ## [1.1.1] - 2026-09-09
 
@@ -108,7 +132,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `info /` may show a `replication url` row, and `resolve`'s chooser shows
   diffs rather than body previews.
 
-[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.1...v1.1.0
 
