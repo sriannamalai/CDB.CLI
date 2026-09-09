@@ -342,7 +342,7 @@ func (c *Client) ReplicationEndpointFor(base, db string) map[string]any {
 	endpoint := map[string]any{"url": base + "/" + path.Encode(db)}
 	switch c.cfg.Auth {
 	case AuthSession:
-		endpoint["headers"] = basicAuthHeader(c.cfg.Username, c.cfg.Secret)
+		endpoint["headers"] = BasicAuthHeader(c.cfg.Username, c.cfg.Secret)
 	case AuthJWT:
 		endpoint["headers"] = map[string]any{"Authorization": "Bearer " + c.cfg.Secret}
 	default:
@@ -352,16 +352,23 @@ func (c *Client) ReplicationEndpointFor(base, db string) map[string]any {
 		// to go back into a URL.
 		if u, err := url.Parse(c.base); err == nil && u.User != nil {
 			password, _ := u.User.Password()
-			endpoint["headers"] = basicAuthHeader(u.User.Username(), password)
+			endpoint["headers"] = BasicAuthHeader(u.User.Username(), password)
 		}
 	}
 	return endpoint
 }
 
-// basicAuthHeader builds the RFC 7617 credential CouchDB accepts on every 3.x
-// release. A username containing a colon is refused by CouchDB's own _session
-// login long before it reaches here, so there is nothing to validate.
-func basicAuthHeader(username, password string) map[string]any {
+// BasicAuthHeader builds the RFC 7617 credential CouchDB accepts on every 3.x
+// release, as a per-endpoint "headers" object for a _replicator document. It
+// is exported because internal/replicate builds the other kind of endpoint —
+// a remote URL the operator typed, userinfo and all — and the two must write
+// the same shape. A username containing a colon is refused by CouchDB's own
+// _session login long before it reaches here, so there is nothing to validate.
+//
+// Like the endpoints it goes into, the result is for request bodies only: it
+// carries the password, and must never be rendered, logged, or surfaced in a
+// command.Result.
+func BasicAuthHeader(username, password string) map[string]any {
 	raw := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 	return map[string]any{"Authorization": "Basic " + raw}
 }

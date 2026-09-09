@@ -62,8 +62,8 @@ func TestReplicateCreatesAJob(t *testing.T) {
 }
 
 // TestReplicateKeepsARemotePasswordOutOfTheResult: a target URL may carry
-// userinfo. It has to reach CouchDB, in the per-endpoint auth object, but it
-// must never reach the operator's screen.
+// userinfo. It has to reach CouchDB, in the per-endpoint Authorization header,
+// but it must never reach the operator's screen.
 func TestReplicateKeepsARemotePasswordOutOfTheResult(t *testing.T) {
 	srv := couchtest.New(t)
 	srv.JSON("POST", "/_replicator", 201, `{"ok":true,"id":"job1","rev":"1-a"}`)
@@ -85,7 +85,8 @@ func TestReplicateKeepsARemotePasswordOutOfTheResult(t *testing.T) {
 		t.Errorf("stdout leaks the password: %s", out.String())
 	}
 	body := string(srv.Last("POST", "/_replicator").Body)
-	if !strings.Contains(body, `"basic":{"password":"s3cret","username":"admin"}`) {
+	// base64("admin:s3cret"); CouchDB 3.0 and 3.1 ignore the "auth" object.
+	if !strings.Contains(body, `"headers":{"Authorization":"Basic YWRtaW46czNjcmV0"}`) {
 		t.Errorf("body %s is missing the per-endpoint credentials", body)
 	}
 	if strings.Contains(body, "admin:s3cret@") {

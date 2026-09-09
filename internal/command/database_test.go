@@ -182,8 +182,8 @@ func TestCpBetweenDatabasesStartsAReplication(t *testing.T) {
 // TestCpBetweenDatabasesSendsPerEndpointCredentials uses a session-authenticated
 // client (the credentials are only known here in the test, standing in for
 // what a real profile's stored password would be) to verify that "cp" between
-// two databases carries them in the per-endpoint auth object, never as a bare
-// URL, and never anywhere the operator sees: not in the returned Message, and
+// two databases carries them in a per-endpoint Authorization header, never as
+// a bare URL, and never anywhere the operator sees: not in the returned Message, and
 // not printed to stdout.
 func TestCpBetweenDatabasesSendsPerEndpointCredentials(t *testing.T) {
 	srv := couchtest.New(t)

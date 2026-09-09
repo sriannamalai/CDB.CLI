@@ -32,8 +32,8 @@ type Config struct {
 	// ReplicationURL is the address the server should use to reach itself when
 	// cdb writes a replication endpoint. Empty means "use URL", which is what
 	// cdb 1.0 always did. It is a server address, never a database one, and it
-	// never carries credentials: those travel in the replication document's
-	// per-endpoint auth object.
+	// never carries credentials: those travel in a per-endpoint Authorization
+	// header inside the replication document.
 	ReplicationURL string
 }
 

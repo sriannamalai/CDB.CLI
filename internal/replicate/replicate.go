@@ -20,10 +20,12 @@ import (
 // CouchDB 3.x has no local endpoints — a bare database name in "source" or
 // "target" is rejected with 403 local_endpoints_not_supported — so even a
 // same-server replication has to name a full URL, and that URL needs
-// credentials. They travel in CouchDB's per-endpoint auth object inside the
+// credentials. They travel in a per-endpoint Authorization header inside the
 // request body rather than as userinfo in the URL, which keeps the password
 // out of the stored document, out of the scheduler's view of it, and out of
-// anything cdb renders.
+// anything cdb renders. The header is the only credential form cdb writes:
+// CouchDB's per-endpoint "auth" object arrived in 3.2, and 3.0 and 3.1 ignore
+// it and then fail the job with 401.
 type Endpoint struct {
 	// URL is the endpoint address with any userinfo removed. It is the only
 	// part of an Endpoint that may be shown, logged or put in a Result.
@@ -278,8 +280,9 @@ func Cancel(ctx context.Context, cl *couch.Client, docID string) error {
 
 // ResolveEndpoint turns a virtual database path into an endpoint against the
 // connected server, and an http(s) URL into a remote endpoint. Userinfo in a
-// remote URL moves into the per-endpoint auth object, so that the credential
-// never leaves the request body.
+// remote URL moves into a per-endpoint Basic Authorization header, so that the
+// credential never leaves the request body — and so that it works on every
+// 3.x, unlike the "auth" object CouchDB only learned in 3.2.
 func ResolveEndpoint(cl *couch.Client, base, s string) (Endpoint, error) {
 	return ResolveEndpointFor(cl, "", base, s)
 }
@@ -304,10 +307,7 @@ func ResolveEndpointFor(cl *couch.Client, replicationURL, base, s string) (Endpo
 		e := Endpoint{URL: u.String(), doc: map[string]any{"url": u.String()}}
 		if user != nil {
 			password, _ := user.Password()
-			e.doc["auth"] = map[string]any{"basic": map[string]any{
-				"username": user.Username(),
-				"password": password,
-			}}
+			e.doc["headers"] = couch.BasicAuthHeader(user.Username(), password)
 		}
 		return e, nil
 	}

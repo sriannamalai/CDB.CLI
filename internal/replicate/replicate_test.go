@@ -345,9 +345,11 @@ func TestResolveEndpoint(t *testing.T) {
 	}
 }
 
-// TestResolveEndpointMovesURLUserinfoIntoAuth keeps a password out of the URL
-// CouchDB stores and out of anything cdb prints, while still authenticating.
-func TestResolveEndpointMovesURLUserinfoIntoAuth(t *testing.T) {
+// TestResolveEndpointMovesURLUserinfoIntoABasicHeader keeps a password out of
+// the URL CouchDB stores and out of anything cdb prints, while still
+// authenticating on every 3.x: the "auth" object CouchDB learned in 3.2 is
+// ignored by 3.0 and 3.1, so cdb never writes one.
+func TestResolveEndpointMovesURLUserinfoIntoABasicHeader(t *testing.T) {
 	srv := couchtest.New(t)
 	c := testClient(t, srv)
 	got := mustEndpoint(t, c, "https://admin:s3cret@other.example.com/remote")
@@ -361,7 +363,8 @@ func TestResolveEndpointMovesURLUserinfoIntoAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"auth":{"basic":{"password":"s3cret","username":"admin"}},"url":"https://other.example.com/remote"}`
+	// base64("admin:s3cret")
+	want := `{"headers":{"Authorization":"Basic YWRtaW46czNjcmV0"},"url":"https://other.example.com/remote"}`
 	if string(b) != want {
 		t.Errorf("wire = %s, want %s", b, want)
 	}
