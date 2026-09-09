@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Homebrew cask installs on Linux. Its post-install step ran
   `/usr/bin/xattr` to clear the macOS quarantine attribute and failed with
   exit 127 where that file does not exist; it now runs on macOS only.
+- The interactive shell no longer flashes the line and swallows typed
+  characters over a terminal with any latency, such as one across an SSH link.
+  It asked the terminal where the cursor was on every keystroke and waited for
+  the answer in the middle of the redraw, and a character typed during that
+  wait was thrown away with the answer.
 
 ## [1.1.1] - 2026-09-09
 
