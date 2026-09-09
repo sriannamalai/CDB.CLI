@@ -8,9 +8,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      # cdb supports every 3.x release. The ends of that range are what can
+      # break: 3.0 has no per-endpoint replication auth object and no JWT
+      # handler, 3.5 is what most operators run.
+      fail-fast: false
+      matrix:
+        couchdb: ["3.0", "3.5"]
     services:
       couchdb:
-        image: couchdb:3.5
+        image: couchdb:${{ matrix.couchdb }}
         env:
           COUCHDB_USER: admin
           COUCHDB_PASSWORD: password
@@ -46,6 +53,10 @@ jobs:
           curl -fsS -X PUT http://admin:password@localhost:5984/_replicator
 
       - name: Enable the JWT handler
+        # CouchDB gained jwt_authentication_handler in 3.1; on 3.0 there is no
+        # handler to put in the chain, and the JWT test skips itself after
+        # reading the version from GET /.
+        if: matrix.couchdb != '3.0'
         env:
           CDB_TEST_JWT_SECRET: ci-jwt-secret
         run: |
@@ -71,7 +82,7 @@ jobs:
           #
           # GitHub Actions exposes the service container's id, so name it
           # rather than guessing at "docker ps" output: a filter on the image
-          # would pick an arbitrary match if a second couchdb:3.5 container
+          # would pick an arbitrary match if a second CouchDB container
           # existed, and would break silently if the image tag were changed
           # here but not in the services block.
           docker restart "${{ job.services.couchdb.id }}"
@@ -87,7 +98,10 @@ jobs:
           CDB_TEST_URL: http://localhost:5984/
           CDB_TEST_USER: admin
           CDB_TEST_PASSWORD: password
-          CDB_TEST_JWT_SECRET: ci-jwt-secret
+          # Empty on 3.0, so the JWT test skips on the env gate as well as on
+          # the version it reads — belt and braces, since a JWT test that
+          # silently asserted nothing is what the gate exists to prevent.
+          CDB_TEST_JWT_SECRET: ${{ matrix.couchdb == '3.0' && '' || 'ci-jwt-secret' }}
           CDB_KEYRING_BACKEND: file
         run: go test ./... -race -count=1
 
