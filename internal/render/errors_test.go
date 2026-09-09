@@ -176,12 +176,57 @@ func TestErrorMessageForAnUnauthorizedGetRevNamesTheRealUser(t *testing.T) {
 	if err == nil {
 		t.Fatal("GetRev returned no error for a 401")
 	}
+	// Since 1.2 a 401 under a bearer token reads as a rejected token rather
+	// than a password failure, so the user and host live in the error's target
+	// rather than in the sentence; the finding is pinned there instead.
 	got := ErrorMessage(err, false)
-	want := fmt.Sprintf(`Login failed for admin at %s. Check the password with "profiles" or "connect".`, c.Host())
+	want := "The server rejected the token."
 	if got != want {
 		t.Errorf("ErrorMessage = %q,\n           want %q", got, want)
 	}
-	if strings.Contains(got, "doc1") {
-		t.Errorf("ErrorMessage = %q, the document id must not appear as the user", got)
+	ce, ok := couch.AsError(err)
+	if !ok {
+		t.Fatalf("GetRev returned %T, want a *couch.Error", err)
+	}
+	if wantTarget := fmt.Sprintf("user %q at %s", "admin", c.Host()); ce.Target != wantTarget {
+		t.Errorf("target = %q, want %q", ce.Target, wantTarget)
+	}
+	if strings.Contains(ce.Target, "doc1") {
+		t.Errorf("target = %q, the document id must not appear as the user", ce.Target)
+	}
+}
+
+// TestRejectedTokenOnCouchDB30 is the whole sentence an operator sees when a
+// bearer token goes to a server too old to have a JWT handler. Hint is the
+// literal string command.jwtVersionHint builds; TestJWTVersionHint above is
+// what pins that it builds exactly this.
+func TestRejectedTokenOnCouchDB30(t *testing.T) {
+	e := couch.NewError(http.StatusUnauthorized, "unauthorized",
+		"The server rejected the token.", "authenticate", "server localhost:15985")
+	e.Auth = couch.AuthJWT
+	e.Hint = "JWT authentication needs CouchDB 3.1 or later; this server is 3.0.0."
+
+	got := ErrorMessage(e, false)
+	want := "The server rejected the token. JWT authentication needs CouchDB 3.1 or later; this server is 3.0.0."
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "password") {
+		t.Errorf("a rejected token must not be reported as a password problem: %q", got)
+	}
+}
+
+// TestRejectedTokenOnASupportedServer keeps the bare sentence bare: the
+// version clause is only true below 3.1.
+func TestRejectedTokenOnASupportedServer(t *testing.T) {
+	e := couch.NewError(http.StatusUnauthorized, "unauthorized",
+		"The server rejected the token.", "authenticate", "server localhost:15984")
+	e.Auth = couch.AuthJWT
+	e.Hint = ""
+
+	got := ErrorMessage(e, false)
+	want := "The server rejected the token."
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

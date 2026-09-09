@@ -40,6 +40,16 @@ func plainSentence(e *couch.Error) string {
 		// at all. Telling the operator to check the password is advice about a
 		// password that does not exist.
 		return fmt.Sprintf("The server requires credentials for %s %s. Connect with a username and password, or set CDB_USER and CDB_PASSWORD.", e.Op, e.Target)
+	case e.Status == 401 && e.Auth == couch.AuthJWT:
+		// A bearer token the server did not accept is not a password problem,
+		// and "check the password" is advice about a password that does not
+		// exist. CouchDB below 3.1 has no JWT handler at all, so the token is
+		// ignored and the request is handled as anonymous; Hint carries that.
+		msg := "The server rejected the token."
+		if e.Hint != "" {
+			msg += " " + e.Hint
+		}
+		return msg
 	case e.Status == 401:
 		user, host := userAndHost(e.Target)
 		return fmt.Sprintf("Login failed for %s at %s. Check the password with \"profiles\" or \"connect\".", user, host)

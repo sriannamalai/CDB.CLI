@@ -34,6 +34,10 @@ type Error struct {
 	// is "" for every other error, and for a 401 from a client that did send
 	// credentials in a form with no kind of its own (a URL's userinfo).
 	Auth AuthKind
+	// Hint is an optional second sentence the renderer appends to the first.
+	// It carries what the client knows and the server's own reason does not —
+	// in 1.2, that a bearer token cannot work at all on a server below 3.1.
+	Hint string
 
 	err error
 }

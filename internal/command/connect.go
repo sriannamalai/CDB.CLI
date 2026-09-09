@@ -336,6 +336,13 @@ func verifyLogin(ctx context.Context, profile config.Profile, secret string) (*c
 	sess, err := cc.Session(ctx)
 	if err != nil {
 		_ = cc.Close()
+		// A 401 on a bearer token reads as a password failure otherwise.
+		var ce *couch.Error
+		if profile.Auth == string(couch.AuthJWT) && errors.As(err, &ce) && ce.Status == http.StatusUnauthorized {
+			ce.Auth = couch.AuthJWT
+			ce.Reason = "The server rejected the token."
+			ce.Hint = jwtVersionHint(info.Version)
+		}
 		return nil, couch.ServerInfo{}, err
 	}
 	// A server with no admins, or a JWT it declines to honour, answers
@@ -343,6 +350,16 @@ func verifyLogin(ctx context.Context, profile config.Profile, secret string) (*c
 	// silently getting none is a failure, not a connection.
 	if sess.Name == "" && profile.Auth != string(couch.AuthNone) {
 		_ = cc.Close()
+		if profile.Auth == string(couch.AuthJWT) {
+			// The server did not act on the token: below 3.1 there is no JWT
+			// handler to act on it, and above it a token it declines is
+			// treated the same way — the request is simply anonymous.
+			e := couch.NewError(http.StatusUnauthorized, "unauthorized",
+				"The server rejected the token.", "authenticate", "server "+cc.Host())
+			e.Auth = couch.AuthJWT
+			e.Hint = jwtVersionHint(info.Version)
+			return nil, couch.ServerInfo{}, e
+		}
 		return nil, couch.ServerInfo{}, couch.NewError(http.StatusUnauthorized, "unauthorized",
 			"Login succeeded anonymously; check the username.", "authenticate", "server "+cc.Host())
 	}
@@ -358,7 +375,7 @@ func dial(ctx context.Context, s *session.Session, profile config.Profile, attac
 		return connection{}, err
 	}
 	if !supportedVersion(info.Version) {
-		fmt.Fprintf(s.Stderr, "warning: this server reports CouchDB %s; cdb supports 3.2 through 3.5.\n", info.Version)
+		fmt.Fprintf(s.Stderr, "warning: this server reports CouchDB %s; cdb supports 3.0 through 3.5.\n", info.Version)
 	}
 	if profile.InsecureTLS {
 		fmt.Fprintln(s.Stderr, "warning: TLS certificate verification is disabled for this connection.")
@@ -376,17 +393,28 @@ func validAuthKind(s string) bool {
 	return false
 }
 
-// supportedVersion reports whether v is CouchDB 3.2 through 3.5.
+// supportedVersion reports whether v is CouchDB 3.0 through 3.5.
 func supportedVersion(v string) bool {
 	parts := strings.SplitN(v, ".", 3)
 	if len(parts) < 2 || parts[0] != "3" {
 		return false
 	}
 	switch parts[1] {
-	case "2", "3", "4", "5":
+	case "0", "1", "2", "3", "4", "5":
 		return true
 	}
 	return false
+}
+
+// jwtVersionHint is the clause added to a rejected-token message when the
+// server is too old to have a JWT handler at all: CouchDB gained
+// jwt_authentication_handler in 3.1, so 3.0 ignores a bearer token and answers
+// as if the request carried no credentials.
+func jwtVersionHint(version string) string {
+	if version != "3.0" && !strings.HasPrefix(version, "3.0.") {
+		return ""
+	}
+	return "JWT authentication needs CouchDB 3.1 or later; this server is " + version + "."
 }
 
 // Connect returns the connect command.
