@@ -31,7 +31,31 @@ func jwtTestEnv(t *testing.T) (string, string) {
 	if base == "" || secret == "" {
 		t.Skip("set CDB_TEST_URL and CDB_TEST_JWT_SECRET to run the JWT test; see the Development section of the README")
 	}
+	// CouchDB gained jwt_authentication_handler in 3.1. On 3.0 the handler
+	// cannot be put in the chain at all, so a bearer token is ignored and the
+	// test would assert nothing; the CI matrix runs 3.0 with no JWT step.
+	if v := serverVersion(t, base); strings.HasPrefix(v, "3.0.") || v == "3.0" {
+		t.Skipf("CouchDB %s has no JWT handler; JWT needs 3.1 or later", v)
+	}
 	return base, secret
+}
+
+// serverVersion reads the version out of the server banner. GET / answers for
+// anyone, so this works before any credential has been offered.
+func serverVersion(t *testing.T, base string) string {
+	t.Helper()
+	res, err := http.Get(strings.TrimSuffix(base, "/") + "/")
+	if err != nil {
+		t.Fatalf("read the server banner at %s: %v", base, err)
+	}
+	defer res.Body.Close()
+	var banner struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&banner); err != nil {
+		t.Fatalf("decode the server banner: %v", err)
+	}
+	return banner.Version
 }
 
 // mintHS256 signs a CouchDB-shaped admin token. A JWT library is not worth a
