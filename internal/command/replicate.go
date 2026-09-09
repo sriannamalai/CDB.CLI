@@ -228,7 +228,7 @@ Cancelled replication "movies-job".`,
 				if id == "" {
 					return nil, Usagef("replications", "usage: replications cancel <id>")
 				}
-				if err := Confirm(s, fmt.Sprintf("Cancel replication %q?", id)); err != nil {
+				if err := Confirm(ctx, s, fmt.Sprintf("Cancel replication %q?", id)); err != nil {
 					return nil, err
 				}
 				if err := replicate.Cancel(ctx, s.Client, id); err != nil {

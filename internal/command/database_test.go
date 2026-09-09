@@ -2,6 +2,8 @@ package command
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -218,5 +220,30 @@ func TestCpBetweenDatabasesSendsPerEndpointCredentials(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "s3cret") {
 		t.Errorf("cp printed the password to stdout: %q", out.String())
+	}
+}
+
+// TestRmdirInterruptedExitsSilently is TestRmInterruptedExitsSilently for the
+// phrase prompt: rmdir asks the operator to retype the database name, and
+// Ctrl-C there is an interruption, not a wrong answer.
+func TestRmdirInterruptedExitsSilently(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/mydb", 200, `{"db_name":"mydb","doc_count":3,"sizes":{"file":1,"external":1},"cluster":{"q":1,"n":1},"props":{}}`)
+	s := connected(t, srv)
+	s.Stdout = &bytes.Buffer{}
+	s.SetStdin(strings.NewReader("\n"))
+	s.Prefs.Interactive = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := invokeContext(ctx, Rmdir(), s, "/mydb")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+	if out := s.Stdout.(*bytes.Buffer).String(); out != "" && !strings.HasSuffix(out, "(mydb): ") {
+		t.Errorf("stdout = %q, want nothing but the prompt itself", out)
+	}
+	if srv.Last("DELETE", "/mydb") != nil {
+		t.Fatal("rmdir deleted after an interrupted prompt")
 	}
 }

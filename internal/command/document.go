@@ -119,7 +119,7 @@ Wrote /movies/_design/app at revision 1-1285d46491b0e663da91773703a00996.`,
 					}
 				}
 				if current != "" {
-					if err := Confirm(s, fmt.Sprintf("%s already exists at revision %s. Overwrite it?", t.Path, current)); err != nil {
+					if err := Confirm(ctx, s, fmt.Sprintf("%s already exists at revision %s. Overwrite it?", t.Path, current)); err != nil {
 						return nil, err
 					}
 					rev = current
@@ -207,7 +207,7 @@ Deleted poster.txt. tt0211915 is now at revision 3-8a9d317e2f0198d879b6416254512
 					return nil, err
 				}
 			}
-			if err := Confirm(s, fmt.Sprintf("Delete %s at revision %s?", t.Path, rev)); err != nil {
+			if err := Confirm(ctx, s, fmt.Sprintf("Delete %s at revision %s?", t.Path, rev)); err != nil {
 				return nil, err
 			}
 			if t.Kind == path.KindAttachment {
@@ -336,7 +336,7 @@ Wrote /movies/tt0211915 at revision 4-ceb91fedc93490095c3780efe46bfa19.`,
 					return nil, err
 				}
 				fmt.Fprintf(s.Stdout, "%s was changed by someone else while you were editing.\n", t.Path)
-				if cerr := Confirm(s, "Reapply your edits on top of the latest revision?"); cerr != nil {
+				if cerr := Confirm(ctx, s, "Reapply your edits on top of the latest revision?"); cerr != nil {
 					return nil, err
 				}
 				latestRev, gerr := s.Client.GetRev(ctx, t.Database, t.DocID)

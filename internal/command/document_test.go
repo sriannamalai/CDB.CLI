@@ -2,7 +2,9 @@ package command
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -540,5 +542,34 @@ func TestIndentJSONPreservesKeyOrderAndBigNumbers(t *testing.T) {
 	}
 	if compact.String() != string(src) {
 		t.Errorf("round trip = %s, want %s", compact.String(), src)
+	}
+}
+
+// TestRmInterruptedExitsSilently is the operator-visible half of #32: Ctrl-C
+// at "Delete /db/doc?" leaves no verdict on the screen and exits 130, the way
+// Ctrl-C does everywhere else in cdb.
+func TestRmInterruptedExitsSilently(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.On("HEAD", "/mydb/doc1", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("ETag", `"1-a"`)
+		w.WriteHeader(200)
+	})
+	s := connected(t, srv)
+	s.SetPath("/mydb")
+	s.Stdout = &bytes.Buffer{}
+	s.SetStdin(strings.NewReader("\n"))
+	s.Prefs.Interactive = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := invokeContext(ctx, Rm(), s, "doc1")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+	if out := s.Stdout.(*bytes.Buffer).String(); out != "" && !strings.HasSuffix(out, "[y/N] ") {
+		t.Errorf("stdout = %q, want nothing but the prompt itself", out)
+	}
+	if srv.Last("DELETE", "/mydb/doc1") != nil {
+		t.Fatal("rm deleted after an interrupted prompt")
 	}
 }

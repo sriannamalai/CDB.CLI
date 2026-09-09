@@ -75,7 +75,7 @@ Deleted database "movies-copy".`,
 				return nil, err
 			}
 			prompt := fmt.Sprintf("This deletes %q and its %d document(s) permanently. Type the database name to confirm", t.Database, info.DocCount)
-			if err := ConfirmPhrase(s, prompt, t.Database); err != nil {
+			if err := ConfirmPhrase(ctx, s, prompt, t.Database); err != nil {
 				return nil, err
 			}
 			if err := s.Client.DestroyDatabase(ctx, t.Database); err != nil {

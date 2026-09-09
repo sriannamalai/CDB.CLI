@@ -187,7 +187,7 @@ Kept revision 1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb of /movies/conflicted and delet
 					drop = append(drop, r)
 				}
 			}
-			if err := Confirm(s, fmt.Sprintf("Keep %s and delete %d other revision(s) of %s?", keep, len(drop), t.Path)); err != nil {
+			if err := Confirm(ctx, s, fmt.Sprintf("Keep %s and delete %d other revision(s) of %s?", keep, len(drop), t.Path)); err != nil {
 				return nil, err
 			}
 			for _, r := range drop {
