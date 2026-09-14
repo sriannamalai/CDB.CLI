@@ -37,6 +37,16 @@ var redactedKeys = map[string]bool{
 // every section a later release adds.
 var redactedSuffixes = []string{"password", "secret", "token"}
 
+// unredactedKeys are the keys the suffix rule would catch but that hold no
+// credential: proxy_use_secret is a boolean toggling whether the proxy auth
+// handler requires X-Auth-CouchDB-Token at all, not the shared secret itself
+// (that is chttpd_auth/secret, already caught above). Spelled twice for the
+// same reason redactedKeys is: CouchDB still honours the pre-3.x section name.
+var unredactedKeys = map[string]bool{
+	"chttpd_auth/proxy_use_secret":      true,
+	"couch_httpd_auth/proxy_use_secret": true,
+}
+
 // startupOnlyKeys are the settings CouchDB reads when it starts and does not
 // re-read afterwards: writing one through _config changes what the next boot
 // will use, and changes nothing about the running server. "config set" says so
@@ -90,6 +100,9 @@ func redactedConfigValue(section, key, value string, reveal bool) string {
 	}
 	if redactedKeys[section+"/"+key] {
 		return redactedValue
+	}
+	if unredactedKeys[section+"/"+key] {
+		return value
 	}
 	lower := strings.ToLower(key)
 	for _, suffix := range redactedSuffixes {
@@ -226,7 +239,9 @@ const startupNotice = " This setting is read at start-up; restart CouchDB for it
 // — while an ordinary key is written as asked.
 func configSet(ctx context.Context, s *session.Session, inv Invocation, node string) (Result, error) {
 	section, key := splitConfigKey(inv.Arg(1))
-	if section == "" || key == "" || inv.Arg(2) == "" {
+	// len, not Arg(2) == "", so "config set s/k \"\"" writes the empty string
+	// instead of being mistaken for "config set s/k" with no value at all.
+	if section == "" || key == "" || len(inv.Args) < 3 {
 		return nil, Usagef("config", "usage: config set <section>/<key> <value>")
 	}
 	value := inv.Arg(2)

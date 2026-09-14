@@ -284,6 +284,56 @@ func TestConfigNodeFlagReachesTheURL(t *testing.T) {
 	}
 }
 
+// "config set" with an empty string as the value argument writes the empty
+// string CouchDB accepts, and must not be mistaken for "config set s/k" with
+// no value argument at all.
+func TestConfigSetWritesAnEmptyValue(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("PUT", "/_node/_local/_config/log/level", 200, `"info"`)
+	s := connected(t, srv)
+	res, err := invoke(t, ConfigCmd(), s, "set", "log/level", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg := res.(Message).Text; msg != `Set log/level (was "info").` {
+		t.Errorf("message = %q", msg)
+	}
+	if body := strings.TrimSpace(string(srv.Last("PUT", "/_node/_local/_config/log/level").Body)); body != `""` {
+		t.Errorf("PUT body = %s, want an empty JSON string", body)
+	}
+}
+
+func TestConfigDoesNotMaskProxyUseSecret(t *testing.T) {
+	for _, section := range []string{"chttpd_auth", "couch_httpd_auth"} {
+		srv := couchtest.New(t)
+		srv.JSON("GET", "/_node/_local/_config/"+section, 200, `{"proxy_use_secret":"true","secret":"proxysecret"}`)
+		s := connected(t, srv)
+		res, err := invoke(t, ConfigCmd(), s, section)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range res.(Rows).Items {
+			switch item.Cells[1] {
+			case "proxy_use_secret":
+				if item.Cells[2] != "true" {
+					t.Errorf("%s/proxy_use_secret cell = %q, want unmasked", section, item.Cells[2])
+				}
+				var payload map[string]string
+				if err := json.Unmarshal(item.JSON, &payload); err != nil {
+					t.Fatal(err)
+				}
+				if payload["value"] != "true" {
+					t.Errorf("%s/proxy_use_secret --json = %s, want unmasked", section, item.JSON)
+				}
+			case "secret":
+				if item.Cells[2] != "****" {
+					t.Errorf("%s/secret cell = %q, want masked", section, item.Cells[2])
+				}
+			}
+		}
+	}
+}
+
 func TestConfigSetAndUnsetNeedASectionAndKey(t *testing.T) {
 	srv := couchtest.New(t)
 	s := connected(t, srv)
