@@ -153,3 +153,44 @@ func TestExpandBackslashProtectsADollar(t *testing.T) {
 		}
 	}
 }
+
+func TestExpandLeavesAMangoOperatorAlone(t *testing.T) {
+	v := session.NewVars()
+	v.Set("gt", session.StringValue("expanded"))
+	// The bare word loses its quotes to the ordinary word rules, as it always
+	// has; what matters here is that the operator survives as "$gt".
+	for in, want := range map[string]string{
+		`find /movies {"year":{"$gt":2000}}`:       `{year:{$gt:2000}}`,
+		`find /movies "{\"year\":{\"$gt\":2000}}"`: `{"year":{"$gt":2000}}`,
+	} {
+		got, err := expandLine(t, in, v, nil)
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got[2] != want {
+			t.Errorf("%q: argv[2] = %q, want %q; a $ right after a \" is literal", in, got[2], want)
+		}
+	}
+}
+
+func TestExpandStillExpandsAWholeQuotedWord(t *testing.T) {
+	v := session.NewVars()
+	v.Set("doc", session.StringValue("tt0211915"))
+	got, err := expandLine(t, `cat "$doc"`, v, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[1] != "tt0211915" {
+		t.Errorf("argv[1] = %q; the delimiting quote is not part of the word", got[1])
+	}
+}
+
+func TestExpandSaysHowToProtectALiteralDollar(t *testing.T) {
+	_, err := expandLine(t, "find /movies $gt", session.NewVars(), nil)
+	if err == nil {
+		t.Fatal("an unset name was accepted")
+	}
+	if want := `variable "gt" is not set. Write '…' or \$gt for a literal $.`; err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}

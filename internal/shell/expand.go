@@ -19,7 +19,11 @@ func expandStage(st Stage, vars *session.Vars, args []string) ([]string, error) 
 			out[i] = word
 			continue
 		}
-		v, err := expandWord(word, vars, args)
+		var dollars []int
+		if i < len(st.LiteralDollar) {
+			dollars = st.LiteralDollar[i]
+		}
+		v, err := expandWord(word, dollars, vars, args)
 		if err != nil {
 			return nil, err
 		}
@@ -31,8 +35,10 @@ func expandStage(st Stage, vars *session.Vars, args []string) ([]string, error) 
 // expandWord replaces every reference in one word. A value replaces the
 // reference inside the word and the word is never re-split, so a variable
 // holding a space is still one argument. "$$" is a literal "$", and a "$" that
-// begins no reference is left as it was.
-func expandWord(word string, vars *session.Vars, args []string) (string, error) {
+// begins no reference is left as it was. dollars holds the offsets the parser
+// marked literal — every "$" written right after a double quote, which is how
+// a Mango selector spells "$gt".
+func expandWord(word string, dollars []int, vars *session.Vars, args []string) (string, error) {
 	var b strings.Builder
 	for i := 0; i < len(word); i++ {
 		if word[i] != '$' {
@@ -42,6 +48,10 @@ func expandWord(word string, vars *session.Vars, args []string) (string, error) 
 		if i+1 < len(word) && word[i+1] == '$' {
 			b.WriteByte('$')
 			i++
+			continue
+		}
+		if literalDollarAt(dollars, i) {
+			b.WriteByte('$')
 			continue
 		}
 		name, next, ok := referenceAt(word, i+1)
@@ -57,6 +67,18 @@ func expandWord(word string, vars *session.Vars, args []string) (string, error) 
 		i = next - 1
 	}
 	return b.String(), nil
+}
+
+// literalDollarAt reports whether the "$" at offset i is one the parser marked
+// literal. The offsets are in the order the parser wrote them, and a word holds
+// a handful at most, so a scan is the whole of it.
+func literalDollarAt(dollars []int, i int) bool {
+	for _, d := range dollars {
+		if d == i {
+			return true
+		}
+	}
+	return false
 }
 
 // referenceAt reads the name of the reference beginning at i, which is just
@@ -127,5 +149,5 @@ func valueOf(name string, vars *session.Vars, args []string) (string, error) {
 // unsetVariable is the sentence for a reference with nothing behind it. It is
 // a usage error: the line was written wrong, so the exit code is 2.
 func unsetVariable(name string) error {
-	return &command.UsageError{Reason: fmt.Sprintf("variable %q is not set.", name)}
+	return &command.UsageError{Reason: fmt.Sprintf(`variable %q is not set. Write '…' or \$%s for a literal $.`, name, name)}
 }

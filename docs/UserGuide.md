@@ -920,7 +920,9 @@ admin@localhost:5984:/movies> set
 word is never re-split — a value holding a space stays one argument. They are
 never replaced inside a word any part of which is single-quoted, which is how
 a Mango selector or a jq expression keeps a `$` of its own, a backslash
-protects a lone `$` the same way (`\$a`), and `$$` is a literal `$`. In a jq
+protects a lone `$` the same way (`\$a`), and `$$` is a literal `$`. A `$`
+right after a `"` is left alone, so Mango operators such as `"$gt"` need no
+escaping. In a jq
 stage the variables are not text-replaced at all: each is bound as a jq
 variable of the same name with its stored value, so a number is a number.
 

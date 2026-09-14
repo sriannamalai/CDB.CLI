@@ -82,8 +82,9 @@ Variables and scripts
   set                               list them, credentials masked
 
 $name and ${name} are replaced inside a word of a command stage, never inside
-single quotes; $$ is a literal $. In a jq stage every variable is bound as a jq
-variable of the same name, so "select(.year > $year)" works.
+single quotes; $$ is a literal $. A $ right after a " is left alone, so Mango
+operators such as "$gt" need no escaping. In a jq stage every variable is bound
+as a jq variable of the same name, so "select(.year > $year)" works.
 
 "run <file> [arg...]" runs a file of these lines, and so does "cdb < file".
 See "help run".`
