@@ -1275,3 +1275,88 @@ func TestConnectWithAuthIAMRejectsANonIAMSession(t *testing.T) {
 		t.Fatal("a cookie session passed as an IAM login")
 	}
 }
+
+// The usage error an unknown --auth raises names the command the operator
+// actually typed. Told "connect: ...", someone running "profiles add" goes
+// looking at the wrong command's help.
+func TestProfilesAddNamesItselfInTheAuthUsageError(t *testing.T) {
+	srv := couchtest.New(t)
+	SetDeps(&Deps{
+		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		Secrets:    config.NewMemorySecrets(),
+		LookupEnv:  func(string) (string, bool) { return "", false },
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	_, err := invoke(t, Profiles(), s, "add", "new", srv.URL(), "--auth", "bogus")
+	var ue *UsageError
+	if !errors.As(err, &ue) {
+		t.Fatalf("err = %v (%T), want a usage error", err, err)
+	}
+	if ue.Command != "profiles" {
+		t.Errorf("the usage error names %q, want profiles", ue.Command)
+	}
+}
+
+// The first-run walk-through is a branch of "connect" that never saw --auth or
+// --roles: the flags were silently dropped, and an unusable kind was not
+// rejected at all on that path.
+func TestFirstRunWalkthroughTakesTheAuthFlags(t *testing.T) {
+	srv := proxyStub(t, proxyTokenSHA256)
+	SetDeps(&Deps{
+		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		Secrets:    config.NewMemorySecrets(),
+		LookupEnv:  func(string) (string, bool) { return "", false },
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	s.Prefs.Interactive = true
+	// URL, Enter for the kind the flag already named, profile name, user name,
+	// Enter for the roles the flag already named, the secret, then save.
+	s.SetStdin(strings.NewReader(srv.URL() + "\n\nops\nops\n\nproxysecret\ny\n"))
+	if _, err := invoke(t, Connect(), s, "--auth", "proxy", "--roles", "_admin,editor"); err != nil {
+		t.Fatalf("guided connect with --auth proxy = %v", err)
+	}
+	if out := s.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "none) [proxy]") {
+		t.Errorf("the kind prompt did not default to the named kind:\n%s", out)
+	}
+	cfg, err := config.Load(CurrentDeps().ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := cfg.Profile("ops")
+	if !ok {
+		t.Fatal("the walk-through saved no profile")
+	}
+	if p.Auth != "proxy" {
+		t.Errorf("auth = %q, want proxy", p.Auth)
+	}
+	if strings.Join(p.Roles, ",") != "_admin,editor" {
+		t.Errorf("roles = %v, want the ones --roles named", p.Roles)
+	}
+}
+
+// And a kind cdb has no transport for is rejected before the walk-through asks
+// anything, rather than after the operator has typed a URL and a password.
+func TestFirstRunWalkthroughRejectsAnUnknownAuthKind(t *testing.T) {
+	SetDeps(&Deps{
+		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		Secrets:    config.NewMemorySecrets(),
+		LookupEnv:  func(string) (string, bool) { return "", false },
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	s.Prefs.Interactive = true
+	s.SetStdin(strings.NewReader("http://localhost:5984\n"))
+	_, err := invoke(t, Connect(), s, "--auth", "bogus")
+	var ue *UsageError
+	if !errors.As(err, &ue) {
+		t.Fatalf("err = %v (%T), want a usage error", err, err)
+	}
+	if out := s.Stdout.(*bytes.Buffer).String(); out != "" {
+		t.Errorf("the walk-through asked a question before rejecting the kind:\n%s", out)
+	}
+}

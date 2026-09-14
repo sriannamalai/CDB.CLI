@@ -551,11 +551,13 @@ func dial(ctx context.Context, s *session.Session, profile config.Profile, attac
 func validAuthKind(s string) bool { return config.ValidAuthKind(s) }
 
 // authOverrideFrom reads --auth and --roles off an invocation, rejecting a
-// kind cdb does not have a transport for before any network work is done.
-func authOverrideFrom(inv Invocation) (authOverride, error) {
+// kind cdb does not have a transport for before any network work is done. cmd
+// is the command the operator typed, so "profiles add --auth bogus" sends them
+// to the help for "profiles" rather than to connect's.
+func authOverrideFrom(inv Invocation, cmd string) (authOverride, error) {
 	kind := inv.String("auth")
 	if kind != "" && !validAuthKind(kind) {
-		return authOverride{}, Usagef("connect", "%q is not an authentication kind; expected session, jwt, proxy, iam or none", kind)
+		return authOverride{}, Usagef(cmd, "%q is not an authentication kind; expected session, jwt, proxy, iam or none", kind)
 	}
 	return authOverride{Kind: kind, Roles: splitRoles(inv.String("roles"))}, nil
 }
@@ -650,8 +652,15 @@ Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 				defer func() { s.Prefs.Anonymous = false }()
 			}
 			arg := inv.Arg(0)
+			// Read the override before the branch: the walk-through is as
+			// entitled to --auth and --roles as openProfile is, and a kind cdb
+			// has no transport for is a usage error on both paths, raised
+			// before anybody is asked to type a URL.
+			over, err := authOverrideFrom(inv, "connect")
+			if err != nil {
+				return nil, err
+			}
 			var conn connection
-			var err error
 			guided := false
 			// --url and --profile are a target, so they belong in this guard
 			// as much as the argument does: a first run is exactly when an
@@ -664,7 +673,7 @@ Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 				// reaches config.toml or the keyring until the server has
 				// accepted the answers, so a mistyped password leaves no
 				// half-made profile behind.
-				p, secret, promptErr := promptForProfile(s)
+				p, secret, promptErr := promptForProfile(s, over)
 				if promptErr != nil {
 					return nil, promptErr
 				}
@@ -695,10 +704,6 @@ Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 			} else {
 				// openProfile owns the bare-URL question, because every other
 				// command reaches a server through it too.
-				over, oerr := authOverrideFrom(inv)
-				if oerr != nil {
-					return nil, oerr
-				}
 				conn, err = openProfileWith(ctx, s, arg, over)
 			}
 			if err != nil {
@@ -881,8 +886,11 @@ func promptForProxy(s *session.Session, def string) (user string, roles []string
 	return user, splitRoles(raw), secret, nil
 }
 
-// promptForProfile walks an operator through creating the first profile.
-func promptForProfile(s *session.Session) (config.Profile, string, error) {
+// promptForProfile walks an operator through creating the first profile. over
+// is what --auth and --roles named: the kind becomes the prompt's default, so
+// the operator confirms the flag rather than retyping it, and the roles stand
+// unless the proxy questions collect some of their own.
+func promptForProfile(s *session.Session, over authOverride) (config.Profile, string, error) {
 	ask := func(label, def string) (string, error) { return askLine(s, label, def) }
 	serverURL, err := ask("Server URL", "http://localhost:5984")
 	if err != nil {
@@ -892,9 +900,13 @@ func promptForProfile(s *session.Session) (config.Profile, string, error) {
 	// auth kind it does not recognise, so accepting "sesion" here would build
 	// an unauthenticated client, skip the username and secret questions, and
 	// offer to save a profile that can never log in.
+	defKind := over.Kind
+	if defKind == "" {
+		defKind = "session"
+	}
 	var auth string
 	for {
-		auth, err = ask("Authentication (session, jwt, proxy, iam, none)", "session")
+		auth, err = ask("Authentication (session, jwt, proxy, iam, none)", defKind)
 		if err != nil {
 			return config.Profile{}, "", err
 		}
@@ -910,7 +922,7 @@ func promptForProfile(s *session.Session) (config.Profile, string, error) {
 	if err := checkProfileName("connect", name); err != nil {
 		return config.Profile{}, "", err
 	}
-	p := config.Profile{Name: name, URL: serverURL, Auth: auth}
+	p := config.Profile{Name: name, URL: serverURL, Auth: auth, Roles: over.Roles}
 	var secret string
 	switch auth {
 	case "session":
@@ -933,7 +945,12 @@ func promptForProfile(s *session.Session) (config.Profile, string, error) {
 		if perr != nil {
 			return config.Profile{}, "", perr
 		}
-		p.Username, p.Roles, secret = user, roles, sec
+		p.Username, secret = user, sec
+		// Roles typed at the prompt win; a blank answer leaves whatever
+		// --roles named rather than claiming none.
+		if len(roles) > 0 {
+			p.Roles = roles
+		}
 	case "iam":
 		secret, err = readSecret(s, "IAM API key")
 		if err != nil {
@@ -1151,7 +1168,7 @@ Default profile is now "local".`,
 // it.
 func profileToAdd(ctx context.Context, s *session.Session, inv Invocation, name, serverURL string) (config.Profile, string, error) {
 	profile := config.Profile{Name: name, URL: serverURL, Auth: "session"}
-	over, err := authOverrideFrom(inv)
+	over, err := authOverrideFrom(inv, "profiles")
 	if err != nil {
 		return config.Profile{}, "", err
 	}
