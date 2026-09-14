@@ -122,9 +122,19 @@ func (sh *Shell) runScriptLine(ctx context.Context, stmt, name string, at int) e
 		// Ctrl-C: the operator asked to stop, and nothing is printed.
 		return err
 	}
+	// A nested script has already named its own file and line.
+	var re *command.ReportedError
+	if errors.As(err, &re) {
+		if ignore {
+			return nil
+		}
+		return err
+	}
 	fmt.Fprintf(sh.sess.Stderr, "%s:%d: %s\n", name, at, render.ErrorMessage(err, sh.sess.Prefs.Verbose))
 	if ignore {
 		return nil
 	}
-	return err
+	// The sentence is out; whoever the failure travels to prints nothing more
+	// and keeps only the exit code.
+	return command.Reported(err)
 }

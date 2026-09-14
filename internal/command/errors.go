@@ -101,3 +101,21 @@ type StageError struct {
 func (e *StageError) Error() string { return e.Text }
 
 func (e *StageError) Unwrap() error { return e.Err }
+
+// ReportedError wraps an error whose sentence has already been written to
+// standard error by the command that raised it. A front-end prints nothing
+// more for it and keeps only its exit code: a script names the file and the
+// line its failure came from, which no later message could improve on.
+type ReportedError struct{ Err error }
+
+func (e *ReportedError) Error() string { return e.Err.Error() }
+func (e *ReportedError) Unwrap() error { return e.Err }
+
+// Reported marks err as already written to standard error. A nil error stays
+// nil, so it can wrap a call's result directly.
+func Reported(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ReportedError{Err: err}
+}

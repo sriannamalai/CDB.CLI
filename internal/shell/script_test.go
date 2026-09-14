@@ -175,3 +175,22 @@ func TestScriptUnfinishedLastLine(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestScriptReportsANestedFailureOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "inner.cdb")
+	if err := os.WriteFile(path, []byte("fail\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	sh := scriptShell(t, &out)
+	if err := runText(t, sh, "run "+path+"\n"); err == nil {
+		t.Fatal("the nested failure did not stop the outer script")
+	}
+	if !strings.Contains(out.String(), path+":1: no") {
+		t.Errorf("stderr = %q, want the inner script's own line", out.String())
+	}
+	if strings.Contains(out.String(), "script.cdb:1:") {
+		t.Errorf("stderr = %q; a failure already reported must not be reported again", out.String())
+	}
+}

@@ -57,6 +57,9 @@ $ cdb < nightly.cdb`,
 			defer func() { _ = f.Close() }()
 			// The script's own lines render themselves as they run, so there is
 			// nothing left for the front-end to print.
+			// A failing line has already printed "<file>:<line>: <sentence>"
+			// for itself and comes back marked as reported, so the failure
+			// travels on unchanged and only its exit code is still wanted.
 			if err := runner(ctx, f, name, inv.Args[1:], inv.Bool("yes")); err != nil {
 				return nil, err
 			}

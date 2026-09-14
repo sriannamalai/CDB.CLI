@@ -233,6 +233,26 @@ func TestExecuteKeepsALaterFlagAsAnArgument(t *testing.T) {
 	}
 }
 
+func TestExecutePrintsNothingForAnAlreadyReportedError(t *testing.T) {
+	var out, errOut bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &errOut)
+	r := testRegistry()
+	r.Register(command.Command{
+		Name:    "reported",
+		Summary: "Fail after saying so itself",
+		Run: func(context.Context, *session.Session, command.Invocation) (command.Result, error) {
+			return nil, command.Reported(command.Usagef("reported", "no"))
+		},
+	})
+	code := Execute(context.Background(), r, s, BuildInfo{}, []string{"reported"})
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d", code, ExitUsage)
+	}
+	if errOut.String() != "" {
+		t.Errorf("stderr = %q, want nothing: the command has already spoken", errOut.String())
+	}
+}
+
 func TestExecuteUsageErrorExitsTwo(t *testing.T) {
 	var out, errOut bytes.Buffer
 	s := session.New(strings.NewReader(""), &out, &errOut)

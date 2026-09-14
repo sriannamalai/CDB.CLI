@@ -384,6 +384,11 @@ func (sh *Shell) reportError(err error) {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return
 	}
+	// A script has already named the file and line that failed.
+	var re *command.ReportedError
+	if errors.As(err, &re) {
+		return
+	}
 	fmt.Fprintln(sh.sess.Stderr, errorText(err, sh.sess.Prefs.Verbose))
 }
 

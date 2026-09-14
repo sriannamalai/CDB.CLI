@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -84,3 +85,21 @@ func TestRunWithoutARunnerSaysSo(t *testing.T) {
 		t.Fatalf("error = %v (%T)", err, err)
 	}
 }
+
+func TestRunPassesTheScriptFailureThrough(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "job.cdb")
+	if err := os.WriteFile(path, []byte("say hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	boom := Usagef("say", "no")
+	c := RunFrom(func(context.Context, io.Reader, string, []string, bool) error { return boom })
+	s := connected(t, couchtest.New(t))
+	_, err := invoke(t, c, s, path)
+	// The exit code is the failing line's, so the error must arrive unchanged.
+	if !errorsIs(err, boom) {
+		t.Errorf("error = %v, want the script's own failure", err)
+	}
+}
+
+func errorsIs(err, target error) bool { return errors.Is(err, target) }

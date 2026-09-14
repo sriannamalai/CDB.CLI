@@ -244,6 +244,12 @@ func Execute(ctx context.Context, reg *command.Registry, s *session.Session, bui
 	if errors.Is(err, context.Canceled) {
 		return ExitCode(err)
 	}
+	// A command that has already written its own message — a script naming
+	// the file and line that failed — keeps its exit code and says no more.
+	var re *command.ReportedError
+	if errors.As(err, &re) {
+		return ExitCode(err)
+	}
 	var ue *command.UsageError
 	if errors.As(err, &ue) {
 		fmt.Fprintln(s.Stderr, ue.Error())
