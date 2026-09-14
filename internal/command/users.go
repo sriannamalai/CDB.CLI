@@ -521,6 +521,12 @@ func usersRemove(ctx context.Context, s *session.Session, inv Invocation) (Resul
 			return nil, err
 		}
 		if _, err := s.Client.DeleteConfig(ctx, defaultNode, "admins", name); err != nil {
+			// --admin on a name that is not in [admins] gets CouchDB's raw
+			// unknown_config_value; say what it means, the way config unset
+			// does for the same failure.
+			if ce, ok := couch.AsError(err); ok && ce.Reason == unknownConfigValue {
+				return nil, Errorf(err, "Server admin %q does not exist.", name)
+			}
 			return nil, couch.AsAdmin(err, "managing users")
 		}
 		return Message{Text: fmt.Sprintf("Deleted server admin %q.", name)}, nil

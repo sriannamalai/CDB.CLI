@@ -467,3 +467,19 @@ func TestUsersPasswdAdminRefusesAnUnknownServerAdmin(t *testing.T) {
 		t.Error("a server admin was created by passwd --admin")
 	}
 }
+
+func TestUsersRemoveAdminOnAnUnknownNameSaysSo(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_session", 200,
+		`{"ok":true,"userCtx":{"name":"admin","roles":["_admin"]},"info":{"authenticated":"default"}}`)
+	srv.JSON("GET", "/_node/_local/_config/admins", 200, `{"admin":"-pbkdf2-x"}`)
+	srv.JSON("DELETE", "/_node/_local/_config/admins/ghost", 404,
+		`{"error":"not_found","reason":"unknown_config_value"}`)
+	s := connected(t, srv)
+	s.Prefs.Yes = true
+	_, err := invoke(t, Users(), s, "rm", "ghost", "--admin")
+	want := `Server admin "ghost" does not exist.`
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
