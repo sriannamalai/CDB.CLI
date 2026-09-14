@@ -70,8 +70,13 @@ type Session struct {
 	Client  *couch.Client
 	Profile string
 	Prefs   Prefs
-	Stdout  io.Writer
-	Stderr  io.Writer
+
+	// Vars holds the shell variables. A script runs with a child table, so it
+	// never changes its caller's.
+	Vars *Vars
+
+	Stdout io.Writer
+	Stderr io.Writer
 
 	// stdin is unexported so that every reader of it goes through Reader and
 	// shares one buffer. Two bufio.Readers over the same stream lose data: the
@@ -92,6 +97,7 @@ type Session struct {
 func New(stdin io.Reader, stdout, stderr io.Writer) *Session {
 	s := &Session{
 		Prefs:  DefaultPrefs(),
+		Vars:   NewVars(),
 		Stdout: stdout,
 		Stderr: stderr,
 		cwd:    "/",

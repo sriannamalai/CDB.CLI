@@ -41,6 +41,12 @@ func TestParse(t *testing.T) {
 			{Expr: `select(.id == "a|b")`},
 		}},
 		{"extra whitespace", "  ls   /mydb  ", []Stage{{Argv: []string{"ls", "/mydb"}}}},
+		{"four stages", `find --field year | select(.year > 2000) | .id | put /old`, []Stage{
+			{Argv: []string{"find", "--field", "year"}},
+			{Expr: "select(.year > 2000)"},
+			{Expr: ".id"},
+			{Argv: []string{"put", "/old"}},
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -48,8 +54,16 @@ func TestParse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse(%q) returned error: %v", tc.input, err)
 			}
-			if !reflect.DeepEqual(got.Stages, tc.want) {
-				t.Errorf("Parse(%q).Stages = %#v, want %#v", tc.input, got.Stages, tc.want)
+			// Only Argv and Expr are compared: Literal is the parser's own
+			// record of which words were single-quoted and has a case of its
+			// own below.
+			if len(got.Stages) != len(tc.want) {
+				t.Fatalf("Parse(%q).Stages = %#v, want %#v", tc.input, got.Stages, tc.want)
+			}
+			for i := range tc.want {
+				if !reflect.DeepEqual(got.Stages[i].Argv, tc.want[i].Argv) || got.Stages[i].Expr != tc.want[i].Expr {
+					t.Errorf("Parse(%q).Stages[%d] = %#v, want %#v", tc.input, i, got.Stages[i], tc.want[i])
+				}
 			}
 		})
 	}
@@ -62,7 +76,7 @@ func TestParseWithoutAClassifierMakesEveryLaterStageJQ(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Stage{{Argv: []string{"ls"}}, {Expr: "cat"}}
+	want := []Stage{{Argv: []string{"ls"}, Literal: []bool{false}}, {Expr: "cat"}}
 	if !reflect.DeepEqual(got.Stages, want) {
 		t.Errorf("Stages = %#v, want %#v", got.Stages, want)
 	}
@@ -181,5 +195,16 @@ func TestNeedsMore(t *testing.T) {
 		if got := NeedsMore(tc.input); got != tc.want {
 			t.Errorf("NeedsMore(%q) = %v, want %v", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestParseRecordsSingleQuotedWords(t *testing.T) {
+	line, err := Parse(`find '{"a":1}' "b" c`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []bool{false, true, false, false}
+	if !reflect.DeepEqual(line.Stages[0].Literal, want) {
+		t.Errorf("Literal = %v, want %v", line.Stages[0].Literal, want)
 	}
 }

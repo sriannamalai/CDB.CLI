@@ -22,7 +22,12 @@ var ErrTrailingPipe = errors.New("a line cannot end with |")
 // a jq stage carries one gojq expression, taken verbatim.
 type Stage struct {
 	Argv []string
-	Expr string
+	// Literal[i] reports that some part of word i was written inside single
+	// quotes. Such a word is never variable-expanded: single quotes are
+	// literal, and that is how a Mango selector or a jq expression keeps a "$"
+	// of its own.
+	Literal []bool
+	Expr    string
 	// Capture is the raw pipeline text of a "set <name> = <pipeline>" line,
 	// kept exactly as it was typed. It is set on no other stage. "set" parses
 	// it into a Line of its own when it runs, which is why the operator needs
@@ -102,12 +107,16 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 		return Line{Stages: []Stage{{Argv: argv, Capture: capture}}}, nil
 	}
 	var (
-		line    Line
-		cur     strings.Builder
-		argv    []string
-		hasWord bool
-		quote   rune
-		escaped bool
+		line      Line
+		cur       strings.Builder
+		argv      []string
+		literalOf []bool
+		hasWord   bool
+		// wasLiteral records that the word being built has a single-quoted
+		// part, which is what keeps it out of variable expansion.
+		wasLiteral bool
+		quote      rune
+		escaped    bool
 	)
 	runes := []rune(input)
 	// start is where the current stage's raw text begins, so that a jq stage
@@ -116,8 +125,9 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 	flush := func() {
 		if hasWord {
 			argv = append(argv, cur.String())
+			literalOf = append(literalOf, wasLiteral)
 			cur.Reset()
-			hasWord = false
+			hasWord, wasLiteral = false, false
 		}
 	}
 	// closeStage ends the stage that began at start and runs to end.
@@ -133,9 +143,9 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 		if len(line.Stages) > 0 && (isCommand == nil || len(argv) == 0 || !isCommand(argv[0])) {
 			line.Stages = append(line.Stages, Stage{Expr: raw})
 		} else {
-			line.Stages = append(line.Stages, Stage{Argv: argv})
+			line.Stages = append(line.Stages, Stage{Argv: argv, Literal: literalOf})
 		}
-		argv = nil
+		argv, literalOf = nil, nil
 		return nil
 	}
 	for i := 0; i < len(runes); i++ {
@@ -165,6 +175,9 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 		case r == '\'' || r == '"':
 			quote = r
 			hasWord = true
+			if r == '\'' {
+				wasLiteral = true
+			}
 		case r == '|':
 			if err := closeStage(i); err != nil {
 				return Line{}, err
