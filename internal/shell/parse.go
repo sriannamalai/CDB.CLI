@@ -128,9 +128,12 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 		escaped   bool
 	)
 	runes := []rune(input)
-	// start is where the current stage's raw text begins, so that a jq stage
-	// can be handed to gojq exactly as it was typed.
-	start := 0
+	// raw collects the current stage's text as it is read, so that a jq stage
+	// can be handed to gojq exactly as it was typed. It is built rather than
+	// sliced out of the input because a comment contributes nothing to it: a
+	// comment ends the stage it is in, and a stage of nothing but a comment is
+	// no stage at all.
+	var raw []rune
 	// write adds one rune to the word being built. literal says the rune was
 	// written inside single quotes or after a backslash; a "$" that is literal,
 	// or that follows a double quote, has its offset recorded so that
@@ -153,18 +156,19 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 			hasWord, quotedDollar = false, false
 		}
 	}
-	// closeStage ends the stage that began at start and runs to end.
-	closeStage := func(end int) error {
+	// closeStage ends the stage whose text has been collected in raw.
+	closeStage := func() error {
 		flush()
-		raw := strings.TrimSpace(string(runes[start:end]))
-		if len(argv) == 0 && raw == "" {
+		text := strings.TrimSpace(string(raw))
+		raw = raw[:0]
+		if len(argv) == 0 && text == "" {
 			if len(line.Stages) == 0 {
 				return ErrLeadingPipe
 			}
 			return ErrTrailingPipe
 		}
 		if len(line.Stages) > 0 && (isCommand == nil || len(argv) == 0 || !isCommand(argv[0])) {
-			line.Stages = append(line.Stages, Stage{Expr: raw})
+			line.Stages = append(line.Stages, Stage{Expr: text})
 		} else {
 			marked := dollarOf
 			if !anyDollar {
@@ -177,6 +181,26 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 	}
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
+		// A "#" that begins a token starts a comment, which runs to the end of
+		// its own physical line: the rest of a continued line is still input.
+		// Inside quotes, after a backslash, or in the middle of a word ("a#b")
+		// it is an ordinary character — the rule jq applies to its own
+		// comments. What it swallows is not part of the stage, so a stage that
+		// is only a comment is empty and "ls | # note" is a line that ends
+		// with "|".
+		if r == '#' && !hasWord && !escaped && quote == 0 {
+			for i+1 < len(runes) && runes[i+1] != '\n' {
+				i++
+			}
+			continue
+		}
+		if r == '|' && !escaped && quote == 0 {
+			if err := closeStage(); err != nil {
+				return Line{}, err
+			}
+			continue
+		}
+		raw = append(raw, r)
 		switch {
 		case escaped:
 			// A backslash protects the rune after it and nothing else, so
@@ -208,20 +232,6 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 			// inside the word is the quote a Mango operator is written after.
 			quotedDollar = r == '"' && cur.Len() > 0
 			hasWord = true
-		case r == '#' && !hasWord:
-			// A "#" that begins a token starts a comment, which runs to the
-			// end of its own physical line: the rest of a continued line is
-			// still input. Inside quotes, after a backslash, or in the middle
-			// of a word ("a#b") it is an ordinary character — the rule jq
-			// applies to its own comments.
-			for i+1 < len(runes) && runes[i+1] != '\n' {
-				i++
-			}
-		case r == '|':
-			if err := closeStage(i); err != nil {
-				return Line{}, err
-			}
-			start = i + 1
 		case r == ' ' || r == '\t' || r == '\n':
 			flush()
 		default:
@@ -237,7 +247,7 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 	if len(line.Stages) == 0 && len(argv) == 0 && !hasWord {
 		return Line{}, nil
 	}
-	if err := closeStage(len(runes)); err != nil {
+	if err := closeStage(); err != nil {
 		return Line{}, err
 	}
 	return line, nil
