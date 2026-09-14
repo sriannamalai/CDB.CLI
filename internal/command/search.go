@@ -132,7 +132,7 @@ func searchSentence(ctx context.Context, s *session.Session, t path.Target, err 
 	}
 	name := strings.TrimPrefix(t.DocID, "_design/") + "/" + t.Index
 	switch {
-	case ce.Status == http.StatusServiceUnavailable && t.Backend == path.BackendClouseau:
+	case t.Backend == path.BackendClouseau && missingClouseau(ce):
 		return Errorf(err, "This server has no search service running; Clouseau must be installed and started for _search indexes.")
 	case ce.Status == http.StatusNotFound && t.Backend == path.BackendNouveau:
 		// Ask whether the design document exists. If it does not, its own 404
@@ -140,11 +140,69 @@ func searchSentence(ctx context.Context, s *session.Session, t path.Target, err 
 		if _, derr := s.Client.DesignDoc(ctx, t.Database, t.DocID); derr != nil {
 			return derr
 		}
-		return Errorf(err, "Nouveau is not enabled on this server, or %q is not a nouveau index.", name)
+		// The reason is not read: a 3.5 with Nouveau switched off says
+		// "missing" and a server before 3.4 says "Document is missing
+		// attachment", because there is no _nouveau route and the request fell
+		// through to the attachment handler. Both mean the same thing to the
+		// operator, and the design document has already been ruled out.
+		sentence := fmt.Sprintf("Nouveau is not enabled on this server, or %q is not a nouveau index.", name)
+		if hint := nouveauVersionHint(ctx, s); hint != "" {
+			sentence += " " + hint
+		}
+		return Errorf(err, "%s", sentence)
 	case ce.Status == http.StatusBadRequest:
 		return Errorf(err, "The search query was rejected: %s.", strings.TrimRight(ce.Reason, "."))
 	}
 	return err
+}
+
+// missingClouseau reports whether a failed _search query means no search
+// service is running. 3.5 answers 503 "Search is not available", which is the
+// clean case. Older servers do not: the call to a process that is not there
+// simply fails, and the operator gets a 500 carrying an Erlang badarg or
+// gen_server tuple. The node name is inside that tuple, so it is the tuple
+// that is read -- an unrelated 500 keeps the server's own error, because a
+// fault in a search that works is not a search service that is absent.
+func missingClouseau(e *couch.Error) bool {
+	if e.Status == http.StatusServiceUnavailable {
+		return true
+	}
+	return e.Status == http.StatusInternalServerError &&
+		strings.Contains(strings.ToLower(e.Name+" "+e.Reason), "clouseau")
+}
+
+// nouveauVersionHint is the clause added to the Nouveau sentence when the
+// server is too old to have the endpoint at all: CouchDB gained _nouveau in
+// 3.4, so 3.0 through 3.3 answer 404 for every nouveau path whatever the
+// design document defines, and "not enabled" alone would send the operator to
+// a configuration file that has nothing to switch on. It mirrors
+// jwtVersionHint, which says the same thing about the JWT handler 3.1 added.
+//
+// The version costs one request, on the error path only, and a server that
+// will not answer it simply gets no clause: a hint that cannot be confirmed is
+// worse than none.
+func nouveauVersionHint(ctx context.Context, s *session.Session) string {
+	info, err := s.Client.ServerInfo(ctx)
+	if err != nil || !beforeNouveau(info.Version) {
+		return ""
+	}
+	return "Nouveau needs CouchDB 3.4 or later; this server is " + info.Version + "."
+}
+
+// beforeNouveau reports whether a reported version is a supported server from
+// before _nouveau existed. An unparseable or unexpected version is treated as
+// new enough, so the clause is never printed on a guess.
+func beforeNouveau(version string) bool {
+	major, minor, ok := strings.Cut(version, ".")
+	if !ok || major != "3" {
+		return false
+	}
+	minor, _, _ = strings.Cut(minor, ".")
+	switch minor {
+	case "0", "1", "2", "3":
+		return true
+	}
+	return false
 }
 
 // setExtra lazily builds the Extra map.

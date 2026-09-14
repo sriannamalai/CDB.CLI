@@ -784,7 +784,10 @@ on this server …"** Neither search backend runs inside CouchDB: Clouseau and
 Nouveau are separate services an operator deploys and wires up, and the stock
 `couchdb` image enables neither. `_search` needs Clouseau; `_nouveau` needs the
 Nouveau service and `[nouveau] enable = true` with `[nouveau] url` pointing at
-it. `ls` on the design document shows which backend each index belongs to.
+it. `ls` on the design document shows which backend each index belongs to. The
+sentence adds **"Nouveau needs CouchDB 3.4 or later; this server is …"** when
+the server predates the endpoint, which is a different fix: an upgrade rather
+than a configuration change.
 
 **"Could not reach …. Is CouchDB running?"** Nothing answered on that host and
 port. Check the port in `cdb profiles list` against the one the server is

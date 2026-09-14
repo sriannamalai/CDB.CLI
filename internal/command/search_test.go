@@ -358,3 +358,76 @@ func TestSearchSentenceCarriesTheServersOwnWords(t *testing.T) {
 		t.Error("the couch.Error is still reachable through errors.As")
 	}
 }
+
+// CouchDB 3.0 does not answer a Clouseau-less _search with 503 and a sentence;
+// it lets the gen_server call to a process that is not there fail, and the
+// operator gets a 500 carrying an Erlang badarg tuple. The name of the missing
+// process is in it, which is the one thing in that blob worth reading.
+func TestSearchClouseauMissingOnAnOlderServerSentence(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_design/app/_search/by_title", http.StatusInternalServerError,
+		`{"error":"{badarg,[{erlang,monitor,[process,{main,'clouseau@127.0.0.1'}],[]}]}",
+		  "reason":"{gen_server,call,[ioq,{request,{main,'clouseau@127.0.0.1'}}]}"}`)
+	s := connected(t, srv)
+	_, err := invoke(t, Search(), s, "/movies/_design/app/_search/by_title", "*:*")
+	if err == nil {
+		t.Fatal("a 500 succeeded")
+	}
+	want := "This server has no search service running; Clouseau must be installed and started for _search indexes."
+	if got := err.Error(); !strings.Contains(got, want) {
+		t.Errorf("got  %q\nwant it to contain %q", got, want)
+	}
+}
+
+// A 500 that says nothing about Clouseau is a server fault, not a missing
+// backend, and must keep the server's own error.
+func TestSearchUnrelated500IsNotBlamedOnClouseau(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_design/app/_search/by_title", http.StatusInternalServerError,
+		`{"error":"badmatch","reason":"something else entirely"}`)
+	s := connected(t, srv)
+	_, err := invoke(t, Search(), s, "/movies/_design/app/_search/by_title", "*:*")
+	if err == nil {
+		t.Fatal("a 500 succeeded")
+	}
+	if strings.Contains(err.Error(), "Clouseau") {
+		t.Errorf("an unrelated 500 was blamed on Clouseau: %v", err)
+	}
+}
+
+// Before 3.4 there is no _nouveau endpoint at all, so the 404 says "Document
+// is missing attachment" — the router's answer, not the index's. The sentence
+// is the same one, with the version clause that says why.
+func TestSearchNouveauBefore34SaysWhichVersionItNeeds(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.0.1","vendor":{"name":"The Apache Software Foundation"}}`)
+	srv.JSON("GET", "/movies/_design/app", 200, ddocWithIndexes)
+	srv.JSON("GET", "/movies/_design/app/_nouveau/by_body", http.StatusNotFound,
+		`{"error":"not_found","reason":"Document is missing attachment"}`)
+	s := connected(t, srv)
+	_, err := invoke(t, Search(), s, "/movies/_design/app/_nouveau/by_body", "*:*")
+	if err == nil {
+		t.Fatal("a 404 succeeded")
+	}
+	want := `Nouveau is not enabled on this server, or "app/by_body" is not a nouveau index. Nouveau needs CouchDB 3.4 or later; this server is 3.0.1.`
+	if got := err.Error(); !strings.Contains(got, want) {
+		t.Errorf("got  %q\nwant it to contain %q", got, want)
+	}
+}
+
+// On a server new enough to have the endpoint the clause would be wrong, so it
+// is not printed.
+func TestSearchNouveauOn35SaysNothingAboutTheVersion(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2","vendor":{"name":"The Apache Software Foundation"}}`)
+	srv.JSON("GET", "/movies/_design/app", 200, ddocWithIndexes)
+	srv.JSON("GET", "/movies/_design/app/_nouveau/by_body", http.StatusNotFound, `{"error":"not_found","reason":"missing"}`)
+	s := connected(t, srv)
+	_, err := invoke(t, Search(), s, "/movies/_design/app/_nouveau/by_body", "*:*")
+	if err == nil {
+		t.Fatal("a 404 succeeded")
+	}
+	if strings.Contains(err.Error(), "3.4 or later") {
+		t.Errorf("a 3.5 server was told it needs 3.4: %v", err)
+	}
+}
