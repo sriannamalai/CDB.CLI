@@ -26,6 +26,8 @@ type fakeIAM struct {
 	fail      int
 	failBody  string
 	malformed bool
+	// accept is the Accept header of the most recent exchange request.
+	accept string
 }
 
 func newFakeIAM(t *testing.T) *fakeIAM {
@@ -44,6 +46,7 @@ func newFakeIAM(t *testing.T) *fakeIAM {
 		if r.PostForm.Get("apikey") == "" {
 			t.Error("IAM request carried no apikey")
 		}
+		f.accept = r.Header.Get("Accept")
 		n := f.exchanges.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -244,5 +247,85 @@ func TestIAMMalformedAnswerIsAnAuthError(t *testing.T) {
 	}
 	if ce.Status != http.StatusUnauthorized || ce.Name != IAMExchangeFailed {
 		t.Errorf("status %d name %q, want 401 and %q", ce.Status, ce.Name, IAMExchangeFailed)
+	}
+}
+
+// A 307 or 308 on the token endpoint would, with net/http's default client,
+// re-POST the form -- API key and all -- to whatever host Location names. The
+// exchange must stop at the redirect and report a failure instead.
+func TestIAMExchangeDoesNotFollowARedirect(t *testing.T) {
+	var followed atomic.Int64
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		followed.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"stolen","token_type":"Bearer","expires_in":3600}`)
+	}))
+	t.Cleanup(sink.Close)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, sink.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirector.Close)
+
+	cl := newCloudant(t)
+	c, err := New(Config{URL: cl.srv.URL, Auth: AuthIAM, Secret: "an-api-key", IAMURL: redirector.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.ServerInfo(context.Background())
+	if err == nil {
+		t.Fatal("the exchange followed the redirect and connected")
+	}
+	ce, ok := AsError(err)
+	if !ok || ce.Name != IAMExchangeFailed {
+		t.Fatalf("err = %v (%T), want %s", err, err, IAMExchangeFailed)
+	}
+	if n := followed.Load(); n != 0 {
+		t.Errorf("the API key was re-posted to the redirect target %d time(s)", n)
+	}
+	if strings.Contains(ce.Reason, "an-api-key") {
+		t.Error("the failure reason carried the API key")
+	}
+}
+
+// The refresh a 401 triggers can itself fail. That is the exchange sentence,
+// and there is no retry to make: there is no token to retry with.
+func TestIAMRefreshFailureAfterA401IsTheExchangeError(t *testing.T) {
+	iam := newFakeIAM(t)
+	cl := newCloudant(t)
+	c := iamClient(t, iam, cl.srv.URL, nil)
+	if _, err := c.ServerInfo(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The held token is now stale in Cloudant's eyes, and IAM will not mint
+	// another.
+	cl.failures = 1
+	iam.fail, iam.failBody = http.StatusBadRequest, `{"errorMessage":"Provided API key could not be found"}`
+	_, err := c.ServerInfo(context.Background())
+	if err == nil {
+		t.Fatal("the failed refresh reported success")
+	}
+	ce, ok := AsError(err)
+	if !ok || ce.Name != IAMExchangeFailed {
+		t.Fatalf("err = %v (%T), want %s", err, err, IAMExchangeFailed)
+	}
+	if ce.Status != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 so the exit code is 3", ce.Status)
+	}
+	if n := iam.exchanges.Load(); n != 2 {
+		t.Errorf("exchanges = %d, want 2: one mint and one failed refresh", n)
+	}
+}
+
+// IBM answers either JSON or a form-encoded error depending on what is asked
+// for, so the exchange asks for JSON explicitly.
+func TestIAMExchangeAsksForJSON(t *testing.T) {
+	iam := newFakeIAM(t)
+	cl := newCloudant(t)
+	c := iamClient(t, iam, cl.srv.URL, nil)
+	if _, err := c.ServerInfo(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := iam.accept; got != "application/json" {
+		t.Errorf("Accept on the exchange = %q, want application/json", got)
 	}
 }

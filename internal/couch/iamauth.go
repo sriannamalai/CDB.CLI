@@ -88,7 +88,16 @@ func (t *iamTransport) exchange(ctx context.Context) (string, time.Time, error) 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	res, err := (&http.Client{Transport: t.base}).Do(req)
+	// A redirect is not followed. net/http's default client would replay the
+	// form -- API key and all -- to whatever host a 307 or 308 names, which is
+	// a credential handed to a server IBM did not vouch for; the older 30x
+	// codes would re-issue it as a GET with the key in neither place. IBM's
+	// token endpoint does not redirect, so any 3xx here is something else.
+	client := &http.Client{
+		Transport:     t.base,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		// net/http's text repeats the request URL, which is the IAM endpoint
 		// and carries nothing secret -- the key is in the body. trimPrefixes
@@ -97,6 +106,9 @@ func (t *iamTransport) exchange(ctx context.Context) (string, time.Time, error) 
 		return "", time.Time{}, t.exchangeError(trimPrefixes(err.Error()))
 	}
 	defer res.Body.Close()
+	if res.StatusCode >= 300 && res.StatusCode < 400 {
+		return "", time.Time{}, t.exchangeError(fmt.Sprintf("IAM answered %d, a redirect the exchange will not follow", res.StatusCode))
+	}
 	var body struct {
 		AccessToken  string `json:"access_token"`
 		ExpiresIn    int64  `json:"expires_in"`
