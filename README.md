@@ -157,6 +157,16 @@ admin@localhost:5984:/movies> cat tt0111161 | .title
 "The Shawshank Redemption"
 ```
 
+Stages chain with `|`, mixing commands and jq expressions; a value that names a
+document flows from a reference-producing command like `find` into `put`, `rm`
+or `cat`:
+
+```
+admin@localhost:5984:/movies> find '{}' | select(.year > 2000) | put /recent
+```
+
+See `help pipelines` for the full grammar, plus variables and scripts.
+
 Partitioned databases are addressed with a `_partition` segment:
 
 ```
@@ -302,6 +312,7 @@ cdb completion powershell | Out-String | Invoke-Expression
 | `replicate`, `replications` | Start and watch replications |
 | `tasks`, `config`, `users`, `security`, `compact`, `cluster` | Administer the server: active tasks, configuration, accounts, database security, compaction, single-node setup |
 | `help`, `history`, `clear`, `exit` | Shell only |
+| `set`, `unset`, `run` | Shell only: variables and scripts; see `help pipelines` |
 
 Destructive commands (`rm`, `rmdir`, `resolve`, `replications cancel`, `users rm`,
 `config unset`, `compact`, `cluster setup`) ask before acting. Pass `--yes` to skip the prompt in scripts. `rmdir` also asks you

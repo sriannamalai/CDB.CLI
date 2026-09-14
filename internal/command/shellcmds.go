@@ -39,6 +39,55 @@ func helpJSON(c Command) json.RawMessage {
 	return b
 }
 
+// pipelinesHelp is what "help pipelines" prints: the pipeline and script rules
+// in the words an operator needs them in, rather than as a list of commands.
+const pipelinesHelp = `Pipelines
+
+A line is one or more stages separated by "|". The first stage is always a
+command. Every later stage is a command when its first word names one, and a jq
+expression otherwise:
+
+  ls /movies | .id
+  find /movies --field year | select(.year > 2000) | put /old
+  ls /movies | cat | .title
+
+Values flow between stages as JSON, one at a time, and the stages run at the
+same time — so "tail /movies --follow | put /audit" keeps working as changes
+arrive, and a slow stage makes the one above it wait rather than filling
+memory.
+
+Three commands read a pipeline. put reads documents; rm and cat read
+references:
+
+  put [<db>]    writes each value, which must be a JSON object, in batches of
+                100, and reports id, rev and status per document
+  rm  [<db>]    deletes each document named, after one confirmation
+  cat [<db>]    emits each document named
+
+A reference — what ls, find, query, search, tail and cat produce — is an id,
+an object carrying "_id" or "id", or an absolute "/db/id" path, which
+overrides the stage's own database. The database may be left out when the
+current directory is inside one.
+
+Ctrl-C cancels the whole line. When a stage fails the others stop and the
+sentence says which: "stage 2 (put): ...". "--json", "--yes", "--verbose",
+"--anonymous" and "--replication-url" are read from the first stage and apply
+to the whole line.
+
+Variables and scripts
+
+  set year 2001                     define a variable
+  set rev = cat tt0211915 | ._rev   capture what a pipeline produced
+  unset year                        remove one
+  set                               list them, credentials masked
+
+$name and ${name} are replaced inside a word of a command stage, never inside
+single quotes; $$ is a literal $. In a jq stage every variable is bound as a jq
+variable of the same name, so "select(.year > $year)" works.
+
+"run <file> [arg...]" runs a file of these lines, and so does "cdb < file".
+See "help run".`
+
 // Help returns the help command, which lists the registry it is built from.
 func Help(reg *Registry) Command {
 	return Command{
@@ -46,16 +95,20 @@ func Help(reg *Registry) Command {
 		Aliases: []string{"?"},
 		Summary: "List commands, or explain one command",
 		Example: `admin@localhost:5984:/> help
+admin@localhost:5984:/> help pipelines
 admin@localhost:5984:/> help ls
 ls [path]
   List databases, documents, or the parts of a design document
   aliases: list`,
-		Usage:     "[command]",
+		Usage:     "[command|pipelines]",
 		MinArgs:   0,
 		MaxArgs:   1,
 		ShellOnly: true,
 		Complete: func(_ context.Context, _ *session.Session, _ []string, cur string) []Candidate {
 			var out []Candidate
+			if strings.HasPrefix("pipelines", cur) {
+				out = append(out, Candidate{Value: "pipelines", Description: "How pipelines, variables and scripts work", Tag: "topics"})
+			}
 			for _, c := range reg.All() {
 				if strings.HasPrefix(c.Name, cur) {
 					out = append(out, Candidate{Value: c.Name, Description: c.Summary, Tag: "commands"})
@@ -65,6 +118,9 @@ ls [path]
 		},
 		Run: func(_ context.Context, _ *session.Session, inv Invocation) (Result, error) {
 			if name := inv.Arg(0); name != "" {
+				if name == "pipelines" {
+					return Message{Text: pipelinesHelp}, nil
+				}
 				c, ok := reg.Lookup(name)
 				if !ok {
 					return nil, Usagef("help", "no command named %q", name)
@@ -102,7 +158,7 @@ ls [path]
 					JSON:  helpJSON(c),
 				})
 			}
-			rows.Hint = "help <command> explains one command; ! marks a destructive command"
+			rows.Hint = "help <command> explains one command; help pipelines explains \"|\", variables and scripts; ! marks a destructive command"
 			return rows, nil
 		},
 	}

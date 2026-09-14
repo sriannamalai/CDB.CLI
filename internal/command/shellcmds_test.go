@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
 
@@ -96,5 +97,42 @@ func TestHelpExplainsThatACommandIsDestructive(t *testing.T) {
 	}
 	if strings.Contains(msg.Text, "destructive") {
 		t.Errorf("help pwd calls a harmless command destructive:\n%s", msg.Text)
+	}
+}
+
+func TestHelpPipelinesPrintsThePage(t *testing.T) {
+	reg := Default()
+	res, err := invoke(t, Help(reg), connected(t, couchtest.New(t)), "pipelines")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, ok := res.(Message)
+	if !ok {
+		t.Fatalf("result is %T, want Message", res)
+	}
+	for _, want := range []string{"|", "jq", "put", "rm", "cat", "references", "documents"} {
+		if !strings.Contains(msg.Text, want) {
+			t.Errorf("the pipelines page does not mention %q", want)
+		}
+	}
+}
+
+func TestHelpPipelinesIsOfferedByCompletion(t *testing.T) {
+	reg := Default()
+	got := Help(reg).Complete(context.Background(), nil, nil, "pip")
+	if len(got) != 1 || got[0].Value != "pipelines" {
+		t.Errorf("candidates = %#v", got)
+	}
+}
+
+func TestHelpNamesWhatACommandReadsFromAPipeline(t *testing.T) {
+	reg := Default()
+	res, err := invoke(t, Help(reg), connected(t, couchtest.New(t)), "put")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := res.(Message)
+	if !strings.Contains(msg.Text, "Reads a pipeline: documents") {
+		t.Errorf("help put = %q", msg.Text)
 	}
 }

@@ -7,7 +7,7 @@ List commands, or explain one command
 ## Synopsis
 
 ```
-help [command] [flags]
+help [command|pipelines] [flags]
 ```
 
 Aliases: `?`
@@ -46,6 +46,7 @@ on a shell line; the rest belong to the one-shot front end.
 
 ```
 admin@localhost:5984:/> help
+admin@localhost:5984:/> help pipelines
 admin@localhost:5984:/> help ls
 ls [path]
   List databases, documents, or the parts of a design document
