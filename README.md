@@ -84,6 +84,40 @@ There is deliberately no `--password` flag. Three ways to authenticate:
    These override any profile and never touch the keychain. `CDB_TOKEN` does
    the same for JWT.
 
+**Proxy authentication.** For a CouchDB configured with
+`proxy_authentication_handler`, where an upstream proxy — here, `cdb` itself —
+asserts who the user is:
+
+```
+cdb connect --auth proxy --roles _admin https://couch.example.com
+```
+
+It asks for the user name, the roles to claim, and the shared secret from the
+server's `[chttpd_auth] secret`, with echo off; the secret goes into the OS
+keychain like any password. `cdb` sends `X-Auth-CouchDB-UserName`,
+`X-Auth-CouchDB-Roles` and an `X-Auth-CouchDB-Token` that is an HMAC-SHA256 of
+the user name keyed by that secret, and the same three headers are written into
+any replication job it starts. A wrong secret does not fail at the server —
+CouchDB just treats the request as anonymous — so `connect` checks
+`GET /_session` and refuses unless it reports `proxy` for the name you gave.
+`CDB_PASSWORD` supplies the shared secret for a saved proxy profile in a
+script.
+
+**IBM Cloudant.** For Cloudant, authenticate with an IAM API key:
+
+```
+cdb connect --auth iam https://<account>.cloudantnosqldb.appdomain.cloud
+CDB_IAM_API_KEY=… cdb ls /              # the same thing, for a script
+```
+
+`cdb` exchanges the key for a bearer token at
+`https://iam.cloud.ibm.com/identity/token`, sends it on every request, and
+refreshes it before it expires — an IAM token lasts an hour, so a long backup
+or a `tail` outlives one and is refreshed under it. Set `iam_url` in the
+profile, or `CDB_IAM_URL`, to use a different token endpoint. The API key is
+the profile's keychain secret; no token ever reaches `config.toml` or your
+shell history.
+
 A URL typed with no user name and password — `cdb connect
 http://localhost:5984` — is asked about rather than assumed. A CouchDB with
 an admin configured accepts an anonymous connection and then refuses every
@@ -269,6 +303,32 @@ to retype the database name. `resolve` shows how each conflicting revision
 differs from the current one before it asks which to keep; `--diff-full` prints
 each revision in full instead.
 
+### Full-text search
+
+`search` runs a Lucene query against a search index defined in a design
+document. CouchDB has two search backends and the path says which one:
+`_search` for a Clouseau index (defined under `indexes`) and `_nouveau` for a
+Nouveau one (defined under `nouveau`).
+
+```
+cdb search /movies/_design/app/_search/by_title 'title:arrival'
+cdb search /movies/_design/app/_nouveau/by_body 'alien AND linguist' --include-docs
+cdb search /movies/_design/app/_search/by_title 'title:a*' --limit 10 --counts genre
+cdb search /movies/_partition/2024/_design/app/_search/by_title 'title:a*'
+cdb info   /movies/_design/app/_nouveau/by_body
+```
+
+`ls` on a design document lists its search indexes beside its views, with the
+backend in its own column, and Tab completes `_search`, `_nouveau` and the
+index names under either. Paging is by bookmark, the way `find` pages: a full
+page prints the exact command that fetches the next one. `--sort` and
+`--ranges` are passed to the server as typed, because their grammar is the
+backend's.
+
+Neither backend runs inside CouchDB itself — both are separate services an
+operator has to deploy. If neither is running, `cdb` says which one is missing
+rather than repeating the server's own wording.
+
 ### Watching changes
 
 ```
@@ -409,6 +469,13 @@ answers 404 for every `_nouveau` path and the test would assert nothing. Left
 unset, the companion test instead checks the two "no backend here" sentences
 against the plain server, which is what an operator without either backend
 sees.
+
+There is no Clouseau container, so Clouseau's response shape is covered by
+fixtures rather than a live server.
+
+The Cloudant IAM tests need a real Cloudant instance and are never run in CI.
+Set `CDB_TEST_CLOUDANT_URL` and `CDB_TEST_CLOUDANT_API_KEY` from your own
+credentials; both tests skip when either is unset.
 
 CI pins `CDB_KEYRING_BACKEND=file` so tests never touch a real OS keychain, and
 runs `gofmt -l .`, `go vet ./...` and `GOOS=windows go vet ./...` as gates.
