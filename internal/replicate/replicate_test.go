@@ -377,3 +377,66 @@ func TestResolveEndpointRejectsAnUnsupportedScheme(t *testing.T) {
 		t.Error("ResolveEndpoint accepted an ftp URL")
 	}
 }
+
+func TestCancelRetriesAConflictAndSucceeds(t *testing.T) {
+	srv := couchtest.New(t)
+	revs := []string{`"2-a"`, `"3-b"`}
+	head := 0
+	srv.On("HEAD", "/_replicator/job1", func(w http.ResponseWriter, r *http.Request) {
+		if head < len(revs) {
+			w.Header().Set("ETag", revs[head])
+			head++
+		} else {
+			w.Header().Set("ETag", revs[len(revs)-1])
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	deletes := 0
+	srv.On("DELETE", "/_replicator/job1", func(w http.ResponseWriter, r *http.Request) {
+		deletes++
+		w.Header().Set("Content-Type", "application/json")
+		if deletes == 1 {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":"conflict","reason":"Document update conflict."}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"id":"job1","rev":"4-c"}`))
+	})
+	c := testClient(t, srv)
+	if err := Cancel(context.Background(), c, "job1"); err != nil {
+		t.Fatalf("a single conflict was not retried: %v", err)
+	}
+	if deletes != 2 {
+		t.Errorf("made %d deletes, want 2", deletes)
+	}
+	if head != 2 {
+		t.Errorf("read the revision %d times, want 2 — the retry must re-read it", head)
+	}
+}
+
+func TestCancelGivesUpAfterThreeConflicts(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.On("HEAD", "/_replicator/job1", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"2-a"`)
+		w.WriteHeader(http.StatusOK)
+	})
+	deletes := 0
+	srv.On("DELETE", "/_replicator/job1", func(w http.ResponseWriter, r *http.Request) {
+		deletes++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"conflict","reason":"Document update conflict."}`))
+	})
+	c := testClient(t, srv)
+	err := Cancel(context.Background(), c, "job1")
+	if err == nil {
+		t.Fatal("three conflicts in a row were reported as success")
+	}
+	if e, ok := couch.AsError(err); !ok || e.Status != http.StatusConflict {
+		t.Fatalf("error = %#v", e)
+	}
+	if deletes != 3 {
+		t.Errorf("made %d deletes, want exactly 3", deletes)
+	}
+}

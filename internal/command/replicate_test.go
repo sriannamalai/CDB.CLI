@@ -630,3 +630,26 @@ func TestReplicationsShowRedactsAnIAMAuthObject(t *testing.T) {
 		t.Errorf("target = %q, want the bare URL", target)
 	}
 }
+
+func TestReplicationsCancelSaysTheJobIsBeingUpdated(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.On("HEAD", "/_replicator/job1", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"2-a"`)
+		w.WriteHeader(http.StatusOK)
+	})
+	srv.On("DELETE", "/_replicator/job1", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"conflict","reason":"Document update conflict."}`))
+	})
+	s := connected(t, srv)
+	s.Prefs.Yes = true
+	_, err := invoke(t, Replications(), s, "cancel", "job1")
+	if err == nil {
+		t.Fatal("the conflict was reported as a successful cancel")
+	}
+	want := `Replication "job1" is being updated by the server faster than cdb can cancel it. Try again in a moment.`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}

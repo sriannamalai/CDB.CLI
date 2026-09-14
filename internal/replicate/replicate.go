@@ -268,14 +268,35 @@ func Show(ctx context.Context, cl *couch.Client, docID string) (Status, error) {
 	return d.toStatus(), nil
 }
 
-// Cancel deletes the _replicator document, which stops the job.
+// cancelAttempts is how many times Cancel re-reads the revision and retries
+// the delete. A running replication is written to by the scheduler, so the
+// revision can change between the read and the delete; three attempts cover
+// a job being checkpointed while the operator cancels it, and stop short of
+// spinning against a job that is being written to continuously.
+const cancelAttempts = 3
+
+// Cancel deletes the _replicator document, which stops the job. The revision
+// is re-read before every attempt: a 409 means the scheduler updated the
+// document under us, and the answer to that is a fresh revision rather than a
+// failure. Any other error is returned at once, and so is the last conflict,
+// which the command turns into a sentence about the job being updated.
 func Cancel(ctx context.Context, cl *couch.Client, docID string) error {
-	rev, err := cl.GetRev(ctx, "_replicator", docID)
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 0; attempt < cancelAttempts; attempt++ {
+		rev, err := cl.GetRev(ctx, "_replicator", docID)
+		if err != nil {
+			return err
+		}
+		if _, err = cl.DeleteDocument(ctx, "_replicator", docID, rev); err == nil {
+			return nil
+		}
+		e, ok := couch.AsError(err)
+		if !ok || e.Status != http.StatusConflict {
+			return err
+		}
+		lastErr = err
 	}
-	_, err = cl.DeleteDocument(ctx, "_replicator", docID, rev)
-	return err
+	return lastErr
 }
 
 // ResolveEndpoint turns a virtual database path into an endpoint against the

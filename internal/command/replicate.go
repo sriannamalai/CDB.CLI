@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -232,6 +233,14 @@ Cancelled replication "movies-job".`,
 					return nil, err
 				}
 				if err := replicate.Cancel(ctx, s.Client, id); err != nil {
+					if e, ok := couch.AsError(err); ok && e.Status == http.StatusConflict {
+						// Cancel has already re-read the revision and retried.
+						// A conflict that survives that is a job the scheduler
+						// is writing to continuously, and "the document was
+						// changed by someone else" is a true sentence that
+						// tells the operator nothing they can act on.
+						return nil, Errorf(err, "Replication %q is being updated by the server faster than cdb can cancel it. Try again in a moment.", id)
+					}
 					return nil, err
 				}
 				return Message{Text: fmt.Sprintf("Cancelled replication %q.", id)}, nil

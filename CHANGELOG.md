@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `replications cancel` no longer loses a race with the scheduler. Cancelling
+  a busy replication reads the document's revision and then deletes it, and a
+  continuous job is written to between the two, so the delete came back as a
+  409 and the job kept running while the operator was told the document "was
+  changed by someone else". The revision is re-read and the delete retried up
+  to three times now, and a conflict that survives all three says the job is
+  being updated faster than `cdb` can cancel it and to try again in a moment.
+
 ## [1.3.0] - 2026-09-14
 
 ### Added
