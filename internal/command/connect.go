@@ -141,6 +141,34 @@ func Open(ctx context.Context, s *session.Session, nameOrURL string) error {
 	return err
 }
 
+// TargetNamed reports whether the global flags or the environment name a
+// server to connect to: --url, --profile, CDB_URL or CDB_PROFILE. It is what
+// lets "cdb run" open its connection before the script's first line (#54) the
+// way the shell's start does, while a script that names no target anywhere is
+// left to connect for itself.
+//
+// The config file is deliberately not consulted: a saved default is the
+// fallback every line already takes on its own, and dialling it up front would
+// turn "cdb run setup.cdb", whose first line is a "connect" of its own, into a
+// failure against a server the script never meant to use.
+func TargetNamed(s *session.Session) bool {
+	if s.Prefs.URL != "" || s.Prefs.Profile != "" {
+		return true
+	}
+	env := config.LoadEnv(envLookup())
+	return env.URL != "" || env.Profile != ""
+}
+
+// envLookup is how the environment is read without building the real
+// dependency set, which opens the OS keyring. A question as cheap as "did
+// anyone name a server?" must not cost a keychain prompt.
+func envLookup() func(string) (string, bool) {
+	if deps != nil && deps.LookupEnv != nil {
+		return deps.LookupEnv
+	}
+	return os.LookupEnv
+}
+
 // resolveTarget settles which target a connection is for: the one the caller
 // named, or the one --profile/--url put on the session.
 //

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -51,7 +52,7 @@ func main() {
 		os.Exit(cli.ExitError)
 	}
 	if runsStdinAsScript(os.Args, render.IsTerminalReader(os.Stdin)) {
-		code := runStdinScript(ctx, sh, s)
+		code := runStdinScript(ctx, sh, s, os.Stdin)
 		_ = s.Detach()
 		os.Exit(code)
 	}
@@ -69,17 +70,46 @@ func runsStdinAsScript(args []string, stdinIsTerminal bool) bool {
 	return len(args) == 1 && !stdinIsTerminal
 }
 
-// runStdinScript runs standard input as a script. The file name in its
-// messages is "stdin", because that is all the process knows about where the
-// lines came from.
-func runStdinScript(ctx context.Context, sh *shell.Shell, s *session.Session) int {
+// runStdinScript runs in as a script. The file name in its messages is
+// "stdin", because that is all the process knows about where the lines came
+// from.
+func runStdinScript(ctx context.Context, sh *shell.Shell, s *session.Session, in io.Reader) int {
 	s.Prefs.Interactive = false
 	config.ApplyOutputPrefs(s)
+	// #54: the connection is opened before the first line, the same as
+	// "cdb run" and the shell's own start. A failure is the connection's, not
+	// the first line's, so it is said once in the ordinary one-shot sentence
+	// and nothing runs. Without a target named anywhere there is nothing to
+	// open yet: the script connects line by line, as it always has.
+	if !s.Connected() && command.TargetNamed(s) {
+		if err := command.Open(ctx, s, ""); err != nil {
+			if msg := scriptOpenMessage(err, s.Prefs.Verbose); msg != "" {
+				fmt.Fprintln(s.Stderr, msg)
+			}
+			return cli.ExitCode(err)
+		}
+	}
 	// RunScript has already written "<name>:<line>: <sentence>" to stderr.
-	if err := sh.RunScript(ctx, os.Stdin, "stdin", nil, false); err != nil {
+	if err := sh.RunScript(ctx, in, "stdin", nil, false); err != nil {
 		return cli.ExitCode(err)
 	}
 	return cli.ExitOK
+}
+
+// scriptOpenMessage renders a connection that failed before the script began.
+// It says what the one-shot front-end would say for the same failure, which is
+// the sentence and nothing else: a usage error already names the command that
+// raised it, and an interrupt is the operator asking to stop. It returns "" when
+// nothing should be printed.
+func scriptOpenMessage(err error, verbose bool) string {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return ""
+	}
+	var ue *command.UsageError
+	if errors.As(err, &ue) {
+		return ue.Error()
+	}
+	return render.ErrorMessage(err, verbose)
 }
 
 // runShell loads config, opens the shell, and returns the exit code.

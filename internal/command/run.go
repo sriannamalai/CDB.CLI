@@ -52,6 +52,23 @@ $ cdb < nightly.cdb`,
 			if runner == nil {
 				return nil, Usagef("run", "running a script is not available here.")
 			}
+			// #54: the connection is opened before the first line, the way
+			// the shell opens one before its first prompt. A script whose
+			// server is unreachable used to report it as "job.cdb:1: Could
+			// not reach …" — the failure named a line that had nothing wrong
+			// with it, and a script whose first line was a comment named a
+			// different line each time it was edited. The ordinary one-shot
+			// sentence is said once instead, and no line runs.
+			//
+			// Inside the shell the session is already connected, so this is
+			// the one-shot path alone; a script with no target named anywhere
+			// still connects line by line, which is what a script that starts
+			// with its own "connect" needs.
+			if !s.Connected() && TargetNamed(s) {
+				if err := Open(ctx, s, ""); err != nil {
+					return nil, err
+				}
+			}
 			name := inv.Arg(0)
 			f, err := os.Open(name)
 			if err != nil {
