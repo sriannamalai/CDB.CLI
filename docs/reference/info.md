@@ -14,6 +14,11 @@ cdb info [path] [flags]
 
 Show server or database information.
 
+A server path reports the version and the features it was built with, a database
+path its sizes and counts, and a search index path the index statistics the
+backend keeps — which members those are is Clouseau's or Nouveau's to decide, so
+they are listed as they came.
+
 ## Arguments
 
 Takes at most 1 argument.

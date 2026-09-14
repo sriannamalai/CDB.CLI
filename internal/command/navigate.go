@@ -27,11 +27,7 @@ admin@localhost:5984:/movies/_design/app>`,
 		MinArgs:     0,
 		MaxArgs:     1,
 		NeedsClient: true,
-		Details: "A server path reports the version and the features it was built with, a database\n" +
-			"path its sizes and counts, and a search index path the index statistics the\n" +
-			"backend keeps — which members those are is Clouseau's or Nouveau's to decide, so\n" +
-			"they are listed as they came.",
-		Complete: completePath,
+		Complete:    completePath,
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
 			arg := inv.Arg(0)
 			if arg == "" {
@@ -355,7 +351,11 @@ $ cdb info /movies/_design/app/_nouveau/by_title
 		MinArgs:     0,
 		MaxArgs:     1,
 		NeedsClient: true,
-		Complete:    completePath,
+		Details: "A server path reports the version and the features it was built with, a database\n" +
+			"path its sizes and counts, and a search index path the index statistics the\n" +
+			"backend keeps — which members those are is Clouseau's or Nouveau's to decide, so\n" +
+			"they are listed as they came.",
+		Complete: completePath,
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
 			t, err := s.Resolve(inv.Arg(0))
 			if err != nil {
