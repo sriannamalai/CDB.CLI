@@ -53,7 +53,10 @@ from the database the current directory is in.`,
 				return catPipeline(ctx, s, inv)
 			}
 			if inv.Arg(0) == "" {
-				return nil, Usagef("cat", "expected at least 1 argument(s), got 0\nusage: cat [<path>]")
+				// The bracketed path of the Usage field is the pipeline form,
+				// which the pipeline help explains; a one-shot cat needs a
+				// path, and says so the way every other command does.
+				return nil, Usagef("cat", "expected at least 1 argument(s), got 0\nusage: cat <path>")
 			}
 			t, err := s.Resolve(inv.Arg(0))
 			if err != nil {
@@ -124,7 +127,7 @@ in.`,
 				return putPipeline(ctx, s, inv)
 			}
 			if inv.Arg(0) == "" {
-				return nil, Usagef("put", "expected at least 1 argument(s), got 0\nusage: put [<path>] [file]")
+				return nil, Usagef("put", "expected at least 1 argument(s), got 0\nusage: put <path> [file]")
 			}
 			t, err := s.Resolve(inv.Arg(0))
 			if err != nil {
@@ -228,7 +231,7 @@ current directory is in.`,
 				return rmPipeline(ctx, s, inv)
 			}
 			if inv.Arg(0) == "" {
-				return nil, Usagef("rm", "expected at least 1 argument(s), got 0\nusage: rm [<path>]")
+				return nil, Usagef("rm", "expected at least 1 argument(s), got 0\nusage: rm <path>")
 			}
 			t, err := s.Resolve(inv.Arg(0))
 			if err != nil {
