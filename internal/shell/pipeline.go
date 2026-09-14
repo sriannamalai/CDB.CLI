@@ -271,18 +271,19 @@ func (sh *Shell) applyLinePrefs(first Stage) (restore func(), forceJSON, verbose
 
 // sessionCommands are the commands that change the session every stage of a
 // line shares: the connection, the profile, the working directory, the
-// history, the variables. A *session.Session is not safe for concurrent use
+// variables. A *session.Session is not safe for concurrent use
 // (internal/session/session.go:66-67), and a stage that mutates one while the
 // stages below it read it is a race no test would reliably catch, so such a
 // command may head a line only when it is the whole line.
+//
+// help, history and clear are not among them: they read the registry, the
+// history and the terminal, and change nothing any other stage looks at, so
+// "history | .[]" is a line like any other.
 var sessionCommands = map[string]struct{}{
 	"connect":  {},
 	"profiles": {},
 	"cd":       {},
 	"exit":     {},
-	"clear":    {},
-	"history":  {},
-	"help":     {},
 	"run":      {},
 	"set":      {},
 	"unset":    {},

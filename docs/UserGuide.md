@@ -893,10 +893,11 @@ Piping into a command that reads no pipeline is a mistake, not a silent drop:
 `mkdir does not read a pipeline.`
 
 A command that changes the session rather than reading or writing
-data — `connect`, `profiles`, `cd`, `exit`, `clear`, `history`, `help`, `run`,
-`set` and `unset` — cannot start a line of more than one stage:
-`cd cannot start a pipeline.` A line of one stage is unaffected; `cd /movies`
-is the command it has always been.
+data — `connect`, `profiles`, `cd`, `exit`, `run`, `set` and `unset` — cannot
+start a line of more than one stage: `cd cannot start a pipeline.` A line of
+one stage is unaffected; `cd /movies` is the command it has always been.
+`help`, `history` and `clear` change nothing another stage looks at, so they
+may: `history | .line` is a line like any other.
 
 ### When a line fails
 
