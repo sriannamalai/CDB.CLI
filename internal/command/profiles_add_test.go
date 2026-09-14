@@ -3,7 +3,9 @@ package command
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -200,5 +202,140 @@ func TestProfilesAddWithURLCredentialsDoesNotPrompt(t *testing.T) {
 	}
 	if got, _ := CurrentDeps().Secrets.Get("local"); got != "hunter2" {
 		t.Errorf("keyring secret = %q, want the URL's password", got)
+	}
+}
+
+// "profiles add --auth iam" has exactly one question to ask — the API key —
+// and the answer is a secret. The path used to fall through to connect's two
+// session questions, so the key was typed at "Username", with echo on, and
+// written into config.toml as the profile's user name. An IAM profile has no
+// user name at all.
+func TestProfilesAddWithAuthIAMAsksForTheKeyOnly(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), nil)
+	s, out := guidedSession("an-api-key\n")
+
+	if _, err := profilesAdd(t, s, "add", "cloud", srv.URL(), "--auth", "iam"); err != nil {
+		t.Fatalf("profiles add --auth iam: %v (output: %s)", err, out.String())
+	}
+	if !strings.Contains(out.String(), "IAM API key:") {
+		t.Errorf("the key was not asked for by name:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Username") || strings.Contains(out.String(), "Password") {
+		t.Errorf("an IAM profile was asked the session questions:\n%s", out.String())
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("cloud")
+	if !ok {
+		t.Fatalf("profiles = %v, want one named cloud", back.Profiles)
+	}
+	if p.Auth != "iam" || p.Username != "" {
+		t.Errorf("saved profile = %+v, want an iam profile with no user name", p)
+	}
+	if got, err := CurrentDeps().Secrets.Get("cloud"); err != nil || got != "an-api-key" {
+		t.Errorf("keyring secret = %q, %v; want the typed API key", got, err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "an-api-key") {
+		t.Errorf("the API key was written into the config file:\n%s", raw)
+	}
+}
+
+// "profiles add --auth jwt" asks for the bearer token the way every other
+// entry point does. It used to ask for a "Password", which is not what a JWT
+// profile holds.
+func TestProfilesAddWithAuthJWTAsksForTheBearerToken(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), nil)
+	s, out := guidedSession("a.jwt.token\n")
+
+	if _, err := profilesAdd(t, s, "add", "bearer", srv.URL(), "--auth", "jwt"); err != nil {
+		t.Fatalf("profiles add --auth jwt: %v (output: %s)", err, out.String())
+	}
+	if !strings.Contains(out.String(), "Bearer token:") {
+		t.Errorf("the token was not asked for by name:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Password") {
+		t.Errorf("a jwt profile was asked for a password:\n%s", out.String())
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("bearer")
+	if !ok {
+		t.Fatalf("profiles = %v, want one named bearer", back.Profiles)
+	}
+	if p.Auth != "jwt" || p.Username != "" {
+		t.Errorf("saved profile = %+v, want a jwt profile with no user name", p)
+	}
+	if got, err := CurrentDeps().Secrets.Get("bearer"); err != nil || got != "a.jwt.token" {
+		t.Errorf("keyring secret = %q, %v; want the typed token", got, err)
+	}
+}
+
+// The global constraint, held for every kind at once: whatever "profiles add"
+// collected, no field of the saved profile may hold it, and it may not appear
+// anywhere in the plaintext config file. Only the keyring keeps secrets.
+func TestProfilesAddNeverWritesTheSecretIntoTheProfile(t *testing.T) {
+	cases := []struct {
+		kind    string
+		answers string
+		secret  string
+		stub    func(t *testing.T) *couchtest.Server
+	}{
+		{"session", "admin\nsession-credential\n", "session-credential", func(t *testing.T) *couchtest.Server { return couchtest.New(t) }},
+		{"jwt", "jwt-credential\n", "jwt-credential", func(t *testing.T) *couchtest.Server { return couchtest.New(t) }},
+		{"proxy", "ops\n_admin\nproxysecret\n", "proxysecret", func(t *testing.T) *couchtest.Server { return proxyStub(t, proxyTokenSHA1) }},
+		{"iam", "iam-credential\n", "iam-credential", func(t *testing.T) *couchtest.Server { return couchtest.New(t) }},
+		// "none" has no credential to collect, so it must ask nothing at all:
+		// an empty stdin is an error if any question is put.
+		{"none", "", "", func(t *testing.T) *couchtest.Server { return couchtest.New(t) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			srv := tc.stub(t)
+			path := withDeps(t, config.Defaults(), nil)
+			s, out := guidedSession(tc.answers)
+			if _, err := profilesAdd(t, s, "add", "p", srv.URL(), "--auth", tc.kind); err != nil {
+				t.Fatalf("profiles add --auth %s: %v (output: %s)", tc.kind, err, out.String())
+			}
+			back, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, ok := back.Profile("p")
+			if !ok {
+				t.Fatalf("profiles = %v, want one named p", back.Profiles)
+			}
+			if tc.secret == "" {
+				if p.Username != "" {
+					t.Errorf("profile = %+v, want no user name for %s", p, tc.kind)
+				}
+				return
+			}
+			v := reflect.ValueOf(p)
+			for i := 0; i < v.NumField(); i++ {
+				if strings.Contains(fmt.Sprint(v.Field(i).Interface()), tc.secret) {
+					t.Errorf("profile field %s holds the secret: %+v", v.Type().Field(i).Name, p)
+				}
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), tc.secret) {
+				t.Errorf("the %s credential was written into the config file:\n%s", tc.kind, raw)
+			}
+			if got, err := CurrentDeps().Secrets.Get("p"); err != nil || got != tc.secret {
+				t.Errorf("keyring secret = %q, %v; want the typed credential", got, err)
+			}
+		})
 	}
 }
