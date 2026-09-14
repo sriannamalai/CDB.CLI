@@ -66,8 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   document somebody else changed. ([#43])
 - A server URL that carries a user name and no password — `cdb --url
   http://alice@localhost:5984` — now logs in as that user, taking the password
-  from `CDB_PASSWORD`, then the profile's keyring entry, then a prompt.
-  It used to connect anonymously and remember a name it never used. ([#44])
+  from `CDB_PASSWORD` and then a prompt; the keyring holds a password under a
+  profile name, and a bare URL has none to look one up by. It used to connect
+  anonymously and remember a name it never used. ([#44])
 - `profiles add --auth jwt` and `--auth iam` now verify the token or the API
   key before writing the profile and the keyring entry, as `--auth session`
   and `--auth proxy` already did. ([#46])
