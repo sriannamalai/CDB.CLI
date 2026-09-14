@@ -34,6 +34,10 @@ type Shell struct {
 	rl   *readline.Shell
 	cfg  Config
 	hist readline.History
+
+	// args are the positional arguments "$1" to "$9" expand to. They are set
+	// only while a script runs; an interactive line has none.
+	args []string
 }
 
 // filteredHistory wraps a readline history source so that only lines cdb could

@@ -31,6 +31,10 @@ type Invocation struct {
 	// Pipe is the previous stage's output, set only when the command is not
 	// the first stage of a shell line. It is nil in a one-shot run.
 	Pipe *Pipe
+	// Capture is the raw pipeline text of a "set <name> = <pipeline>" line,
+	// exactly as it was typed. Only "set" reads it, and only the shell's
+	// parser sets it; it is empty everywhere else.
+	Capture string
 }
 
 // Arg returns positional argument n, or "" when it is absent.

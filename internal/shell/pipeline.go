@@ -55,8 +55,28 @@ func (f *failure) result() error {
 	return f.first
 }
 
-// runPipeline runs every stage of a parsed line and renders the last one.
+// runPipeline runs a line and renders its last stage.
 func (sh *Shell) runPipeline(ctx context.Context, line Line) error {
+	return sh.execute(ctx, line, nil)
+}
+
+// Capture runs one line and returns the values its last stage produced instead
+// of rendering them. It is what "set <name> = <pipeline>" uses.
+func (sh *Shell) Capture(ctx context.Context, input string) ([]json.RawMessage, error) {
+	line, err := Parse(input, sh.isCommand)
+	if err != nil {
+		return nil, err
+	}
+	var vals []json.RawMessage
+	if err := sh.execute(ctx, line, &vals); err != nil {
+		return nil, err
+	}
+	return vals, nil
+}
+
+// execute runs every stage of a parsed line. With into non-nil the last
+// stage's values are collected there instead of rendered.
+func (sh *Shell) execute(ctx context.Context, line Line, into *[]json.RawMessage) error {
 	if len(line.Stages) == 0 {
 		return nil
 	}
@@ -107,7 +127,7 @@ func (sh *Shell) runPipeline(ctx context.Context, line Line) error {
 		in = out
 	}
 	last := total - 1
-	lastErr := sh.renderStage(ctx, line.Stages[last], in, forceJSON)
+	lastErr := sh.finishStage(ctx, line.Stages[last], in, forceJSON, into)
 	if lastErr != nil {
 		fail.record(stageError(last, total, line.Stages[last], lastErr, verbose))
 	}
@@ -142,15 +162,21 @@ func stageError(n, total int, st Stage, err error, verbose bool) error {
 	}
 }
 
-// prepare looks a command stage up and parses its flags.
+// prepare expands the stage's variables, looks the command up and parses its
+// flags. Expansion comes first so that a flag or a path that arrived in a
+// variable is the one pflag and the command see.
 func (sh *Shell) prepare(st Stage) (stageCommand, error) {
-	name := st.Argv[0]
+	argv, err := expandStage(st, sh.sess.Vars, sh.args)
+	if err != nil {
+		return stageCommand{}, err
+	}
+	name := argv[0]
 	c, ok := sh.reg.Lookup(name)
 	if !ok {
 		return stageCommand{}, command.Usagef(name, "unknown command. Type \"help\" to see the command list.")
 	}
 	fs := sh.reg.NewFlagSet(c)
-	if err := fs.Parse(st.Argv[1:]); err != nil {
+	if err := fs.Parse(argv[1:]); err != nil {
 		return stageCommand{}, command.Usagef(c.Name, "%v\nusage: %s %s", err, c.Name, c.Usage)
 	}
 	args := fs.Args()
@@ -283,14 +309,15 @@ func (sh *Shell) feedStage(ctx context.Context, st Stage, src <-chan json.RawMes
 	if err != nil {
 		return err
 	}
-	return streamResult(ctx, res, dst)
+	return streamResult(ctx, res, func(v json.RawMessage) error { return send(ctx, dst, v) })
 }
 
-// renderStage runs the last stage and renders it. A command stage renders the
-// way a one-command line always has; a jq stage renders the values it produced
-// as single-column rows with JSON forced, which is what the one filter stage
-// did before there were pipelines.
-func (sh *Shell) renderStage(ctx context.Context, st Stage, src <-chan json.RawMessage, forceJSON bool) error {
+// finishStage runs the last stage. With into nil it renders: a command stage
+// the way a one-command line always has, a jq stage as single-column rows with
+// JSON forced, which is what the one filter stage did before there were
+// pipelines. With into non-nil the values the stage produced are collected
+// there instead, which is what a capture wants.
+func (sh *Shell) finishStage(ctx context.Context, st Stage, src <-chan json.RawMessage, forceJSON bool, into *[]json.RawMessage) error {
 	var res command.Result
 	if st.Argv == nil {
 		f, err := compileFilter(st.Expr, sh.bindings())
@@ -318,6 +345,12 @@ func (sh *Shell) renderStage(ctx context.Context, st Stage, src <-chan json.RawM
 		}
 		res = r
 	}
+	if into != nil {
+		return streamResult(ctx, res, func(v json.RawMessage) error {
+			*into = append(*into, v)
+			return nil
+		})
+	}
 	return render.New(sh.sess.Stdout, render.OptionsFor(sh.sess.Prefs, sh.sess.Stdout, forceJSON)).Render(res)
 }
 
@@ -330,12 +363,13 @@ func (sh *Shell) runCommandStage(ctx context.Context, st Stage, src <-chan json.
 		return nil, err
 	}
 	inv := command.Invocation{
-		Args:   sc.args,
-		Flags:  sc.fs,
-		Stdin:  sh.sess.Stdin(),
-		Stdout: sh.sess.Stdout,
-		Stderr: sh.sess.Stderr,
-		Shell:  true,
+		Args:    sc.args,
+		Flags:   sc.fs,
+		Stdin:   sh.sess.Stdin(),
+		Stdout:  sh.sess.Stdout,
+		Stderr:  sh.sess.Stderr,
+		Shell:   true,
+		Capture: st.Capture,
 	}
 	if src != nil {
 		if sc.cmd.Pipe == command.PipeNone {
@@ -375,19 +409,19 @@ func filterStream(ctx context.Context, f *filter, src <-chan json.RawMessage) co
 	}
 }
 
-// streamResult writes the JSON side of a result to dst as it becomes
+// streamResult hands the JSON side of a result to emit as it becomes
 // available: a Stream is forwarded row by row rather than collected, so a live
-// source keeps the stages below it fed.
-func streamResult(ctx context.Context, res command.Result, dst chan<- json.RawMessage) error {
+// source keeps whatever is below it fed.
+func streamResult(ctx context.Context, res command.Result, emit func(json.RawMessage) error) error {
 	switch v := res.(type) {
 	case command.Document:
-		return send(ctx, dst, v.JSON)
+		return emit(v.JSON)
 	case command.Rows:
 		for _, item := range v.Items {
 			if item.JSON == nil {
 				continue
 			}
-			if err := send(ctx, dst, item.JSON); err != nil {
+			if err := emit(item.JSON); err != nil {
 				return err
 			}
 		}
@@ -401,7 +435,7 @@ func streamResult(ctx context.Context, res command.Result, dst chan<- json.RawMe
 			if row.JSON == nil {
 				continue
 			}
-			if err := send(ctx, dst, row.JSON); err != nil {
+			if err := emit(row.JSON); err != nil {
 				return err
 			}
 		}
@@ -410,7 +444,7 @@ func streamResult(ctx context.Context, res command.Result, dst chan<- json.RawMe
 		if err != nil {
 			return err
 		}
-		return send(ctx, dst, b)
+		return emit(b)
 	case command.Empty:
 		return nil
 	default:
@@ -445,6 +479,11 @@ func send(ctx context.Context, dst chan<- json.RawMessage, v json.RawMessage) er
 }
 
 // bindings are the jq variables every filter stage of this line is compiled
-// with. Task 6 fills it from the session's variable table; until then no
-// filter stage binds anything.
-func (sh *Shell) bindings() map[string]any { return nil }
+// with: the session's variables, bound by name with their stored values, so
+// that "select(.year > $year)" works and jq's own "$" syntax is intact.
+func (sh *Shell) bindings() map[string]any {
+	if sh.sess.Vars == nil {
+		return nil
+	}
+	return sh.sess.Vars.All()
+}
