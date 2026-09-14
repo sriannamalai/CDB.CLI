@@ -211,8 +211,8 @@ func TestProfilesAddWithURLCredentialsDoesNotPrompt(t *testing.T) {
 // written into config.toml as the profile's user name. An IAM profile has no
 // user name at all.
 func TestProfilesAddWithAuthIAMAsksForTheKeyOnly(t *testing.T) {
-	srv := couchtest.New(t)
-	path := withDeps(t, config.Defaults(), nil)
+	srv, env := iamStubs(t)
+	path := withDeps(t, config.Defaults(), env)
 	s, out := guidedSession("an-api-key\n")
 
 	if _, err := profilesAdd(t, s, "add", "cloud", srv.URL(), "--auth", "iam"); err != nil {
@@ -251,7 +251,7 @@ func TestProfilesAddWithAuthIAMAsksForTheKeyOnly(t *testing.T) {
 // entry point does. It used to ask for a "Password", which is not what a JWT
 // profile holds.
 func TestProfilesAddWithAuthJWTAsksForTheBearerToken(t *testing.T) {
-	srv := couchtest.New(t)
+	srv := jwtStub(t)
 	path := withDeps(t, config.Defaults(), nil)
 	s, out := guidedSession("a.jwt.token\n")
 
@@ -288,20 +288,20 @@ func TestProfilesAddNeverWritesTheSecretIntoTheProfile(t *testing.T) {
 		kind    string
 		answers string
 		secret  string
-		stub    func(t *testing.T) *couchtest.Server
+		stub    func(t *testing.T) (*couchtest.Server, map[string]string)
 	}{
-		{"session", "admin\nsession-credential\n", "session-credential", func(t *testing.T) *couchtest.Server { return couchtest.New(t) }},
-		{"jwt", "jwt-credential\n", "jwt-credential", func(t *testing.T) *couchtest.Server { return couchtest.New(t) }},
-		{"proxy", "ops\n_admin\nproxysecret\n", "proxysecret", func(t *testing.T) *couchtest.Server { return proxyStub(t, proxyTokenSHA1) }},
-		{"iam", "iam-credential\n", "iam-credential", func(t *testing.T) *couchtest.Server { return couchtest.New(t) }},
+		{"session", "admin\nsession-credential\n", "session-credential", func(t *testing.T) (*couchtest.Server, map[string]string) { return couchtest.New(t), nil }},
+		{"jwt", "jwt-credential\n", "jwt-credential", func(t *testing.T) (*couchtest.Server, map[string]string) { return jwtStub(t), nil }},
+		{"proxy", "ops\n_admin\nproxysecret\n", "proxysecret", func(t *testing.T) (*couchtest.Server, map[string]string) { return proxyStub(t, proxyTokenSHA1), nil }},
+		{"iam", "iam-credential\n", "iam-credential", iamStubs},
 		// "none" has no credential to collect, so it must ask nothing at all:
 		// an empty stdin is an error if any question is put.
-		{"none", "", "", func(t *testing.T) *couchtest.Server { return couchtest.New(t) }},
+		{"none", "", "", func(t *testing.T) (*couchtest.Server, map[string]string) { return couchtest.New(t), nil }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind, func(t *testing.T) {
-			srv := tc.stub(t)
-			path := withDeps(t, config.Defaults(), nil)
+			srv, env := tc.stub(t)
+			path := withDeps(t, config.Defaults(), env)
 			s, out := guidedSession(tc.answers)
 			if _, err := profilesAdd(t, s, "add", "p", srv.URL(), "--auth", tc.kind); err != nil {
 				t.Fatalf("profiles add --auth %s: %v (output: %s)", tc.kind, err, out.String())
@@ -370,7 +370,7 @@ func TestRolesAreSavedOnlyForProxyProfiles(t *testing.T) {
 
 // The same rule where "profiles add" writes the profile.
 func TestProfilesAddSavesRolesOnlyForProxyProfiles(t *testing.T) {
-	srv := couchtest.New(t)
+	srv := jwtStub(t)
 	path := withDeps(t, config.Defaults(), nil)
 	s, out := guidedSession("a.jwt.token\n")
 
@@ -387,5 +387,118 @@ func TestProfilesAddSavesRolesOnlyForProxyProfiles(t *testing.T) {
 	}
 	if len(p.Roles) != 0 {
 		t.Errorf("jwt profile = %+v, want no roles", p)
+	}
+}
+
+// jwtStub answers the two requests a bearer-token verification makes: the
+// welcome document and a _session naming the user the token stands for.
+func jwtStub(t *testing.T) *couchtest.Server {
+	t.Helper()
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2","vendor":{"name":"The Apache Software Foundation"}}`)
+	srv.JSON("GET", "/_session", 200,
+		`{"ok":true,"userCtx":{"name":"alice","roles":["_admin"]},"info":{"authenticated":"jwt"}}`)
+	return srv
+}
+
+// iamStubs answers both halves of an IAM verification: IBM's token exchange,
+// which CDB_IAM_URL points at the stub, and the Cloudant instance that accepts
+// the token the exchange issued.
+func iamStubs(t *testing.T) (*couchtest.Server, map[string]string) {
+	t.Helper()
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2+cloudant","vendor":{"name":"IBM Cloudant"}}`)
+	srv.JSON("GET", "/_session", 200,
+		`{"ok":true,"userCtx":{"name":"apikey-user","roles":["_admin"]},"info":{"authenticated":"iam"}}`)
+	iam := couchtest.New(t)
+	iam.JSON("POST", "/identity/token", 200, `{"access_token":"a-token","expires_in":3600,"token_type":"Bearer"}`)
+	return srv, map[string]string{"CDB_IAM_URL": iam.URL() + "/identity/token"}
+}
+
+// A jwt profile used to be written to config.toml and the keyring without
+// anyone having tried the token: the operator learned it was wrong at the next
+// command rather than at the prompt they were still standing at.
+func TestProfilesAddVerifiesAJWTBeforeSaving(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2","vendor":{"name":"The Apache Software Foundation"}}`)
+	// A token the server will not act on: 200 with a null name, which is what
+	// CouchDB answers for a bearer token it declines (and for every token on
+	// 3.0, which has no JWT handler at all).
+	srv.JSON("GET", "/_session", 200, `{"ok":true,"userCtx":{"name":null,"roles":[]},"info":{"authenticated":"default"}}`)
+	path := withDeps(t, config.Defaults(), nil)
+	s, out := guidedSession("not-a-real-token\n")
+
+	_, err := profilesAdd(t, s, "add", "jwtprofile", srv.URL(), "--auth", "jwt")
+	if err == nil {
+		t.Fatalf("a token the server ignored was saved (output: %s)", out.String())
+	}
+	e, ok := couch.AsError(err)
+	if !ok || e.Status != 401 || e.Auth != couch.AuthJWT {
+		t.Fatalf("error = %#v, want a 401 carrying AuthJWT", e)
+	}
+	back, loadErr := config.Load(path)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if _, saved := back.Profile("jwtprofile"); saved {
+		t.Error("the profile was written despite the failure")
+	}
+	if _, serr := CurrentDeps().Secrets.Get("jwtprofile"); serr == nil {
+		t.Error("the token was written to the keyring despite the failure")
+	}
+}
+
+// The same for an IAM API key, which fails one step earlier: IBM refuses to
+// exchange it, so no token ever reaches Cloudant.
+func TestProfilesAddVerifiesAnIAMKeyBeforeSaving(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2+cloudant","vendor":{"name":"IBM Cloudant"}}`)
+	iam := couchtest.New(t)
+	iam.JSON("POST", "/identity/token", 400,
+		`{"errorCode":"BXNIM0415E","errorMessage":"Provided API key could not be found."}`)
+	// CDB_IAM_URL is how the token endpoint is pointed at the stub; there is
+	// no --iam-url flag, and without this the test would call IBM for real.
+	path := withDeps(t, config.Defaults(), map[string]string{"CDB_IAM_URL": iam.URL() + "/identity/token"})
+	s, out := guidedSession("not-a-real-key\n")
+
+	_, err := profilesAdd(t, s, "add", "iamprofile", srv.URL(), "--auth", "iam")
+	if err == nil {
+		t.Fatalf("an API key IBM refused was saved (output: %s)", out.String())
+	}
+	e, ok := couch.AsError(err)
+	if !ok || e.Name != couch.IAMExchangeFailed {
+		t.Fatalf("error = %#v, want the IAM exchange failure", e)
+	}
+	back, loadErr := config.Load(path)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if _, saved := back.Profile("iamprofile"); saved {
+		t.Error("the profile was written despite the failure")
+	}
+}
+
+// The other half of the rule: a token the server does act on is saved, and the
+// verification is not in the way of the profile that works.
+func TestProfilesAddSavesAVerifiedJWT(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2","vendor":{"name":"The Apache Software Foundation"}}`)
+	srv.JSON("GET", "/_session", 200,
+		`{"ok":true,"userCtx":{"name":"alice","roles":["_admin"]},"info":{"authenticated":"jwt"}}`)
+	path := withDeps(t, config.Defaults(), nil)
+	s, out := guidedSession("a-token\n")
+	if _, err := profilesAdd(t, s, "add", "jwtprofile", srv.URL(), "--auth", "jwt"); err != nil {
+		t.Fatalf("a working token was refused: %v (output: %s)", err, out.String())
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("jwtprofile")
+	if !ok || p.Auth != "jwt" {
+		t.Fatalf("saved profile = %+v, ok=%t", p, ok)
+	}
+	if got, gerr := CurrentDeps().Secrets.Get("jwtprofile"); gerr != nil || got != "a-token" {
+		t.Errorf("keyring secret = %q, %v", got, gerr)
 	}
 }

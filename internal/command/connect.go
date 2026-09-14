@@ -1073,14 +1073,34 @@ func profileToAdd(ctx context.Context, s *session.Session, inv Invocation, name,
 		if perr != nil {
 			return config.Profile{}, "", perr
 		}
-		if profile.Auth == string(couch.AuthProxy) {
-			// A proxy profile also has a digest to settle: prove the answers
-			// and write down the digest the server actually verified.
-			cc, _, verr := verifyLogin(ctx, profile, secret)
+		// Every kind that collected a credential is proved before it is
+		// written down. A profile saved unverified is a password in the
+		// keyring and a line in config.toml that nobody has tried, and the
+		// operator finds out at the next command rather than at the prompt
+		// they are still standing at. "none" collected nothing, so there is
+		// nothing to prove.
+		if profile.Auth != string(couch.AuthNone) {
+			// The probe is a copy, because one field on it comes from the
+			// environment and must not be written into the saved profile:
+			// CDB_IAM_URL points the token exchange at a non-default endpoint
+			// (a Cloudant Dedicated instance, or a stub in a test), and
+			// without it the verification of an iam profile would call IBM's
+			// public endpoint whatever the operator's shell says. Env.Apply
+			// does the same layering on the connect path; profileToAdd does
+			// not go through it.
+			probe := profile
+			if probe.Auth == string(couch.AuthIAM) && probe.IAMURL == "" {
+				probe.IAMURL = config.LoadEnv(CurrentDeps().LookupEnv).IAMURL
+			}
+			cc, _, verr := verifyLogin(ctx, probe, secret)
 			if verr != nil {
 				return config.Profile{}, "", verr
 			}
-			profile.ProxyHash = cc.ProxyHash()
+			if profile.Auth == string(couch.AuthProxy) {
+				// A proxy profile also has a digest to settle: write down the
+				// one the server actually verified.
+				profile.ProxyHash = cc.ProxyHash()
+			}
 			_ = cc.Close()
 		}
 		return profile, secret, nil

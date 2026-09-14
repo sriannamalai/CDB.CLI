@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sriannamalai/CDB.CLI/internal/config"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
@@ -168,5 +169,45 @@ func TestIntegrationIAMReplicates(t *testing.T) {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("replications show leaked a credential")
 		}
+	}
+}
+
+// TestProfilesAddVerifiesARealIAMKey proves #46 against Cloudant itself: a
+// working key is saved, a key IBM cannot know is refused before anything is
+// written. The key is read from the environment and never logged.
+func TestProfilesAddVerifiesARealIAMKey(t *testing.T) {
+	url, key := cloudantTestEnv(t)
+	env := map[string]string{}
+	if u := os.Getenv("CDB_IAM_URL"); u != "" {
+		env["CDB_IAM_URL"] = u
+	}
+	path := withDeps(t, config.Defaults(), env)
+
+	good, _ := guidedSession(key + "\n")
+	if _, err := profilesAdd(t, good, "add", "iam-good", url, "--auth", "iam"); err != nil {
+		t.Fatalf("a working key was refused: %v", err)
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := back.Profile("iam-good"); !ok || p.Auth != "iam" {
+		t.Fatalf("saved profile = %+v, ok=%t", p, ok)
+	}
+
+	bad, _ := guidedSession("definitely-not-a-key\n")
+	_, err = profilesAdd(t, bad, "add", "iam-bad", url, "--auth", "iam")
+	if err == nil {
+		t.Fatal("a key IBM cannot know was saved")
+	}
+	if strings.Contains(err.Error(), key) {
+		t.Fatal("the API key reached the error message")
+	}
+	back, err = config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, saved := back.Profile("iam-bad"); saved {
+		t.Error("the refused key's profile was written anyway")
 	}
 }
