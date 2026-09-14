@@ -116,11 +116,18 @@ func serverAdmins(ctx context.Context, s *session.Session) ([]string, error) {
 }
 
 // adminHashPoll is how often the [admins] section is re-read while waiting for
-// a password to be hashed, and adminHashWait is how long that wait lasts.
-const (
+// a password to be hashed, and adminHashWait is how long that wait lasts. They
+// are vars, not consts, so a test can shrink them for the duration of one
+// test rather than waiting out the real interval.
+var (
 	adminHashPoll = 100 * time.Millisecond
 	adminHashWait = 2 * time.Second
 )
+
+// adminHashPendingHint is what waitForAdminHash prints on stderr when the wait
+// runs out before CouchDB finishes hashing: the write did land, but a login
+// with the new password may still be refused for a moment.
+const adminHashPendingHint = "The server has not finished hashing the password yet; it will work in a moment."
 
 // waitForAdminHash waits for CouchDB to hash a password just written to the
 // [admins] section. The PUT returns before the hashing runs: for the next
@@ -133,10 +140,21 @@ const (
 //
 // The wait is bounded, and running out is not a failure: the write did land,
 // and CouchDB 3.0 hashes synchronously, so there is nothing to wait for there.
-// The value is only tested for the "-" that marks every CouchDB password hash;
-// it is never returned, printed or logged.
+// Running out prints adminHashPendingHint on stderr, so the operator is not
+// left wondering why the very next login fails — but only when the wait
+// itself timed out; a lookup error or a cancelled context says nothing,
+// because neither means the hashing is still pending. The value is only
+// tested for the "-" that marks every CouchDB password hash; it is never
+// returned, printed or logged.
 func waitForAdminHash(ctx context.Context, s *session.Session, name string) {
-	deadline := time.Now().Add(adminHashWait)
+	waitForAdminHashWith(ctx, s, name, adminHashPoll, adminHashWait, time.Now)
+}
+
+// waitForAdminHashWith is waitForAdminHash with the schedule given explicitly,
+// so that a test can drive it without waiting out the real interval.
+func waitForAdminHashWith(ctx context.Context, s *session.Session, name string,
+	poll, wait time.Duration, now func() time.Time) {
+	deadline := now().Add(wait)
 	for {
 		entries, err := s.Client.Config(ctx, defaultNode, "admins", name)
 		if err != nil {
@@ -145,13 +163,14 @@ func waitForAdminHash(ctx context.Context, s *session.Session, name string) {
 		if len(entries) == 1 && strings.HasPrefix(entries[0].Value, "-") {
 			return
 		}
-		if !time.Now().Before(deadline) {
+		if !now().Before(deadline) {
+			fmt.Fprintln(s.Stderr, adminHashPendingHint)
 			return
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(adminHashPoll):
+		case <-time.After(poll):
 		}
 	}
 }

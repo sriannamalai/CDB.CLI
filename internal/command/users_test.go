@@ -2,10 +2,12 @@ package command
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
 )
@@ -209,6 +211,41 @@ func TestUsersAddAdminWritesTheConfigKey(t *testing.T) {
 	}
 }
 
+// waitForAdminHashWith is the command's own clock injection point, mirroring
+// watchCompactionWith in compact_test.go: real intervals would make this test
+// wait out the real 2-second budget.
+func TestWaitForAdminHashHintsOnTimeout(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_node/_local/_config/admins/ops", 200, `"hunter2"`)
+	s := connected(t, srv)
+	waitForAdminHashWith(context.Background(), s, "ops", time.Millisecond, 5*time.Millisecond, time.Now)
+	if out := s.Stderr.(*bytes.Buffer).String(); !strings.Contains(out, adminHashPendingHint) {
+		t.Errorf("stderr = %q, want the pending hint", out)
+	}
+}
+
+func TestWaitForAdminHashSaysNothingWhenItHashesInTime(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSONSeq("GET", "/_node/_local/_config/admins/ops", 200, `"hunter2"`, `"-pbkdf2-deadbeef,cafe,10"`)
+	s := connected(t, srv)
+	waitForAdminHashWith(context.Background(), s, "ops", time.Millisecond, time.Second, time.Now)
+	if out := s.Stderr.(*bytes.Buffer).String(); out != "" {
+		t.Errorf("stderr = %q, want no hint once the hash appears", out)
+	}
+}
+
+func TestWaitForAdminHashSaysNothingWhenCancelled(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_node/_local/_config/admins/ops", 200, `"hunter2"`)
+	s := connected(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	waitForAdminHashWith(ctx, s, "ops", time.Millisecond, time.Second, time.Now)
+	if out := s.Stderr.(*bytes.Buffer).String(); out != "" {
+		t.Errorf("stderr = %q, want no hint on cancellation", out)
+	}
+}
+
 func TestUsersPasswdStripsTheHashFields(t *testing.T) {
 	srv := couchtest.New(t)
 	srv.JSON("GET", "/_node/_local/_config/admins", 200, `{}`)
@@ -342,6 +379,12 @@ func TestUsersAddAdminWaitsForCouchDBToHashThePassword(t *testing.T) {
 	s.Prefs.Interactive = true
 	s.SetStdin(strings.NewReader("hunter2\nhunter2\n"))
 
+	// adminHashPoll is shrunk for this test so the retries below run without
+	// waiting out the real 100ms interval three times over.
+	oldPoll := adminHashPoll
+	adminHashPoll = time.Millisecond
+	t.Cleanup(func() { adminHashPoll = oldPoll })
+
 	if _, err := invoke(t, Users(), s, "add", "ops", "--admin"); err != nil {
 		t.Fatal(err)
 	}
@@ -355,6 +398,9 @@ func TestUsersAddAdminWaitsForCouchDBToHashThePassword(t *testing.T) {
 	// that let the command return. Fewer means it returned too early.
 	if polls < 3 {
 		t.Errorf("the key was read %d times; the command returned before the password was hashed", polls)
+	}
+	if out := s.Stderr.(*bytes.Buffer).String(); out != "" {
+		t.Errorf("stderr = %q, want no hint once the hash appears", out)
 	}
 }
 
