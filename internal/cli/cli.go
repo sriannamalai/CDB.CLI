@@ -157,6 +157,11 @@ func newSubcommand(reg *command.Registry, c command.Command, s *session.Session)
 	}
 	fs := reg.NewFlagSet(c)
 	sub.Flags().AddFlagSet(fs)
+	if c.StopAtFirstArg {
+		// AddFlagSet copies the flags, not the flag set's own parsing rules,
+		// so cobra is told separately to stop at the first argument.
+		sub.Flags().SetInterspersed(false)
+	}
 	return sub
 }
 

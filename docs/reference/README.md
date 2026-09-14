@@ -41,6 +41,7 @@ before it acts, unless `--yes` is given.
 | [`restore`](restore.md) |  | Load a dump file into a database |  |
 | [`rm`](rm.md) |  | Delete a document or an attachment | destructive, reads a pipeline |
 | [`rmdir`](rmdir.md) |  | Delete a database and everything in it | destructive |
+| [`run`](run.md) |  | Run a file of cdb commands |  |
 | [`search`](search.md) |  | Run a full-text query against a search index |  |
 | [`security`](security.md) |  | Show and change who may read and write a database |  |
 | [`session`](session.md) |  | Show the current user, roles and server version |  |

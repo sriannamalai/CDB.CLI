@@ -36,6 +36,7 @@ func Default() *Registry {
 	r.Register(Backup())
 	r.Register(Restore())
 	r.Register(History())
+	r.Register(Run())
 	r.Register(Set())
 	r.Register(Unset())
 	r.Register(Clear())

@@ -207,6 +207,32 @@ func TestExecutePassesFlags(t *testing.T) {
 	}
 }
 
+func TestExecuteKeepsALaterFlagAsAnArgument(t *testing.T) {
+	var out, errOut bytes.Buffer
+	s := session.New(strings.NewReader(""), &out, &errOut)
+	var got []string
+	r := testRegistry()
+	r.Register(command.Command{
+		Name:           "relay",
+		Summary:        "Hand its arguments on",
+		Usage:          "<file> [arg...]",
+		MinArgs:        1,
+		MaxArgs:        -1,
+		StopAtFirstArg: true,
+		Run: func(_ context.Context, _ *session.Session, inv command.Invocation) (command.Result, error) {
+			got = inv.Args
+			return command.Empty{}, nil
+		},
+	})
+	code := Execute(context.Background(), r, s, BuildInfo{}, []string{"relay", "job.cdb", "--limit", "5"})
+	if code != ExitOK {
+		t.Fatalf("exit code = %d (stderr: %s)", code, errOut.String())
+	}
+	if len(got) != 3 || got[1] != "--limit" || got[2] != "5" {
+		t.Errorf("args = %v; a flag after the first argument must stay an argument", got)
+	}
+}
+
 func TestExecuteUsageErrorExitsTwo(t *testing.T) {
 	var out, errOut bytes.Buffer
 	s := session.New(strings.NewReader(""), &out, &errOut)
