@@ -13,6 +13,12 @@ import (
 // StatusUnreachable marks an error that never reached the server.
 const StatusUnreachable = 0
 
+// IAMExchangeFailed is the Error.Name an IBM IAM token exchange failure
+// carries. Both IAM failures are 401s with Auth == AuthIAM -- the key was
+// refused, or Cloudant refused the token minted from it -- and internal/render
+// needs to tell them apart to say which of spec's two sentences applies.
+const IAMExchangeFailed = "iam_exchange_failed"
+
 // Error is the single error type every couch.Client method returns.
 type Error struct {
 	// Status is the HTTP status code, or StatusUnreachable when the request

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // AuthKind selects how the client authenticates.
@@ -24,6 +25,10 @@ const (
 	// is the shared secret from the server's [chttpd_auth] secret, never a
 	// password.
 	AuthProxy AuthKind = "proxy"
+	// AuthIAM authenticates to IBM Cloudant with an IAM API key, which the
+	// client exchanges for a bearer token and refreshes as it expires. Secret
+	// is the API key.
+	AuthIAM AuthKind = "iam"
 )
 
 // The digests CouchDB's proxy_authentication_handler verifies
@@ -44,6 +49,9 @@ type Config struct {
 	// "claim none", which is not the same as claiming one empty role: the
 	// header is then left off entirely.
 	Roles []string
+	// IAMURL overrides the IBM Cloud token endpoint under AuthIAM. Empty means
+	// DefaultIAMURL.
+	IAMURL string
 	// ProxyHash names the digest the AuthProxy token is an HMAC of:
 	// ProxyHashSHA256 (the default, and what the empty value means) or
 	// ProxyHashSHA1 for a server too old to verify anything else.
@@ -143,6 +151,12 @@ func New(cfg Config) (*Client, error) {
 			roles:    strings.Join(cfg.Roles, ","),
 			token:    proxyToken(cfg.Secret, cfg.Username, hash),
 		}
+	case AuthIAM:
+		iamURL := cfg.IAMURL
+		if iamURL == "" {
+			iamURL = DefaultIAMURL
+		}
+		tr = &iamTransport{base: tr, apiKey: cfg.Secret, iamURL: iamURL, host: u.Host, now: time.Now}
 	case AuthNone, "":
 		// Nothing to add. The empty kind is the zero value, not a mistake:
 		// the config layer defaults an unset auth to "session" before it

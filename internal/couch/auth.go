@@ -182,9 +182,17 @@ type jwtTransport struct {
 }
 
 func (t *jwtTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.base.RoundTrip(withBearer(req, t.token))
+}
+
+// withBearer clones req with an Authorization bearer header. Cloning rather
+// than mutating matters: net/http may hand the same *http.Request to a
+// transport more than once, and a retry has to carry the new token rather than
+// the one that just drew a 401.
+func withBearer(req *http.Request, token string) *http.Request {
 	out := req.Clone(req.Context())
-	out.Header.Set("Authorization", "Bearer "+t.token)
-	return t.base.RoundTrip(out)
+	out.Header.Set("Authorization", "Bearer "+token)
+	return out
 }
 
 // CloseIdleConnections delegates to the base transport; see the session

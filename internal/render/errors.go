@@ -66,6 +66,16 @@ func plainSentence(e *couch.Error) string {
 		// because both answer the same way, so the sentence names both.
 		user, host := userAndHost(e.Target)
 		return fmt.Sprintf("The server did not accept the proxy credentials for %s at %s. Check the shared secret and that proxy authentication is enabled on the server.", user, host)
+	case e.Status == 401 && e.Auth == couch.AuthIAM && e.Name == couch.IAMExchangeFailed:
+		// IBM never issued a token, so nothing reached Cloudant at all. The
+		// key is the only thing the operator can act on; IBM's own
+		// errorMessage travels in Reason and --verbose prints it.
+		return "IBM IAM did not issue a token for the API key. Check the key."
+	case e.Status == 401 && e.Auth == couch.AuthIAM:
+		// A token was issued and Cloudant refused it twice, so refreshing
+		// again would not help: the service id has no access to what was
+		// asked for, or the instance is not the one the key belongs to.
+		return fmt.Sprintf("The server rejected the IAM token at %s.", hostFromTarget(e.Target))
 	case e.Status == 401:
 		user, host := userAndHost(e.Target)
 		return fmt.Sprintf("Login failed for %s at %s. Check the password with \"profiles\" or \"connect\".", user, host)

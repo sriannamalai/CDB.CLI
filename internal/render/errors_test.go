@@ -288,3 +288,27 @@ func TestProxyRejectionSentenceVerboseCarriesNoSecret(t *testing.T) {
 		t.Errorf("the verbose bracket is missing: %s", got)
 	}
 }
+
+func TestIAMExchangeFailureSentence(t *testing.T) {
+	e := couch.NewError(401, couch.IAMExchangeFailed, "Provided API key could not be found.",
+		"authenticate", "server example.cloudantnosqldb.appdomain.cloud")
+	e.Auth = couch.AuthIAM
+	want := "IBM IAM did not issue a token for the API key. Check the key."
+	if got := ErrorMessage(e, false); got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+	// IBM's own errorMessage is the one extra thing --verbose is for.
+	if got := ErrorMessage(e, true); !strings.Contains(got, "Provided API key could not be found.") {
+		t.Errorf("the verbose form drops IBM's reason: %s", got)
+	}
+}
+
+func TestIAMTokenRejectedSentence(t *testing.T) {
+	e := couch.NewError(401, "unauthorized", "credentials expired", "read",
+		couch.UnauthorizedTarget("", "example.cloudantnosqldb.appdomain.cloud"))
+	e.Auth = couch.AuthIAM
+	want := "The server rejected the IAM token at example.cloudantnosqldb.appdomain.cloud."
+	if got := ErrorMessage(e, false); got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}

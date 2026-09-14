@@ -27,7 +27,7 @@ func TestNewRejectsAnUnknownAuthKind(t *testing.T) {
 // already defaults it to "session" before it gets here. Treat it as "none" so
 // a caller that builds a Config by hand still works.
 func TestNewAcceptsTheKnownAuthKinds(t *testing.T) {
-	for _, kind := range []AuthKind{"", AuthNone, AuthSession, AuthJWT, AuthProxy} {
+	for _, kind := range []AuthKind{"", AuthNone, AuthSession, AuthJWT, AuthProxy, AuthIAM} {
 		if _, err := New(Config{URL: "http://localhost:5984", Auth: kind, Username: "admin", Secret: "x"}); err != nil {
 			t.Errorf("New with auth %q: %v", kind, err)
 		}
