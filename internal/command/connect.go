@@ -388,25 +388,18 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 		profile.Auth = string(couch.AuthNone)
 	}
 
-	// A proxy profile with no secret anywhere has its own questions: the kind
-	// takes no password, so the bare-URL prompt below would ask the wrong
-	// ones. On a terminal, ask; without one, let the connection fail with the
+	// A proxy or IAM profile with no secret anywhere has its own questions:
+	// neither kind takes a password, so the bare-URL prompt below would ask
+	// the wrong ones. They are the same questions "profiles add" asks, so they
+	// are asked in the same place — promptForAuthKind, which also writes the
+	// user name and the roles a proxy operator types back into the profile.
+	// Without a terminal, nothing is asked: the connection fails with the
 	// server's own answer, which the proxy sentence turns into something
 	// actionable.
 	if secret == "" && s.Prefs.Interactive && !s.Prefs.Anonymous {
 		switch profile.Auth {
-		case string(couch.AuthProxy):
-			user, roles, sec, perr := promptForProxy(s, profile.Username)
-			if perr != nil {
-				return connection{}, perr
-			}
-			profile.Username, secret = user, sec
-			if len(roles) > 0 {
-				profile.Roles = roles
-			}
-			bare = false
-		case string(couch.AuthIAM):
-			sec, perr := readSecret(s, "IAM API key")
+		case string(couch.AuthProxy), string(couch.AuthIAM):
+			sec, perr := promptForAuthKind(s, profile.Auth, &profile)
 			if perr != nil {
 				return connection{}, perr
 			}
