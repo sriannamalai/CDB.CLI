@@ -24,6 +24,13 @@ func ErrorMessage(err error, verbose bool) string {
 	if err == nil {
 		return ""
 	}
+	// A stage failure has already been rendered once, with the stage's number
+	// and name in front of it; matching the cause again below would print the
+	// sentence without the prefix that says where it happened.
+	var stage *command.StageError
+	if errors.As(err, &stage) {
+		return stage.Text
+	}
 	// A sentence cdb composed itself carries the server's answer in fields of
 	// its own rather than in a wrapped error, precisely so that plainSentence
 	// below cannot overwrite it; the bracket is built from those fields.

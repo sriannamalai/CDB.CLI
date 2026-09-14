@@ -399,3 +399,14 @@ func TestRejectedIAMTokenOnABadRequest(t *testing.T) {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
+
+func TestErrorMessageKeepsTheStagePrefix(t *testing.T) {
+	cause := couch.NewError(404, "not_found", "missing", "read", `document "x" in "movies"`)
+	err := &command.StageError{Stage: 2, Name: "cat", Text: "stage 2 (cat): " + ErrorMessage(cause, false), Err: cause}
+	if got := ErrorMessage(err, false); got != err.Text {
+		t.Errorf("ErrorMessage = %q, want %q", got, err.Text)
+	}
+	if got := ErrorMessage(err, true); got != err.Text {
+		t.Errorf("verbose ErrorMessage = %q; the bracket belongs in Text, built when the stage failed", got)
+	}
+}

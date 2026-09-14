@@ -81,3 +81,23 @@ func Errorf(cause error, format string, args ...any) error {
 	}
 	return e
 }
+
+// StageError names the stage of a shell pipeline a line failed in. Unlike
+// SentenceError it does carry an Unwrap, because internal/cli.ExitCode must
+// still see the cause's own type and give the line the exit code the same
+// failure would have had outside a pipeline. internal/render.ErrorMessage
+// matches it before everything else for the mirror-image reason: the already
+// rendered sentence in Text is what should be printed, not the cause's.
+type StageError struct {
+	// Stage is 1-based, as the sentence says it.
+	Stage int
+	// Name is the command name, or "jq" for a filter stage.
+	Name string
+	// Text is the whole sentence: "stage 2 (put): ...".
+	Text string
+	Err  error
+}
+
+func (e *StageError) Error() string { return e.Text }
+
+func (e *StageError) Unwrap() error { return e.Err }
