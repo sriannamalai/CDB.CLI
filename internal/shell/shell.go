@@ -80,6 +80,9 @@ func (h *filteredHistory) Write(line string) (int, error) {
 // are recognisably a server URL are touched: a document id that merely
 // contains an "@" must survive intact.
 func redactLine(line string, known func(string) bool) string {
+	if masked, ok := redactSet(line); ok {
+		return masked
+	}
 	schemeless := takesServerAddress(line, known)
 	var b strings.Builder
 	b.Grow(len(line))
@@ -101,6 +104,22 @@ func redactLine(line string, known func(string) bool) string {
 	}
 	return b.String()
 }
+
+// redactSet rewrites "set api_token abc" as "set api_token ****". A variable
+// whose name says it holds a credential must not reach the history file any
+// more than a password in a URL does.
+func redactSet(line string) (string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 3 || fields[0] != "set" || !session.Masked(fields[1]) {
+		return line, false
+	}
+	return "set " + fields[1] + " " + maskedHistoryValue, true
+}
+
+// maskedHistoryValue is what a masked variable's value is recorded as. It is
+// the same four stars command.maskedValue prints, spelled here so that
+// internal/shell does not reach into a command's unexported constant.
+const maskedHistoryValue = "****"
 
 // urlCommands are the commands whose arguments can be a server address typed
 // without a scheme. Only there is "user:pass@host" read as a credential: under
@@ -281,6 +300,7 @@ func (sh *Shell) initHistory() error {
 		return ok
 	}}
 	install(sh.reg, command.HistoryFrom(func() []string { return historyLines(sh.hist) }))
+	install(sh.reg, command.SetFrom(sh.Capture))
 	return nil
 }
 

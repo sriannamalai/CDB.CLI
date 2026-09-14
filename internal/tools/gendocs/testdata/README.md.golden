@@ -44,8 +44,10 @@ before it acts, unless `--yes` is given.
 | [`search`](search.md) |  | Run a full-text query against a search index |  |
 | [`security`](security.md) |  | Show and change who may read and write a database |  |
 | [`session`](session.md) |  | Show the current user, roles and server version |  |
+| [`set`](set.md) |  | Define, list or capture a shell variable | shell only |
 | [`tail`](tail.md) |  | Read a database's changes feed |  |
 | [`tasks`](tasks.md) |  | List the tasks CouchDB is running right now |  |
+| [`unset`](unset.md) |  | Remove a shell variable | shell only |
 | [`users`](users.md) |  | List and manage CouchDB accounts |  |
 
 ## Global flags

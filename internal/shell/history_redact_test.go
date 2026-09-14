@@ -210,3 +210,13 @@ func TestHistoryFileNeverHoldsACredential(t *testing.T) {
 		t.Errorf("the redacted line is missing from the history file:\n%s", b)
 	}
 }
+
+func TestHistoryMasksASetOfACredential(t *testing.T) {
+	got := redactLine("set api_token s3cret", func(string) bool { return true })
+	if got != "set api_token ****" {
+		t.Errorf("redactLine = %q", got)
+	}
+	if plain := redactLine("set year 2001", func(string) bool { return true }); plain != "set year 2001" {
+		t.Errorf("an ordinary variable was rewritten: %q", plain)
+	}
+}

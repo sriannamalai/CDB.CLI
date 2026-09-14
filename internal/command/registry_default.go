@@ -36,6 +36,8 @@ func Default() *Registry {
 	r.Register(Backup())
 	r.Register(Restore())
 	r.Register(History())
+	r.Register(Set())
+	r.Register(Unset())
 	r.Register(Clear())
 	r.Register(Exit())
 	// Help is registered last so that it sees every other command.
