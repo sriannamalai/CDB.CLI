@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-14
+
 ### Fixed
 
 - `connect` obeys `--url` and `--profile`. `cdb connect --url http://other`
@@ -151,7 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `info /` may show a `replication url` row, and `resolve`'s chooser shows
   diffs rather than body previews.
 
-[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.0.1...v1.1.0
