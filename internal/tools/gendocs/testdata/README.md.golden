@@ -32,7 +32,7 @@ before it acts, unless `--yes` is given.
 | [`ls`](ls.md) | `list` | List databases, documents, or the parts of a design document |  |
 | [`mkdir`](mkdir.md) |  | Create a database |  |
 | [`profiles`](profiles.md) |  | List, add, remove and default saved profiles |  |
-| [`put`](put.md) |  | Create or update a document from a file or standard input |  |
+| [`put`](put.md) |  | Create or update a document from a file or standard input | reads a pipeline |
 | [`pwd`](pwd.md) |  | Print the current path |  |
 | [`query`](query.md) |  | Run a map/reduce view |  |
 | [`replicate`](replicate.md) |  | Start a replication between two databases |  |

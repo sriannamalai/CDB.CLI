@@ -7,16 +7,25 @@ Create or update a document from a file or standard input
 ## Synopsis
 
 ```
-cdb put <path> [file] [flags]
+cdb put [<path>] [file] [flags]
 ```
 
 ## Description
 
 Create or update a document from a file or standard input.
 
+In a later stage of a shell pipeline, put writes every document the stage
+above produced, in batches of 100, and reports one row per document with the
+id, the new revision and a status of "ok" or the server's own word for a
+document it refused. The path may then be left out, and the documents go to
+the database the current directory is in.
+
+Reads a pipeline: documents. In a later stage of a shell pipeline this
+command consumes the previous stage's values.
+
 ## Arguments
 
-Takes between 1 and 2 arguments.
+Takes at most 2 arguments.
 
 ## Global flags
 

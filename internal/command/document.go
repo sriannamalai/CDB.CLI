@@ -93,12 +93,24 @@ Wrote /movies/tt0211915 at revision 1-fe587ae7ef952dbac249a78f49bb51e6.
 
 $ cdb put /movies/_design/app ddoc.json
 Wrote /movies/_design/app at revision 1-1285d46491b0e663da91773703a00996.`,
-		Usage:       "<path> [file]",
-		MinArgs:     1,
+		Usage:       "[<path>] [file]",
+		MinArgs:     0,
 		MaxArgs:     2,
 		NeedsClient: true,
 		Complete:    completePath,
+		Pipe:        PipeDocuments,
+		Details: `In a later stage of a shell pipeline, put writes every document the stage
+above produced, in batches of 100, and reports one row per document with the
+id, the new revision and a status of "ok" or the server's own word for a
+document it refused. The path may then be left out, and the documents go to
+the database the current directory is in.`,
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+			if inv.Pipe != nil {
+				return putPipeline(ctx, s, inv)
+			}
+			if inv.Arg(0) == "" {
+				return nil, Usagef("put", "expected at least 1 argument(s), got 0\nusage: put [<path>] [file]")
+			}
 			t, err := s.Resolve(inv.Arg(0))
 			if err != nil {
 				return nil, err
