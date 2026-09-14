@@ -107,3 +107,48 @@ func TestConfigRedactsTheProxySecretOnALiveServer(t *testing.T) {
 		t.Fatal("the live proxy secret reached Row.JSON")
 	}
 }
+
+func TestSecurityRoundTripAgainstALiveServer(t *testing.T) {
+	if os.Getenv("CDB_TEST_URL") == "" {
+		t.Skip("CDB_TEST_URL is not set")
+	}
+	s := integrationSession(t)
+	s.Prefs.Yes = true
+	ctx := context.Background()
+	const db = "cdb-test-security"
+	if err := s.Client.CreateDatabase(ctx, db, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Client.DestroyDatabase(context.Background(), db) })
+
+	if _, err := invoke(t, SecurityCmd(), s, "/"+db,
+		"--add-member", "alice", "--add-member-role", "reader", "--add-admin", "ops"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := invoke(t, SecurityCmd(), s, "/"+db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, item := range res.(Rows).Items {
+		got[strings.Join(item.Cells, "/")] = true
+	}
+	for _, want := range []string{"admins/names/ops", "members/names/alice", "members/roles/reader"} {
+		if !got[want] {
+			t.Errorf("after the edit, %q is missing from %v", want, got)
+		}
+	}
+
+	if _, err := invoke(t, SecurityCmd(), s, "/"+db, "--remove-member", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	res, err = invoke(t, SecurityCmd(), s, "/"+db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range res.(Rows).Items {
+		if strings.Join(item.Cells, "/") == "members/names/alice" {
+			t.Fatal("alice is still a member after --remove-member")
+		}
+	}
+}
