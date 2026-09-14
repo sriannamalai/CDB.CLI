@@ -14,9 +14,12 @@ cdb run <file> [arg...] [flags]
 
 Run a file of cdb commands.
 
-A script is a file of the same lines the shell reads. A "#" that begins a line
-starts a comment, blank lines are skipped, and a line continues onto the next
-the way it does in the shell. The ".cdb" extension is a convention, not a rule.
+A script is a file of the same lines the shell reads. A "#" that begins a token
+starts a comment that runs to the end of the line, so a whole line of comment
+and a note after a command are both written the same way; a "#" in quotes, in
+the middle of a word, or after a backslash is an ordinary character. Blank
+lines are skipped, and a line continues onto the next the way it does in the
+shell. The ".cdb" extension is a convention, not a rule.
 
 A script is never interactive: no prompt and no guided builder is reachable
 while it runs, so a line that would confirm needs --yes, on the line or on

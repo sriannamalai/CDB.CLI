@@ -41,6 +41,14 @@ func TestParse(t *testing.T) {
 			{Expr: `select(.id == "a|b")`},
 		}},
 		{"extra whitespace", "  ls   /mydb  ", []Stage{{Argv: []string{"ls", "/mydb"}}}},
+		{"a bare # ends the line", "ls /mydb # count them", []Stage{{Argv: []string{"ls", "/mydb"}}}},
+		{"a whole line of comment", "# nothing to do", nil},
+		{"a # inside single quotes is literal", `put /a/b '{"x":"#1"}'`, []Stage{{Argv: []string{"put", "/a/b", `{"x":"#1"}`}}}},
+		{"a # inside double quotes is literal", `cat "a#b"`, []Stage{{Argv: []string{"cat", "a#b"}}}},
+		{"a # inside a word is literal", "cat a#b", []Stage{{Argv: []string{"cat", "a#b"}}}},
+		{"an escaped # is literal", `cat \#b`, []Stage{{Argv: []string{"cat", "#b"}}}},
+		{"a comment after an argument", `put /a/b '{}' # note`, []Stage{{Argv: []string{"put", "/a/b", "{}"}}}},
+		{"a comment ends at the end of its own line", "put /a/b { # note\n\"x\": 1\n}", []Stage{{Argv: []string{"put", "/a/b", "{", "x:", "1", "}"}}}},
 		{"four stages", `find --field year | select(.year > 2000) | .id | put /old`, []Stage{
 			{Argv: []string{"find", "--field", "year"}},
 			{Expr: "select(.year > 2000)"},
@@ -206,5 +214,22 @@ func TestParseRecordsSingleQuotedWords(t *testing.T) {
 	want := []bool{false, true, false, false}
 	if !reflect.DeepEqual(line.Stages[0].Literal, want) {
 		t.Errorf("Literal = %v, want %v", line.Stages[0].Literal, want)
+	}
+}
+
+func TestNeedsMoreIgnoresACommentedLine(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{"# don't ask for more", false},
+		{"ls # a brace { in a comment", false},
+		{`put /a/b '{"x":1}' # done`, false},
+		{"put /a/b { # the comment is not the end", true},
+		{"cat \"a#b", true},
+	} {
+		if got := NeedsMore(tc.input); got != tc.want {
+			t.Errorf("NeedsMore(%q) = %v, want %v", tc.input, got, tc.want)
+		}
 	}
 }

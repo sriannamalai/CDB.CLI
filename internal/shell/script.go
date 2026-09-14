@@ -26,7 +26,7 @@ const scriptScanBuffer = 1 << 20
 // without leaving the shell that ran it.
 var errScriptExit = errors.New("script exit")
 
-// RunScript runs a file of shell lines. Comments (a "#" beginning a line),
+// RunScript runs a file of shell lines. Comments (a "#" beginning a token),
 // blank lines and continuation follow the shell's own rules; execution stops at
 // the first failing line, whose sentence is written to stderr as
 // "<name>:<line>: <sentence>" with the line number of its first physical line.
@@ -67,8 +67,7 @@ func (sh *Shell) RunScript(ctx context.Context, r io.Reader, name string, args [
 		lineNo++
 		text := sc.Text()
 		if buf.Len() == 0 {
-			trimmed := strings.TrimSpace(text)
-			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			if strings.TrimSpace(text) == "" {
 				continue
 			}
 			start = lineNo

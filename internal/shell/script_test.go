@@ -194,3 +194,15 @@ func TestScriptReportsANestedFailureOnce(t *testing.T) {
 		t.Errorf("stderr = %q; a failure already reported must not be reported again", out.String())
 	}
 }
+
+func TestScriptTakesACommentAfterACommand(t *testing.T) {
+	var out bytes.Buffer
+	sh := scriptShell(t, &out)
+	if err := runText(t, sh, "say one # note\nsay '#2' # another\n"); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Fields(out.String())
+	if len(got) != 2 || got[0] != "one" || got[1] != "#2" {
+		t.Errorf("output = %q, want the words before each \"#\" only", out.String())
+	}
+}

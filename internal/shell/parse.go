@@ -185,6 +185,15 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 			if r == '\'' {
 				wasLiteral = true
 			}
+		case r == '#' && !hasWord:
+			// A "#" that begins a token starts a comment, which runs to the
+			// end of its own physical line: the rest of a continued line is
+			// still input. Inside quotes, after a backslash, or in the middle
+			// of a word ("a#b") it is an ordinary character — the rule jq
+			// applies to its own comments.
+			for i+1 < len(runes) && runes[i+1] != '\n' {
+				i++
+			}
 		case r == '|':
 			if err := closeStage(i); err != nil {
 				return Line{}, err
@@ -201,8 +210,9 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 		return Line{}, ErrUnterminatedQuote
 	}
 	// A line that is entirely blank is not a pipeline error; it is a no-op, and
-	// RunLine has always treated it as one.
-	if len(line.Stages) == 0 && strings.TrimSpace(input) == "" {
+	// RunLine has always treated it as one. A line of nothing but a comment is
+	// the same no-op, which is why the words are counted rather than the text.
+	if len(line.Stages) == 0 && len(argv) == 0 && !hasWord {
 		return Line{}, nil
 	}
 	if err := closeStage(len(runes)); err != nil {
@@ -213,33 +223,54 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 
 // NeedsMore reports whether the shell should read another line before parsing.
 // It is true when the buffer ends in an odd number of backslashes, ends inside
-// a quote, or has unbalanced JSON braces or brackets outside quotes.
+// a quote, or has unbalanced JSON braces or brackets outside quotes. A comment
+// counts for none of those: what Parse will throw away cannot ask for another
+// line.
 func NeedsMore(input string) bool {
 	var (
 		quote   rune
 		escaped bool
 		depth   int
+		// atTokenStart says the next rune would begin a word, which is where
+		// a "#" is a comment rather than a character.
+		atTokenStart = true
 	)
-	for _, r := range input {
+	runes := []rune(input)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		switch {
 		case escaped:
 			escaped = false
+			atTokenStart = false
 		case quote != 0:
 			if r == '\\' && quote == '"' {
 				escaped = true
 			} else if r == quote {
 				quote = 0
 			}
+			atTokenStart = false
+		case r == '#' && atTokenStart:
+			for i+1 < len(runes) && runes[i+1] != '\n' {
+				i++
+			}
 		case r == '\\':
 			escaped = true
+			atTokenStart = false
 		case r == '\'' || r == '"':
 			quote = r
+			atTokenStart = false
+		case r == ' ' || r == '\t' || r == '\n' || r == '|':
+			atTokenStart = true
 		case r == '{' || r == '[':
 			depth++
+			atTokenStart = false
 		case r == '}' || r == ']':
 			if depth > 0 {
 				depth--
 			}
+			atTokenStart = false
+		default:
+			atTokenStart = false
 		}
 	}
 	if escaped {
