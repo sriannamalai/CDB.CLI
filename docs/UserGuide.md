@@ -928,13 +928,22 @@ admin@localhost:5984:/movies> set
 ```
 
 `$name` and `${name}` are replaced inside a word of a command stage, and the
-word is never re-split — a value holding a space stays one argument. They are
-never replaced inside a word any part of which is single-quoted, which is how
-a Mango selector or a jq expression keeps a `$` of its own, a backslash
-protects a lone `$` the same way (`\$a`), and `$$` is a literal `$`. A `$`
-right after a `"` is left alone, so Mango operators such as `"$gt"` need no
-escaping. In a jq
-stage the variables are not text-replaced at all: each is bound as a jq
+word is never re-split — a value holding a space stays one argument. A `$`
+written inside single quotes, or with a backslash before it, is left as it was
+typed, which is how a Mango selector or a jq expression keeps a `$` of its own.
+That protects the one `$`, not the word around it: `'$a'$b` still expands `$b`,
+and `"\$literal and $var"` still expands `$var`. `$$` is a literal `$`, and a
+`$` right after a `"` is left alone, so Mango operators such as `"$gt"` need no
+escaping.
+
+A name is a letter or `_` followed by letters, digits and `_`. A digit is a
+script argument instead, and only one: `$12` is argument 1 followed by `2`, and
+`$1abc` is argument 1 followed by `abc`. `$env.NAME` reads the environment, and
+`env` is reserved for it — a bare `$env` answers `"env" is reserved; write
+$env.NAME.` Braces must hold a name: `${a-b}` answers `"a-b" is not a variable
+name.`
+
+In a jq stage the variables are not text-replaced at all: each is bound as a jq
 variable of the same name with its stored value, so a number is a number.
 
 `set <name> = <pipeline>` stores what the pipeline produced: one value as that
