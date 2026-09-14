@@ -1,17 +1,14 @@
 package command
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/sriannamalai/CDB.CLI/internal/config"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
@@ -37,16 +34,8 @@ func proxyTestEnv(t *testing.T) (string, string) {
 // CDB_PASSWORD in the ambient environment can change it.
 func proxySession(t *testing.T, secret string) *session.Session {
 	t.Helper()
-	env := map[string]string{"CDB_PASSWORD": secret, "CDB_USER": "ops"}
-	SetDeps(&Deps{
-		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
-		Secrets:    config.NewMemorySecrets(),
-		LookupEnv:  func(k string) (string, bool) { v, ok := env[k]; return v, ok },
-	})
-	t.Cleanup(func() { SetDeps(nil) })
-	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	t.Cleanup(func() { _ = s.Detach() })
-	return s
+	withDeps(t, nil, map[string]string{"CDB_PASSWORD": secret, "CDB_USER": "ops"})
+	return newSession(t)
 }
 
 func TestIntegrationProxyConnects(t *testing.T) {

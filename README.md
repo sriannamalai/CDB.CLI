@@ -254,6 +254,7 @@ cdb completion powershell | Out-String | Invoke-Expression
 | `cd`, `pwd`, `ls`, `info` | Move around and list databases, documents, views |
 | `cat`, `put`, `rm`, `edit` | Read and write documents |
 | `find`, `query` | Mango queries and map/reduce views |
+| `search` | Full-text queries against Clouseau and Nouveau indexes |
 | `tail` | Watch a database's changes feed |
 | `mkdir`, `rmdir`, `cp` | Create and delete databases, copy documents |
 | `attach`, `fetch` | Upload and download attachments, streamed |
@@ -384,6 +385,30 @@ There is no version gate: the handler exists on every supported server. Which
 digest it verifies differs — 3.4 and later take HMAC-SHA256 or HMAC-SHA1, older
 servers only SHA-1 — and cdb finds that out for itself, saving the answer as
 the profile's `proxy_hash`.
+
+The search integration test needs a server with a full-text backend, which
+stock CouchDB has neither of. Nouveau is the one that can be run from images:
+a `couchdb:3.5-nouveau` container for the index service and a `couchdb:3.5`
+beside it pointed at it.
+
+```
+docker network create cdbnet
+docker run -d --name cdb-test-nv --network cdbnet couchdb:3.5-nouveau
+docker run -d --name cdb-test-35nv --network cdbnet \
+  -e COUCHDB_USER=admin -e COUCHDB_PASSWORD=password -p 15987:5984 couchdb:3.5
+for kv in enable:true url:http://cdb-test-nv:5987; do
+  curl -X PUT "http://admin:password@localhost:15987/_node/_local/_config/nouveau/${kv%%:*}" \
+    -d "\"${kv#*:}\""
+done
+docker restart cdb-test-35nv
+CDB_TEST_URL=http://localhost:15987/ CDB_TEST_NOUVEAU=1 go test ./internal/command/
+```
+
+`CDB_TEST_NOUVEAU` is the gate rather than the URL alone, because a plain 3.5
+answers 404 for every `_nouveau` path and the test would assert nothing. Left
+unset, the companion test instead checks the two "no backend here" sentences
+against the plain server, which is what an operator without either backend
+sees.
 
 CI pins `CDB_KEYRING_BACKEND=file` so tests never touch a real OS keychain, and
 runs `gofmt -l .`, `go vet ./...` and `GOOS=windows go vet ./...` as gates.

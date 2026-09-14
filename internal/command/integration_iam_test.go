@@ -1,7 +1,6 @@
 package command
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sriannamalai/CDB.CLI/internal/config"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
@@ -45,15 +43,8 @@ func iamSession(t *testing.T, apiKey string) *session.Session {
 	if u := os.Getenv("CDB_IAM_URL"); u != "" {
 		env["CDB_IAM_URL"] = u
 	}
-	SetDeps(&Deps{
-		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
-		Secrets:    config.NewMemorySecrets(),
-		LookupEnv:  func(k string) (string, bool) { v, ok := env[k]; return v, ok },
-	})
-	t.Cleanup(func() { SetDeps(nil) })
-	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	t.Cleanup(func() { _ = s.Detach() })
-	return s
+	withDeps(t, nil, env)
+	return newSession(t)
 }
 
 func TestIntegrationIAMConnects(t *testing.T) {
