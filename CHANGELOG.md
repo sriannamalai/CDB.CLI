@@ -46,7 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cluster setup --single-node` configures a fresh node once — CouchDB sets
   `[cluster] n` to 1 and creates the system databases — and reports a node
   that is already configured without touching it. Multi-node setup is not
-  offered.
+  offered. The six commands together are the administration surface asked
+  for in [#17].
+
+### Changed
+
+- The questions `connect` and `profiles add` ask — user name and password,
+  bearer token, IAM API key, proxy identity — now live in one place, and a
+  profile whose secret is missing from the keyring is asked for it through
+  the same per-kind prompt `profiles add` uses. Nothing changes in what is
+  asked or saved. ([#47])
 
 ### Fixed
 
@@ -63,9 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key before writing the profile and the keyring entry, as `--auth session`
   and `--auth proxy` already did. ([#46])
 
+[#17]: https://github.com/sriannamalai/CDB.CLI/issues/17
 [#43]: https://github.com/sriannamalai/CDB.CLI/issues/43
 [#44]: https://github.com/sriannamalai/CDB.CLI/issues/44
 [#46]: https://github.com/sriannamalai/CDB.CLI/issues/46
+[#47]: https://github.com/sriannamalai/CDB.CLI/issues/47
 
 ## [1.3.0] - 2026-09-14
 

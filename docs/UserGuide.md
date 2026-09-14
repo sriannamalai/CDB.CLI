@@ -686,7 +686,8 @@ addresses, `[chttpd] authentication_handlers`, the data directories,
 `[couchdb] uuid` and `single_node`, `[cluster] n` and `q`, every JWT key,
 everything under `[ssl]`, and the Nouveau switches. Changing one of those
 changes what the *next* start will use and nothing about the running server,
-so `config set` asks first and then says so:
+so `config set` asks first and then says so, and `config unset` adds the
+same sentence when it removes one:
 
     $ cdb config set chttpd/port 5985
     Change chttpd/port on _local? [y/N] y
