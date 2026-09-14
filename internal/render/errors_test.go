@@ -261,3 +261,30 @@ func TestVerboseRealJWT401KeepsTheServerReason(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestProxyRejectionSentence(t *testing.T) {
+	e := couch.NewError(401, "unauthorized", "The server did not act on the proxy credentials.",
+		"authenticate", couch.UnauthorizedTarget("ops", "couch.example.com:5984"))
+	e.Auth = couch.AuthProxy
+	want := `The server did not accept the proxy credentials for ops at couch.example.com:5984. Check the shared secret and that proxy authentication is enabled on the server.`
+	if got := ErrorMessage(e, false); got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+// --verbose may add the status bracket but must never add the token, the
+// secret, or anything derived from either.
+func TestProxyRejectionSentenceVerboseCarriesNoSecret(t *testing.T) {
+	e := couch.NewError(401, "unauthorized", "The server did not act on the proxy credentials.",
+		"authenticate", couch.UnauthorizedTarget("ops", "couch.example.com:5984"))
+	e.Auth = couch.AuthProxy
+	got := ErrorMessage(e, true)
+	for _, forbidden := range []string{"proxysecret", "9fd98e6f"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("the verbose message leaked %q: %s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "[status 401 unauthorized:") {
+		t.Errorf("the verbose bracket is missing: %s", got)
+	}
+}

@@ -144,6 +144,13 @@ func unauthorizedTarget(username, host string) string {
 	return fmt.Sprintf("user %q at %s", username, host)
 }
 
+// UnauthorizedTarget is unauthorizedTarget, exported for internal/command's
+// verifyLogin. A proxy token the server will not accept produces an anonymous
+// 200 rather than a 401, so verifyLogin has to synthesise the 401 itself — and
+// it has to phrase the target exactly as doDecode does, because internal/render
+// reads the user and host back out of it.
+func UnauthorizedTarget(username, host string) string { return unauthorizedTarget(username, host) }
+
 func isDNSError(err error) bool {
 	var d *net.DNSError
 	return errors.As(err, &d)

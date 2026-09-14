@@ -243,9 +243,14 @@ func ApplyOutputPrefs(s *session.Session) {
 }
 
 // ValidAuthKind reports whether s is an authentication kind cdb understands.
-// It is the single source of truth for the five names: internal/command's
-// connect flag, its guided walk-through and couch.New all answer from this
-// list, so a sixth kind is added in one place.
+// Everything that merely accepts a name answers from this list: internal/
+// command's --auth flag, its guided walk-through, and "profiles add".
+//
+// couch.New keeps a switch of its own, because it does not accept the name, it
+// maps it to a transport — and it could not call this anyway: config imports
+// session, session imports couch, so couch importing config would close the
+// cycle. Its default arm rejects the rest, so the two lists disagreeing costs
+// a message rather than an unauthenticated client.
 //
 // Load deliberately does not call it. A typo in one hand-edited profile would
 // otherwise break "profiles list" and every other command that reads the file,

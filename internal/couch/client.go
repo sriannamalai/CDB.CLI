@@ -26,6 +26,14 @@ const (
 	AuthProxy AuthKind = "proxy"
 )
 
+// The digests CouchDB's proxy_authentication_handler verifies
+// X-Auth-CouchDB-Token with. SHA-256 is cdb's default; SHA-1 is what every
+// server before 3.4 verifies, and the only thing 3.0 accepts.
+const (
+	ProxyHashSHA256 = "sha256"
+	ProxyHashSHA1   = "sha1"
+)
+
 // Config describes a connection. Secret is never logged or serialised.
 type Config struct {
 	URL      string
@@ -35,7 +43,11 @@ type Config struct {
 	// Roles are the roles cdb claims for Username under AuthProxy. Empty means
 	// "claim none", which is not the same as claiming one empty role: the
 	// header is then left off entirely.
-	Roles       []string
+	Roles []string
+	// ProxyHash names the digest the AuthProxy token is an HMAC of:
+	// ProxyHashSHA256 (the default, and what the empty value means) or
+	// ProxyHashSHA1 for a server too old to verify anything else.
+	ProxyHash   string
 	InsecureTLS bool
 	CAFile      string
 	UserAgent   string
@@ -117,11 +129,19 @@ func New(cfg Config) (*Client, error) {
 	case AuthJWT:
 		tr = &jwtTransport{base: tr, token: cfg.Secret}
 	case AuthProxy:
+		hash, err := normaliseProxyHash(cfg.ProxyHash)
+		if err != nil {
+			return nil, err
+		}
+		// The normalised value is kept on the Config the client carries, so
+		// ProxyHash below reports the digest that is actually on the wire
+		// rather than the one the caller happened to leave empty.
+		cfg.ProxyHash = hash
 		tr = &proxyTransport{
 			base:     tr,
 			username: cfg.Username,
 			roles:    strings.Join(cfg.Roles, ","),
-			token:    proxyToken(cfg.Secret, cfg.Username),
+			token:    proxyToken(cfg.Secret, cfg.Username, hash),
 		}
 	case AuthNone, "":
 		// Nothing to add. The empty kind is the zero value, not a mistake:
@@ -190,6 +210,18 @@ func (c *Client) Host() string { return c.host }
 
 // Username is the configured user name, or "" when unauthenticated.
 func (c *Client) Username() string { return c.cfg.Username }
+
+// ProxyHash is the digest this client's proxy token is computed with, resolved
+// to a real name even when the Config left it empty. It is "" for every other
+// authentication kind. Callers that build proxy headers of their own — a
+// replication endpoint's "headers" object — read it rather than assuming the
+// default, because verifyLogin may have settled on the other one.
+func (c *Client) ProxyHash() string {
+	if c.cfg.Auth != AuthProxy {
+		return ""
+	}
+	return c.cfg.ProxyHash
+}
 
 // HTTP exposes the shared, authenticated HTTP client for the callers that need
 // the response itself rather than a decoded body (streamed attachments).

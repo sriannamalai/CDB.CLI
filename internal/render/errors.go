@@ -58,6 +58,14 @@ func plainSentence(e *couch.Error) string {
 			msg += " " + e.Hint
 		}
 		return msg
+	case e.Status == 401 && e.Auth == couch.AuthProxy:
+		// A proxy token the server did not accept is not a password problem:
+		// there is no password. Either the shared secret disagrees with the
+		// server's, or proxy_authentication_handler is not in its
+		// authentication_handlers chain — and cdb cannot tell the two apart,
+		// because both answer the same way, so the sentence names both.
+		user, host := userAndHost(e.Target)
+		return fmt.Sprintf("The server did not accept the proxy credentials for %s at %s. Check the shared secret and that proxy authentication is enabled on the server.", user, host)
 	case e.Status == 401:
 		user, host := userAndHost(e.Target)
 		return fmt.Sprintf("Login failed for %s at %s. Check the password with \"profiles\" or \"connect\".", user, host)

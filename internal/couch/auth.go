@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -192,9 +193,10 @@ func (t *jwtTransport) CloseIdleConnections() { closeIdle(t.base) }
 
 // proxyTransport presents cdb as the trusted proxy CouchDB's
 // proxy_authentication_handler expects. The token proves knowledge of the
-// server's [chttpd_auth] secret; it is computed once, at client construction,
-// because neither the secret nor the user name changes for the life of a
-// client.
+// server's shared secret; it is computed once, at client construction, because
+// neither the secret, the user name, nor the digest changes for the life of a
+// client — internal/command's verifyLogin probes the digest by building a
+// second client, not by rewriting this one.
 //
 // There is nothing to refresh and nothing to retry: a token the server will not
 // accept does not produce a 401, it produces an anonymous session (verified on
@@ -222,17 +224,42 @@ func (t *proxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // method for why it has to exist.
 func (t *proxyTransport) CloseIdleConnections() { closeIdle(t.base) }
 
-// proxyToken is the X-Auth-CouchDB-Token value: lowercase hex HMAC-SHA256 of
-// the user name, keyed by the shared secret. CouchDB 3.5's [chttpd_auth]
-// hash_algorithms defaults to "sha256, sha" and 3.0 verifies both without the
-// key existing, so SHA-256 is the one algorithm cdb needs to emit.
+// proxyToken is the X-Auth-CouchDB-Token value: lowercase hex HMAC of the user
+// name, keyed by the shared secret, under the digest hash names. An empty hash
+// means the default, SHA-256.
+//
+// Which digest the server verifies is a version question, not a preference.
+// CouchDB 3.4 added [chttpd_auth] hash_algorithms, whose default "sha256, sha"
+// accepts either; every server before it verifies HMAC-SHA1 and nothing else
+// (checked live against 3.0.1, which refuses the SHA-256 token, and 3.5.2,
+// which takes both). cdb therefore emits SHA-256 by default and keeps SHA-1
+// for the servers that need it, rather than picking one and calling the other
+// server broken.
 //
 // The result is derived from the secret and must be treated as the secret is:
 // never printed, logged, or put in an error message.
-func proxyToken(secret, username string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
+func proxyToken(secret, username, hash string) string {
+	digest := sha256.New
+	if hash == ProxyHashSHA1 {
+		digest = sha1.New
+	}
+	mac := hmac.New(digest, []byte(secret))
 	mac.Write([]byte(username))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// normaliseProxyHash fills in the default and rejects anything cdb cannot
+// compute. A hand-edited profile_hash of "md5" would otherwise fall back to
+// the default and authenticate as nobody against the very server it was pinned
+// for, which is the failure the pin exists to avoid.
+func normaliseProxyHash(hash string) (string, error) {
+	switch hash {
+	case "":
+		return ProxyHashSHA256, nil
+	case ProxyHashSHA256, ProxyHashSHA1:
+		return hash, nil
+	}
+	return "", fmt.Errorf("unknown proxy token hash %q; expected %s or %s", hash, ProxyHashSHA256, ProxyHashSHA1)
 }
 
 // proxyHeaders is the same three headers as a map, for a _replicator
