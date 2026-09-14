@@ -451,3 +451,19 @@ func TestUsersPasswdRereadsTheRevisionAfterAConflict(t *testing.T) {
 		}
 	}
 }
+
+func TestUsersPasswdAdminRefusesAnUnknownServerAdmin(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_node/_local/_config/admins", 200, `{"admin":"-pbkdf2-deadbeef,cafe,10"}`)
+	srv.JSON("PUT", "/_node/_local/_config/admins/ghost", 200, `""`)
+	s := connected(t, srv)
+	s.SetStdin(strings.NewReader("newpass\n"))
+	_, err := invoke(t, Users(), s, "passwd", "ghost", "--admin", "--password-stdin")
+	want := `Server admin "ghost" does not exist; use users add ghost --admin to create one.`
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+	if srv.Last("PUT", "/_node/_local/_config/admins/ghost") != nil {
+		t.Error("a server admin was created by passwd --admin")
+	}
+}

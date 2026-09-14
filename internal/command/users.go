@@ -426,7 +426,13 @@ func usersPasswd(ctx context.Context, s *session.Session, inv Invocation) (Resul
 	if err != nil {
 		return nil, err
 	}
-	if admin || inv.Bool("admin") {
+	// SetConfig on a key that does not exist creates it, so --admin on a name
+	// that is not in [admins] would make a typo into a full-privilege server
+	// admin. Refuse before anything is written.
+	if !admin && inv.Bool("admin") {
+		return nil, Errorf(nil, "Server admin %q does not exist; use users add %s --admin to create one.", name, name)
+	}
+	if admin {
 		password, err := passwordFor(s, inv, name)
 		if err != nil {
 			return nil, err
