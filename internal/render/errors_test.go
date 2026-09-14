@@ -360,3 +360,15 @@ func TestForbiddenElsewhereKeepsTheOldSentence(t *testing.T) {
 		t.Errorf("message = %q", got)
 	}
 }
+
+// TestUnauthorizedAdminEndpointNamesTheAction guards the arm order: CouchDB
+// refuses a non-admin at the server-level administrative endpoints with 401,
+// and "check the password" would be advice about a password that is correct.
+func TestUnauthorizedAdminEndpointNamesTheAction(t *testing.T) {
+	e := couch.NewError(401, "unauthorized", "You are not a server admin.",
+		couch.AdminOp, "listing active tasks")
+	e.Auth = couch.AuthSession
+	if got := ErrorMessage(e, false); got != "Server administrator rights are required for listing active tasks." {
+		t.Errorf("message = %q", got)
+	}
+}

@@ -55,6 +55,17 @@ func plainSentence(e *couch.Error) string {
 		return fmt.Sprintf("Could not find the server %s. Check the URL in the profile.", hostFromTarget(e.Target))
 	case e.Status == couch.StatusUnreachable && e.Name == "tls":
 		return fmt.Sprintf("The TLS connection to %s failed: %s", hostFromTarget(e.Target), e.Reason)
+	case (e.Status == 403 || e.Status == 401) && e.Op == couch.AdminOp:
+		// An administrative endpoint refused the caller. couch.AsAdmin has
+		// already put the action in Target ("changing configuration"), because
+		// "you do not have permission to read server localhost:5984" names the
+		// HTTP call rather than the thing that was asked for.
+		//
+		// This arm sits ahead of every 401 arm on purpose: CouchDB refuses a
+		// non-admin at the server-level administrative endpoints with 401, and
+		// the sentences below would tell the operator to check a password that
+		// is correct.
+		return fmt.Sprintf("Server administrator rights are required for %s.", e.Target)
 	case e.Status == 401 && e.Auth == couch.AuthNone:
 		// --anonymous, or a profile with auth = "none", sends no credentials
 		// at all. Telling the operator to check the password is advice about a
@@ -91,12 +102,6 @@ func plainSentence(e *couch.Error) string {
 	case e.Status == 401:
 		user, host := userAndHost(e.Target)
 		return fmt.Sprintf("Login failed for %s at %s. Check the password with \"profiles\" or \"connect\".", user, host)
-	case e.Status == 403 && e.Op == couch.AdminOp:
-		// An administrative endpoint refused the caller. couch.AsAdmin has
-		// already put the action in Target ("changing configuration"), because
-		// "you do not have permission to read server localhost:5984" names the
-		// HTTP call rather than the thing that was asked for.
-		return fmt.Sprintf("Server administrator rights are required for %s.", e.Target)
 	case e.Status == 403:
 		return fmt.Sprintf("You do not have permission to %s %s.", e.Op, e.Target)
 	case e.Status == 404 && (kind == "database" || kind == "documents"):

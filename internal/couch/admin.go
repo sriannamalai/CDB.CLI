@@ -151,6 +151,12 @@ func configPath(node, section, key string) string {
 // whole section. Entries come back sorted by section then key, so that every
 // caller renders them in the same order without sorting again.
 func (c *Client) Config(ctx context.Context, node, section, key string) ([]ConfigEntry, error) {
+	if section == "" && key != "" {
+		// configPath would build a section read out of the key, and the entry
+		// would come back with an empty section. Refusing is the only answer
+		// that cannot be mistaken for a value.
+		return nil, fmt.Errorf("couch: a configuration key needs a section")
+	}
 	var body json.RawMessage
 	if err := c.DoJSON(ctx, "GET", configPath(node, section, key), nil, &body, "read", "configuration of "+node); err != nil {
 		return nil, AsAdmin(err, "reading configuration")
@@ -338,5 +344,5 @@ func (c *Client) CompactView(ctx context.Context, db, ddoc string) error {
 // have changed or gone.
 func (c *Client) ViewCleanup(ctx context.Context, db string) error {
 	err := c.DoJSON(ctx, "POST", dbBase(db, "")+"/_view_cleanup", struct{}{}, nil, "write", fmt.Sprintf("database %q", db))
-	return AsAdmin(err, fmt.Sprintf("compacting %q", db))
+	return AsAdmin(err, fmt.Sprintf("cleaning up views in %q", db))
 }

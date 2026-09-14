@@ -234,9 +234,19 @@ func nameForStatus(status int) string {
 // call and not the thing the operator asked for.
 const AdminOp = "administer"
 
-// AsAdmin re-targets a 403 onto AdminOp and the action it refused. Anything
-// else — a 404, a 401, a refused socket, nil — is returned untouched, so a
-// caller can wrap a whole administrative call site without inspecting it.
+// AsAdmin re-targets an administrative refusal onto AdminOp and the action it
+// refused. Anything else — a 404, a refused socket, nil — is returned
+// untouched, so a caller can wrap a whole administrative call site without
+// inspecting it.
+//
+// Two refusals count, because CouchDB uses two. The database-level endpoints
+// (_compact, _view_cleanup) answer 403. The server-level ones — _active_tasks,
+// _node/<n>/_config, _membership, _cluster_setup — answer 401 "You are not a
+// server admin." to a login that is perfectly good, verified on 3.0.1 and
+// 3.5.2, and rendering that as "login failed, check the password" sends the
+// operator after a password that is correct. A genuine credential failure
+// says "Name or password is incorrect." instead, so the two are told apart by
+// the reason and nothing else is touched.
 //
 // The error is copied rather than mutated: the same *Error may already be held
 // by another goroutine, and the first caller's Op must not win over a later
@@ -246,10 +256,23 @@ func AsAdmin(err error, what string) error {
 		return nil
 	}
 	e, ok := AsError(err)
-	if !ok || e.Status != http.StatusForbidden {
+	if !ok || !isAdminRefusal(e) {
 		return err
 	}
 	out := *e
 	out.Op, out.Target = AdminOp, what
 	return &out
+}
+
+// isAdminRefusal reports whether a CouchDB failure is "you are not an admin"
+// rather than "who are you".
+func isAdminRefusal(e *Error) bool {
+	switch e.Status {
+	case http.StatusForbidden:
+		return true
+	case http.StatusUnauthorized:
+		return strings.Contains(strings.ToLower(e.Reason), "not a server admin")
+	default:
+		return false
+	}
 }

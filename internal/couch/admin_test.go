@@ -341,3 +341,76 @@ func TestCompactForbiddenNamesTheDatabase(t *testing.T) {
 		t.Fatalf("error = %#v", e)
 	}
 }
+
+// TestAsAdminRetargetsTheNonAdminUnauthorized covers what the live servers
+// actually answer: every server-level administrative endpoint refuses a
+// perfectly good non-admin login with 401, not 403, and only the database-level
+// compaction endpoints answer 403. A 401 that is a real credential failure must
+// still read as one.
+func TestAsAdminRetargetsTheNonAdminUnauthorized(t *testing.T) {
+	notAdmin := NewError(401, "unauthorized", "You are not a server admin.", "read", `user "bob" at localhost:5984`)
+	got, ok := AsError(AsAdmin(notAdmin, "listing active tasks"))
+	if !ok || got.Op != AdminOp || got.Target != "listing active tasks" {
+		t.Fatalf("401 became %#v", got)
+	}
+	if notAdmin.Op != "read" {
+		t.Error("AsAdmin mutated the error it was given instead of copying it")
+	}
+	badPassword := NewError(401, "unauthorized", "Name or password is incorrect.", "read", `user "bob" at localhost:5984`)
+	if AsAdmin(badPassword, "listing active tasks") != error(badPassword) {
+		t.Error("a real login failure was rewritten as an administrative refusal")
+	}
+}
+
+// TestAdminEndpointsNameTheActionOnBothRefusals asserts every endpoint group's
+// refusal, in both the shapes CouchDB uses.
+func TestAdminEndpointsNameTheActionOnBothRefusals(t *testing.T) {
+	const notAdmin = `{"error":"unauthorized","reason":"You are not a server admin."}`
+	for _, status := range []int{401, 403} {
+		srv := couchtest.New(t)
+		srv.JSON("GET", "/_active_tasks", status, notAdmin)
+		srv.JSON("GET", "/_node/_local/_config", status, notAdmin)
+		srv.JSON("PUT", "/_node/_local/_config/log/level", status, notAdmin)
+		srv.JSON("GET", "/_membership", status, notAdmin)
+		srv.JSON("GET", "/_cluster_setup", status, notAdmin)
+		srv.JSON("POST", "/_cluster_setup", status, notAdmin)
+		srv.JSON("POST", "/movies/_compact", status, notAdmin)
+		srv.JSON("POST", "/movies/_compact/by_year", status, notAdmin)
+		srv.JSON("POST", "/movies/_view_cleanup", status, notAdmin)
+		c := mustClient(t, srv)
+		ctx := context.Background()
+		for _, tc := range []struct {
+			name string
+			call func() error
+			want string
+		}{
+			{"active tasks", func() error { _, err := c.ActiveTasks(ctx); return err }, "listing active tasks"},
+			{"config read", func() error { _, err := c.Config(ctx, "_local", "", ""); return err }, "reading configuration"},
+			{"config write", func() error { _, err := c.SetConfig(ctx, "_local", "log", "level", "debug"); return err }, "changing configuration"},
+			{"membership", func() error { _, err := c.Membership(ctx); return err }, "reading cluster membership"},
+			{"cluster setup", func() error { _, err := c.ClusterSetupState(ctx); return err }, "reading cluster setup"},
+			{"enable single node", func() error {
+				return c.EnableSingleNode(ctx, SingleNodeSetup{Username: "admin", Password: "password", BindAddress: "0.0.0.0", Port: 5984})
+			}, "cluster setup"},
+			{"compact", func() error { return c.Compact(ctx, "movies") }, `compacting "movies"`},
+			{"compact view", func() error { return c.CompactView(ctx, "movies", "by_year") }, `compacting "movies"`},
+			{"view cleanup", func() error { return c.ViewCleanup(ctx, "movies") }, `cleaning up views in "movies"`},
+		} {
+			e, ok := AsError(tc.call())
+			if !ok || e.Op != AdminOp || e.Target != tc.want {
+				t.Errorf("status %d, %s: error = %#v, want op %q target %q", status, tc.name, e, AdminOp, tc.want)
+			}
+		}
+	}
+}
+
+func TestConfigRefusesAKeyWithoutASection(t *testing.T) {
+	srv := couchtest.New(t)
+	c := mustClient(t, srv)
+	if _, err := c.Config(context.Background(), "_local", "", "level"); err == nil {
+		t.Fatal("a key with no section was accepted; it would read a section named \"level\"")
+	}
+	if len(srv.Requests()) != 0 {
+		t.Errorf("a request was sent anyway: %v", srv.Requests())
+	}
+}
