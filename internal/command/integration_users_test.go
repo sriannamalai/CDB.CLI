@@ -6,10 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
-	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
 
 // The live tests in this file open their session with integrationSession,
@@ -29,9 +27,18 @@ func TestUsersRoundTripAgainstALiveServer(t *testing.T) {
 	s.Prefs.Yes = true
 	const name = "t4-user"
 	t.Cleanup(func() {
+		// A leftover user changes what every later test sees, so the removal
+		// is checked rather than attempted: this has to run even when the test
+		// above has already failed.
 		rev, err := s.Client.GetRev(context.Background(), usersDB, userDocID(name))
-		if err == nil {
-			_, _ = s.Client.DeleteDocument(context.Background(), usersDB, userDocID(name), rev)
+		if err != nil {
+			if e, ok := couch.AsError(err); !ok || e.Status != 404 {
+				t.Errorf("looking up the test user %q to remove it: %v", name, err)
+			}
+			return
+		}
+		if _, err := s.Client.DeleteDocument(context.Background(), usersDB, userDocID(name), rev); err != nil {
+			t.Errorf("removing the test user %q left it behind: %v", name, err)
 		}
 	})
 
@@ -101,31 +108,6 @@ func loginWorks(t *testing.T, name, password string) error {
 	return nil
 }
 
-// waitForAdminHash waits until CouchDB has hashed a freshly written [admins]
-// password, which it does after the PUT has already returned: for about a
-// hundred milliseconds the section still holds the plaintext, and every login
-// with it is refused (measured against 3.5.2 and 3.0.1 on 2026-09-14). Each
-// write is waited for, not just the last one, because two writes to the same
-// key in that window race: the hashing of the first can land after the second
-// value and put the first password back. Retrying the login instead of waiting
-// would be worse than useless — CouchDB locks an account out after a run of
-// failures. The value itself is never printed, only whether it starts with the
-// "-" that marks every CouchDB password hash.
-func waitForAdminHash(t *testing.T, s *session.Session, name string) {
-	t.Helper()
-	for i := 0; i < 50; i++ {
-		entries, err := s.Client.Config(context.Background(), defaultNode, "admins", name)
-		if err != nil {
-			t.Fatalf("reading the [admins] section: %v", err)
-		}
-		if len(entries) == 1 && strings.HasPrefix(entries[0].Value, "-") {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("CouchDB never hashed the password of server admin %q", name)
-}
-
 // TestServerAdminRoundTripAgainstALiveServer adds a second server admin,
 // changes its password and removes it again, which is the [admins] half of §5.
 func TestServerAdminRoundTripAgainstALiveServer(t *testing.T) {
@@ -150,7 +132,17 @@ func TestServerAdminRoundTripAgainstALiveServer(t *testing.T) {
 	if _, err := invoke(t, Users(), s, "add", name, "--admin", "--password-stdin"); err != nil {
 		t.Fatal(err)
 	}
-	waitForAdminHash(t, s, name)
+	// users add --admin returns only once CouchDB has hashed what it was given:
+	// until then the section holds the plaintext and every login with it is
+	// refused. The value is tested for the "-" that starts every CouchDB
+	// password hash and is never printed.
+	entries, err := s.Client.Config(context.Background(), defaultNode, "admins", name)
+	if err != nil {
+		t.Fatalf("reading the [admins] section: %v", err)
+	}
+	if len(entries) != 1 || !strings.HasPrefix(entries[0].Value, "-") {
+		t.Fatal("add --admin returned while the section still held the plaintext")
+	}
 	list, err := invoke(t, Users(), s)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +164,6 @@ func TestServerAdminRoundTripAgainstALiveServer(t *testing.T) {
 	if _, err := invoke(t, Users(), s, "passwd", name, "--password-stdin"); err != nil {
 		t.Fatal(err)
 	}
-	waitForAdminHash(t, s, name)
 	if err := loginWorks(t, name, "secondpass"); err != nil {
 		t.Fatalf("the new admin password was refused: %v", err)
 	}

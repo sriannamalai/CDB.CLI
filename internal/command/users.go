@@ -3,8 +3,11 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
@@ -112,6 +115,47 @@ func serverAdmins(ctx context.Context, s *session.Session) ([]string, error) {
 	return names, nil
 }
 
+// adminHashPoll is how often the [admins] section is re-read while waiting for
+// a password to be hashed, and adminHashWait is how long that wait lasts.
+const (
+	adminHashPoll = 100 * time.Millisecond
+	adminHashWait = 2 * time.Second
+)
+
+// waitForAdminHash waits for CouchDB to hash a password just written to the
+// [admins] section. The PUT returns before the hashing runs: for the next
+// fraction of a second the section still holds the plaintext, and every login
+// with it is refused, so reporting success at once hands the operator a
+// credential that does not work yet — and the natural response, retrying the
+// login, is the worst one, because CouchDB locks an account out after a run of
+// failures. Two writes inside that window are worse still: the hashing of the
+// first can land after the second value and put the first password back.
+//
+// The wait is bounded, and running out is not a failure: the write did land,
+// and CouchDB 3.0 hashes synchronously, so there is nothing to wait for there.
+// The value is only tested for the "-" that marks every CouchDB password hash;
+// it is never returned, printed or logged.
+func waitForAdminHash(ctx context.Context, s *session.Session, name string) {
+	deadline := time.Now().Add(adminHashWait)
+	for {
+		entries, err := s.Client.Config(ctx, defaultNode, "admins", name)
+		if err != nil {
+			return
+		}
+		if len(entries) == 1 && strings.HasPrefix(entries[0].Value, "-") {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(adminHashPoll):
+		}
+	}
+}
+
 // usersList prints every account: the _users documents whose type is "user",
 // and the server admins from the configuration.
 func usersList(ctx context.Context, s *session.Session) (Result, error) {
@@ -191,6 +235,21 @@ func usersShow(ctx context.Context, s *session.Session, name string) (Result, er
 	if name == "" {
 		return nil, Usagef("users", "usage: users show <name>")
 	}
+	admin, err := isServerAdmin(ctx, s, name)
+	if err != nil {
+		return nil, err
+	}
+	if admin {
+		// A server admin has no _users document to read: everything cdb can
+		// say about one is in the [admins] key, whose value is a hash and so
+		// is never shown. The name is the one users list prints, so show
+		// answers for it rather than reporting a missing document.
+		rows := Rows{Columns: []Column{{Title: "field"}, {Title: "value"}}}
+		for _, kv := range [][2]string{{"name", name}, {"kind", "server admin"}, {"roles", "_admin"}, {"password", "set"}} {
+			rows.Items = append(rows.Items, Row{Cells: []string{kv[0], kv[1]}, JSON: jsonObject("field", kv[0], "value", kv[1])})
+		}
+		return rows, nil
+	}
 	raw, _, err := s.Client.GetDocument(ctx, usersDB, userDocID(name), couch.GetOptions{})
 	if err != nil {
 		return nil, couch.AsAdmin(err, "managing users")
@@ -230,12 +289,16 @@ func passwordFor(s *session.Session, inv Invocation, name string) (string, error
 	if inv.Bool("password-stdin") {
 		line, err := s.Reader().ReadString('\n')
 		line = strings.TrimRight(line, "\r\n")
+		// A short read that still produced a line is a file with no trailing
+		// newline, which is fine. A read that broke is not: treating a partial
+		// line from a failed device as the password would set a password
+		// nobody typed.
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", Errorf(err, "Reading the password from standard input failed: %v", err)
+		}
 		if line == "" {
 			return "", Usagef("users", "no password arrived on standard input")
 		}
-		// A short read that still produced a line is a file with no trailing
-		// newline, which is fine; only an empty line is a failure.
-		_ = err
 		return line, nil
 	}
 	if !s.Prefs.Interactive {
@@ -294,6 +357,7 @@ func usersAdd(ctx context.Context, s *session.Session, inv Invocation) (Result, 
 		if _, err := s.Client.SetConfig(ctx, defaultNode, "admins", name, password); err != nil {
 			return nil, couch.AsAdmin(err, "managing users")
 		}
+		waitForAdminHash(ctx, s, name)
 		return Message{Text: fmt.Sprintf("Created server admin %q.", name)}, nil
 	}
 
@@ -370,37 +434,60 @@ func usersPasswd(ctx context.Context, s *session.Session, inv Invocation) (Resul
 		if _, err := s.Client.SetConfig(ctx, defaultNode, "admins", name, password); err != nil {
 			return nil, couch.AsAdmin(err, "managing users")
 		}
+		waitForAdminHash(ctx, s, name)
 		return Message{Text: fmt.Sprintf("Changed the password of server admin %q.", name)}, nil
 	}
 
+	// The document is read first so that an unknown name is refused before the
+	// operator types anything.
 	raw, rev, err := s.Client.GetDocument(ctx, usersDB, userDocID(name), couch.GetOptions{})
 	if err != nil {
 		return nil, couch.AsAdmin(err, "managing users")
 	}
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &members); err != nil {
-		return nil, err
-	}
 	password, err := passwordFor(s, inv, name)
 	if err != nil {
 		return nil, err
+	}
+	err = putUserPassword(ctx, s, name, raw, rev, password)
+	if e, ok := couch.AsError(err); ok && e.Status == 409 {
+		// Someone edited the document while the password was being typed, so
+		// the revision read before the prompt is stale. Re-read and write once
+		// more, onto their version rather than over it.
+		raw, rev, err = s.Client.GetDocument(ctx, usersDB, userDocID(name), couch.GetOptions{})
+		if err != nil {
+			return nil, couch.AsAdmin(err, "managing users")
+		}
+		err = putUserPassword(ctx, s, name, raw, rev, password)
+	}
+	if err != nil {
+		return nil, couch.AsAdmin(err, "managing users")
+	}
+	return Message{Text: fmt.Sprintf("Changed the password of %q.", name)}, nil
+}
+
+// putUserPassword writes one user document back with a new password, without
+// the hash members CouchDB wrote for the old one. Everything else in the
+// document is kept, so a role an operator added elsewhere survives a password
+// change.
+func putUserPassword(ctx context.Context, s *session.Session, name string, raw json.RawMessage, rev, password string) error {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return err
 	}
 	for _, f := range hashFields {
 		delete(members, f)
 	}
 	quoted, err := json.Marshal(password)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	members["password"] = quoted
 	doc, err := json.Marshal(members)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if _, err := s.Client.PutDocument(ctx, usersDB, userDocID(name), doc, rev); err != nil {
-		return nil, couch.AsAdmin(err, "managing users")
-	}
-	return Message{Text: fmt.Sprintf("Changed the password of %q.", name)}, nil
+	_, err = s.Client.PutDocument(ctx, usersDB, userDocID(name), doc, rev)
+	return err
 }
 
 // usersRemove deletes an account, after refusing to delete the one the session

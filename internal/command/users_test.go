@@ -83,6 +83,7 @@ func TestUsersListWithoutTheUsersDatabaseSaysSo(t *testing.T) {
 
 func TestUsersShowNeverPrintsAHash(t *testing.T) {
 	srv := couchtest.New(t)
+	srv.JSON("GET", "/_node/_local/_config/admins", 200, `{}`)
 	srv.JSON("GET", "/_users/org.couchdb.user:alice", 200,
 		`{"_id":"org.couchdb.user:alice","_rev":"1-b","name":"alice","type":"user",
 		  "roles":["editor"],"password_scheme":"pbkdf2","iterations":10,
@@ -319,5 +320,134 @@ func TestUsersPasswordNeedsATerminalOrStdin(t *testing.T) {
 	var ue *UsageError
 	if !errors.As(err, &ue) || !strings.Contains(ue.Reason, "--password-stdin") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// failingStdin is a standard input that breaks rather than ending. Reading a
+// password from it must be reported, not silently treated as no password.
+type failingStdin struct{}
+
+func (failingStdin) Read([]byte) (int, error) { return 0, errors.New("input device is not a stream") }
+
+func TestUsersAddAdminWaitsForCouchDBToHashThePassword(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_node/_local/_config/admins", 200, `{}`)
+	srv.JSON("PUT", "/_node/_local/_config/admins/ops", 200, `""`)
+	// CouchDB stores the plaintext and hashes it a moment later; until it has,
+	// the new password is refused. The command must not report success while
+	// the section still holds what was typed.
+	srv.JSONSeq("GET", "/_node/_local/_config/admins/ops", 200,
+		`"hunter2"`, `"hunter2"`, `"-pbkdf2:sha256-deadbeef,cafe,10"`)
+	s := connected(t, srv)
+	s.Prefs.Interactive = true
+	s.SetStdin(strings.NewReader("hunter2\nhunter2\n"))
+
+	if _, err := invoke(t, Users(), s, "add", "ops", "--admin"); err != nil {
+		t.Fatal(err)
+	}
+	polls := 0
+	for _, r := range srv.Requests() {
+		if r.Method == "GET" && r.Path == "/_node/_local/_config/admins/ops" {
+			polls++
+		}
+	}
+	// Three: the two answers that were still the plaintext, and the hashed one
+	// that let the command return. Fewer means it returned too early.
+	if polls < 3 {
+		t.Errorf("the key was read %d times; the command returned before the password was hashed", polls)
+	}
+}
+
+func TestUsersShowOnAServerAdmin(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_node/_local/_config/admins", 200, `{"admin":"-pbkdf2-deadbeef,cafe,10"}`)
+	s := connected(t, srv)
+	res, err := invoke(t, Users(), s, "show", "admin")
+	if err != nil {
+		t.Fatalf("error = %v; a name that users list prints must be one users show can print", err)
+	}
+	fields := map[string]string{}
+	all := ""
+	for _, item := range res.(Rows).Items {
+		fields[item.Cells[0]] = item.Cells[1]
+		all += strings.Join(item.Cells, " ") + string(item.JSON)
+	}
+	if fields["name"] != "admin" || fields["kind"] != "server admin" || fields["roles"] != "_admin" {
+		t.Errorf("fields = %v", fields)
+	}
+	if fields["password"] != "set" {
+		t.Errorf("password field = %q", fields["password"])
+	}
+	if strings.Contains(all, "deadbeef") || strings.Contains(all, "cafe") {
+		t.Fatal("show printed the hash or the salt")
+	}
+	if srv.Last("GET", "/_users/org.couchdb.user:admin") != nil {
+		t.Error("a server admin was looked up in _users")
+	}
+}
+
+func TestUsersPasswordReportsAStdinReadFailure(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_node/_local/_config/admins", 200, `{}`)
+	srv.JSON("GET", "/_users/org.couchdb.user:alice", 200,
+		`{"_id":"org.couchdb.user:alice","_rev":"3-c","name":"alice","type":"user","roles":[]}`)
+	s := connected(t, srv)
+	s.SetStdin(failingStdin{})
+	_, err := invoke(t, Users(), s, "passwd", "alice", "--password-stdin")
+	if err == nil {
+		t.Fatal("a broken standard input was accepted as a password")
+	}
+	var ue *UsageError
+	if errors.As(err, &ue) {
+		t.Errorf("error = %v; a device that failed is not the operator forgetting to pipe a password", err)
+	}
+	if !strings.Contains(err.Error(), "input device is not a stream") {
+		t.Errorf("error = %v; it does not say what went wrong", err)
+	}
+	if srv.Last("PUT", "/_users/org.couchdb.user:alice") != nil {
+		t.Error("a password was written even though none was read")
+	}
+}
+
+func TestUsersPasswdRereadsTheRevisionAfterAConflict(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_node/_local/_config/admins", 200, `{}`)
+	// The document is edited while the operator is typing: the revision read
+	// before the prompt is stale by the time the write goes out.
+	srv.JSONSeq("GET", "/_users/org.couchdb.user:alice", 200,
+		`{"_id":"org.couchdb.user:alice","_rev":"3-c","name":"alice","type":"user","roles":["editor"]}`,
+		`{"_id":"org.couchdb.user:alice","_rev":"4-d","name":"alice","type":"user","roles":["editor","reader"]}`)
+	var puts int
+	srv.On("PUT", "/_users/org.couchdb.user:alice", func(w http.ResponseWriter, r *http.Request) {
+		puts++
+		w.Header().Set("Content-Type", "application/json")
+		if puts == 1 {
+			w.WriteHeader(409)
+			_, _ = w.Write([]byte(`{"error":"conflict","reason":"Document update conflict."}`))
+			return
+		}
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"ok":true,"id":"org.couchdb.user:alice","rev":"5-e"}`))
+	})
+	s := connected(t, srv)
+	s.SetStdin(strings.NewReader("newpass\n"))
+	res, err := invoke(t, Users(), s, "passwd", "alice", "--password-stdin")
+	if err != nil {
+		t.Fatalf("error = %v; a conflict during the prompt must be retried once", err)
+	}
+	if msg := res.(Message).Text; msg != `Changed the password of "alice".` {
+		t.Errorf("message = %q", msg)
+	}
+	body := string(srv.Last("PUT", "/_users/org.couchdb.user:alice").Body)
+	if !strings.Contains(body, `"_rev":"4-d"`) || !strings.Contains(body, `"password":"newpass"`) {
+		t.Errorf("the retry wrote %s", body)
+	}
+	if !strings.Contains(body, `"roles":["editor","reader"]`) {
+		t.Errorf("the retry lost the concurrent edit: %s", body)
+	}
+	for _, gone := range hashFields {
+		if strings.Contains(body, gone) {
+			t.Errorf("the retry left %s in %s", gone, body)
+		}
 	}
 }
