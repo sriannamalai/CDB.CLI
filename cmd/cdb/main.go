@@ -41,9 +41,45 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Building a shell is what installs the live "run", "set" and "unset"
+	// commands in the registry. The shell itself is started only above; here
+	// it is the line runner "cdb run" and "cdb < file" need, and it touches no
+	// terminal.
+	sh, err := shell.New(reg, s, shell.Config{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(cli.ExitError)
+	}
+	if runsStdinAsScript(os.Args, render.IsTerminalReader(os.Stdin)) {
+		code := runStdinScript(ctx, sh, s)
+		_ = s.Detach()
+		os.Exit(code)
+	}
 	code := cli.Execute(ctx, reg, s, build, os.Args[1:])
 	_ = s.Detach()
 	os.Exit(code)
+}
+
+// runsStdinAsScript reports whether this invocation should read standard input
+// as a script. That is "cdb < file": no arguments at all, and a standard input
+// that is not a terminal. Every other non-interactive invocation is unchanged,
+// including "cdb > out" with a terminal on standard input, which still prints
+// the root help.
+func runsStdinAsScript(args []string, stdinIsTerminal bool) bool {
+	return len(args) == 1 && !stdinIsTerminal
+}
+
+// runStdinScript runs standard input as a script. The file name in its
+// messages is "stdin", because that is all the process knows about where the
+// lines came from.
+func runStdinScript(ctx context.Context, sh *shell.Shell, s *session.Session) int {
+	s.Prefs.Interactive = false
+	config.ApplyOutputPrefs(s)
+	// RunScript has already written "<name>:<line>: <sentence>" to stderr.
+	if err := sh.RunScript(ctx, os.Stdin, "stdin", nil, false); err != nil {
+		return cli.ExitCode(err)
+	}
+	return cli.ExitOK
 }
 
 // runShell loads config, opens the shell, and returns the exit code.

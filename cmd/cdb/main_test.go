@@ -71,3 +71,21 @@ func TestNotConnectedMessage(t *testing.T) {
 		}
 	})
 }
+
+func TestRunsStdinAsScript(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		args       []string
+		isTerminal bool
+		want       bool
+	}{
+		{"cdb < file", []string{"cdb"}, false, true},
+		{"cdb on a terminal", []string{"cdb"}, true, false},
+		{"cdb ls", []string{"cdb", "ls"}, false, false},
+		{"cdb run x", []string{"cdb", "run", "x.cdb"}, false, false},
+	} {
+		if got := runsStdinAsScript(tc.args, tc.isTerminal); got != tc.want {
+			t.Errorf("%s: runsStdinAsScript = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
