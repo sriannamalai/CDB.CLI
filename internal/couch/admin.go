@@ -305,9 +305,10 @@ type SingleNodeSetup struct {
 }
 
 // EnableSingleNode posts action=enable_single_node. CouchDB sets [cluster] n to
-// 1, binds the given address, and creates the system databases (_users,
-// _replicator, _global_changes), which is what turns a fresh node into a
-// working single-node install.
+// 1, binds the given address, and creates the system databases, which is what
+// turns a fresh node into a working single-node install. On 3.5 those are
+// _users and _replicator; _global_changes is not among them (checked against
+// a stock couchdb:3.5 container on 2026-09-14).
 //
 // https://docs.couchdb.org/en/stable/api/server/common.html#cluster-setup
 func (c *Client) EnableSingleNode(ctx context.Context, req SingleNodeSetup) error {

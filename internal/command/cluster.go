@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/spf13/pflag"
@@ -44,9 +45,8 @@ server knows about. A server whose setup endpoint is switched off reports the
 state as unavailable; everything else still works.
 
 "cluster setup --single-node" turns a fresh node into a working single-node
-install: CouchDB sets [cluster] n to 1 and creates the _users, _replicator and
-_global_changes databases. A node that is already set up is reported and left
-alone. Multi-node setup — enable_cluster, add_node, finish_cluster — is not
+install: CouchDB sets [cluster] n to 1 and creates the _users and _replicator
+databases. A node that is already set up is reported and left alone. Multi-node setup — enable_cluster, add_node, finish_cluster — is not
 supported by cdb; use Fauxton or curl for that.`
 
 // Cluster returns the cluster command.
@@ -88,6 +88,8 @@ Single-node setup finished; state is single_node_enabled.`,
 			switch sub {
 			case "status":
 				return clusterStatus(ctx, s, node)
+			case "setup":
+				return clusterSetup(ctx, s, inv)
 			default:
 				return nil, Usagef("cluster", "unknown subcommand %q; expected status or setup", sub)
 			}
@@ -155,4 +157,73 @@ func clusterShape(ctx context.Context, s *session.Session, node string) (map[str
 		}
 	}
 	return shape, nil
+}
+
+// clusterSetup configures this server as a single node. It reads the state
+// first, because a node that is already set up must not be set up again and
+// because a state nobody has seen before is a reason to stop rather than to
+// post and hope.
+func clusterSetup(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+	if !inv.Bool("single-node") {
+		return nil, Usagef("cluster", "cluster setup needs --single-node; cdb does not offer multi-node setup (enable_cluster, add_node, finish_cluster)")
+	}
+	state, err := s.Client.ClusterSetupState(ctx)
+	if err != nil {
+		if e, ok := couch.AsError(err); ok && e.Status == 404 {
+			return nil, Errorf(err, "This server has no _cluster_setup endpoint, so cdb cannot configure it.")
+		}
+		return nil, err
+	}
+	if setupDoneStates[state] {
+		return Message{Text: fmt.Sprintf("This node is already set up; its state is %s.", state)}, nil
+	}
+	if !setupStartStates[state] {
+		return nil, Errorf(nil, "This node reports the setup state %q, which cdb does not know how to configure. \"cluster status\" shows what the server says.", state)
+	}
+
+	username, password, ok := s.Client.SessionCredentials()
+	if !ok {
+		// A JWT, proxy or IAM connection has no CouchDB password, and neither
+		// has an anonymous one. The endpoint takes a user name and a password,
+		// so they have to be asked for.
+		if !s.Prefs.Interactive {
+			return nil, Usagef("cluster", "this connection has no user name and password for the setup endpoint; connect with --auth session, or run this on a terminal so cdb can ask")
+		}
+		username, err = askLine(s, "Server admin user name", s.Client.Username())
+		if err != nil {
+			return nil, err
+		}
+		if username == "" {
+			return nil, Errorf(nil, "A user name is required to configure a node.")
+		}
+		password, err = readSecret(s, "Password for "+username)
+		if err != nil {
+			return nil, err
+		}
+		if password == "" {
+			return nil, Errorf(nil, "A password is required to configure a node.")
+		}
+	}
+
+	if err := Confirm(ctx, s, fmt.Sprintf("Configure %s as a single node?", s.Client.Host())); err != nil {
+		return nil, err
+	}
+	bind := inv.String("bind-address")
+	if bind == "" {
+		bind = defaultBindAddress
+	}
+	port := inv.Int("port")
+	if port == 0 {
+		port = defaultPort
+	}
+	if err := s.Client.EnableSingleNode(ctx, couch.SingleNodeSetup{
+		Username: username, Password: password, BindAddress: bind, Port: port,
+	}); err != nil {
+		return nil, err
+	}
+	after, err := s.Client.ClusterSetupState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return Message{Text: fmt.Sprintf("Single-node setup finished; state is %s.", after)}, nil
 }
