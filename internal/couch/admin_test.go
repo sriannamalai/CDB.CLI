@@ -481,3 +481,34 @@ func TestSessionCredentialsOnlyAnswerForASessionLogin(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionCredentialsAcceptAURLThatCarriesBoth(t *testing.T) {
+	// "cdb --url http://admin:password@host/" is kept as AuthNone with Basic
+	// credentials, and those are the connected session's credentials just as
+	// much as a session login's are. connect leaves the password on the URL,
+	// so both shapes have to answer.
+	srv := couchtest.New(t)
+	withUserinfo := strings.Replace(srv.URL(), "http://", "http://admin:password@", 1)
+	for _, cfg := range []Config{
+		{URL: srv.URL(), Auth: AuthNone, Username: "admin", Secret: "password"},
+		{URL: withUserinfo, Auth: AuthNone, Username: "admin"},
+		{URL: withUserinfo, Auth: AuthNone},
+	} {
+		c, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		user, pass, ok := c.SessionCredentials()
+		if !ok || user != "admin" || pass != "password" {
+			t.Errorf("url credentials = %q, %t (the password is deliberately not printed)", user, ok)
+		}
+	}
+	// A URL that names a user and no password still has nothing to offer.
+	c, err := New(Config{URL: strings.Replace(srv.URL(), "http://", "http://alice@", 1), Auth: AuthNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := c.SessionCredentials(); ok {
+		t.Error("a URL with no password handed out credentials")
+	}
+}

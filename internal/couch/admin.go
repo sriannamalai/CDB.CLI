@@ -415,9 +415,11 @@ func (c *Client) SetSecurity(ctx context.Context, db string, sec Security) error
 }
 
 // SessionCredentials are the user name and password this client logs in with,
-// and ok reports whether it has any. Only a session login has a password at
-// all: a JWT client has a token, a proxy client has a shared secret, an IAM
-// client has an API key, and none of the three is a CouchDB password.
+// and ok reports whether it has any. Two connections have one: a session login,
+// and a URL that carried both halves ("http://user:pass@host"), which is kept
+// as AuthNone with Basic credentials. A JWT client has a token, a proxy client
+// has a shared secret, an IAM client has an API key, and none of the three is a
+// CouchDB password.
 //
 // It exists for one caller: "cluster setup --single-node" has to put a user
 // name and password in the request body, because that is what the endpoint
@@ -426,8 +428,29 @@ func (c *Client) SetSecurity(ctx context.Context, db string, sec Security) error
 // must not be printed, logged, stored, or put in an error message — the same
 // rule that governs Config.Secret, which is where it comes from.
 func (c *Client) SessionCredentials() (string, string, bool) {
-	if c.cfg.Auth != AuthSession || c.cfg.Username == "" || c.cfg.Secret == "" {
-		return "", "", false
+	switch c.cfg.Auth {
+	case AuthSession:
+		if c.cfg.Username == "" || c.cfg.Secret == "" {
+			return "", "", false
+		}
+		return c.cfg.Username, c.cfg.Secret, true
+	case AuthNone:
+		user, secret := c.cfg.Username, c.cfg.Secret
+		if secret == "" {
+			// The password of a "http://user:pass@host" URL never reaches
+			// Config.Secret: connect keeps it on the URL, where net/http turns
+			// it into the Basic header. Read it back off base rather than
+			// calling the connection credential-free.
+			if u, err := url.Parse(c.base); err == nil && u.User != nil {
+				if p, ok := u.User.Password(); ok {
+					user, secret = u.User.Username(), p
+				}
+			}
+		}
+		if user == "" || secret == "" {
+			return "", "", false
+		}
+		return user, secret, true
 	}
-	return c.cfg.Username, c.cfg.Secret, true
+	return "", "", false
 }

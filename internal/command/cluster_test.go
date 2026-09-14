@@ -194,6 +194,34 @@ func TestClusterSetupPromptsWhenTheSessionHasNoPassword(t *testing.T) {
 	}
 }
 
+func TestClusterSetupTakesTheCredentialsOutOfTheURL(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSONSeq("GET", "/_cluster_setup", 200,
+		`{"state":"cluster_disabled"}`, `{"state":"single_node_enabled"}`)
+	srv.JSON("POST", "/_cluster_setup", 201, `{"ok":true}`)
+	// "--url http://admin:password@host/" is an AuthNone client with Basic
+	// credentials; nothing should be asked for.
+	c, err := couch.New(couch.Config{URL: srv.URL(), Auth: couch.AuthNone, Username: "admin", Secret: "password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	s.Attach(c, "test")
+	t.Cleanup(func() { _ = s.Detach() })
+	s.Prefs.Yes = true
+
+	if _, err := invoke(t, Cluster(), s, "setup", "--single-node"); err != nil {
+		t.Fatal(err)
+	}
+	body := string(srv.Last("POST", "/_cluster_setup").Body)
+	if !strings.Contains(body, `"username":"admin"`) || !strings.Contains(body, `"password":"password"`) {
+		t.Errorf("body = %s", body)
+	}
+	if out := s.Stdout.(*bytes.Buffer).String(); strings.Contains(out, "password") {
+		t.Fatal("the password reached the output")
+	}
+}
+
 // sessionAuthenticated returns a session whose client logs in with a user name
 // and password, which is the only kind "cluster setup" can take credentials
 // from without asking. connected() (navigate_test.go) builds an AuthNone
