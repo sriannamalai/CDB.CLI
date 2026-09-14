@@ -341,3 +341,22 @@ func TestErrorMessageOmitsTheBracketWhenThereIsNoStatus(t *testing.T) {
 		t.Errorf("verbose = %q, want the sentence alone", got)
 	}
 }
+
+func TestForbiddenAdminEndpointNamesTheAction(t *testing.T) {
+	e := couch.NewError(403, "unauthorized", "You are not a server admin.",
+		couch.AdminOp, "changing configuration")
+	if got := ErrorMessage(e, false); got != "Server administrator rights are required for changing configuration." {
+		t.Errorf("message = %q", got)
+	}
+	want := "Server administrator rights are required for changing configuration. [status 403 unauthorized: You are not a server admin.]"
+	if got := ErrorMessage(e, true); got != want {
+		t.Errorf("verbose message = %q", got)
+	}
+}
+
+func TestForbiddenElsewhereKeepsTheOldSentence(t *testing.T) {
+	e := couch.NewError(403, "forbidden", "no", "read", `document "d" in "mydb"`)
+	if got := ErrorMessage(e, false); got != `You do not have permission to read document "d" in "mydb".` {
+		t.Errorf("message = %q", got)
+	}
+}

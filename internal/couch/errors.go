@@ -226,3 +226,30 @@ func nameForStatus(status int) string {
 	}
 	return ""
 }
+
+// AdminOp is the Error.Op every administrative endpoint's 403 carries.
+// internal/render matches it to say which administrative action was refused —
+// "listing active tasks", "changing configuration" — instead of the generic
+// "you do not have permission to read server host:port", which names the HTTP
+// call and not the thing the operator asked for.
+const AdminOp = "administer"
+
+// AsAdmin re-targets a 403 onto AdminOp and the action it refused. Anything
+// else — a 404, a 401, a refused socket, nil — is returned untouched, so a
+// caller can wrap a whole administrative call site without inspecting it.
+//
+// The error is copied rather than mutated: the same *Error may already be held
+// by another goroutine, and the first caller's Op must not win over a later
+// one's. This is the same discipline Wrap follows.
+func AsAdmin(err error, what string) error {
+	if err == nil {
+		return nil
+	}
+	e, ok := AsError(err)
+	if !ok || e.Status != http.StatusForbidden {
+		return err
+	}
+	out := *e
+	out.Op, out.Target = AdminOp, what
+	return &out
+}

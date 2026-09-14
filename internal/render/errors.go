@@ -91,6 +91,12 @@ func plainSentence(e *couch.Error) string {
 	case e.Status == 401:
 		user, host := userAndHost(e.Target)
 		return fmt.Sprintf("Login failed for %s at %s. Check the password with \"profiles\" or \"connect\".", user, host)
+	case e.Status == 403 && e.Op == couch.AdminOp:
+		// An administrative endpoint refused the caller. couch.AsAdmin has
+		// already put the action in Target ("changing configuration"), because
+		// "you do not have permission to read server localhost:5984" names the
+		// HTTP call rather than the thing that was asked for.
+		return fmt.Sprintf("Server administrator rights are required for %s.", e.Target)
 	case e.Status == 403:
 		return fmt.Sprintf("You do not have permission to %s %s.", e.Op, e.Target)
 	case e.Status == 404 && (kind == "database" || kind == "documents"):
