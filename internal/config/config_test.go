@@ -167,3 +167,20 @@ func TestValidAuthKind(t *testing.T) {
 		}
 	}
 }
+
+func TestProfileIAMURLRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c := Defaults()
+	c.SetProfile(Profile{Name: "cloudant", URL: "https://x.cloudantnosqldb.appdomain.cloud", Auth: "iam", IAMURL: "https://iam.test.invalid/identity/token"})
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := back.Profile("cloudant")
+	if p.Auth != "iam" || p.IAMURL != "https://iam.test.invalid/identity/token" {
+		t.Errorf("profile = %#v", p)
+	}
+}

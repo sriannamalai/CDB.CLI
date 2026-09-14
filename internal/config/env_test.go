@@ -86,3 +86,47 @@ func TestApplyKeepsProxyAndIAMKindsOverCDBPassword(t *testing.T) {
 		}
 	}
 }
+
+func TestIAMEnvironmentSelectsTheKindAndTheSecret(t *testing.T) {
+	lookup := func(k string) (string, bool) {
+		v, ok := map[string]string{
+			"CDB_IAM_API_KEY": "an-api-key",
+			"CDB_IAM_URL":     "https://iam.test.invalid/identity/token",
+			"CDB_PASSWORD":    "hunter2",
+			"CDB_TOKEN":       "eyJ...",
+		}[k]
+		return v, ok
+	}
+	e := LoadEnv(lookup)
+	if e.IAMKey != "an-api-key" || e.IAMURL != "https://iam.test.invalid/identity/token" {
+		t.Fatalf("env = %#v", e)
+	}
+	got := e.Apply(Profile{Name: "c", URL: "https://x.cloudantnosqldb.appdomain.cloud"})
+	if got.Auth != "iam" {
+		t.Errorf("auth = %q, want iam: CDB_IAM_API_KEY beats CDB_TOKEN and CDB_PASSWORD", got.Auth)
+	}
+	if got.IAMURL != "https://iam.test.invalid/identity/token" {
+		t.Errorf("iam_url = %q", got.IAMURL)
+	}
+	secret, ok := e.Secret()
+	if !ok || secret != "an-api-key" {
+		t.Errorf("Secret() = %q, %v; want the API key", secret, ok)
+	}
+}
+
+// Spec §4.1: CDB_TOKEN is not consulted for "iam". A shell that exports one for
+// another server must not have it handed to Cloudant as an API key, and must
+// not have it suppress the keyring read that would have found the real one.
+func TestSecretForIAMIgnoresCDBToken(t *testing.T) {
+	e := Env{Token: "eyJ...", Password: "hunter2"}
+	if secret, ok := e.SecretFor("iam"); ok || secret != "" {
+		t.Errorf("SecretFor(\"iam\") = %q, %v; want no environment secret", secret, ok)
+	}
+	// Every other kind keeps the 1.1 precedence exactly.
+	if secret, ok := e.SecretFor("proxy"); !ok || secret != "eyJ..." {
+		t.Errorf("SecretFor(\"proxy\") = %q, %v", secret, ok)
+	}
+	if secret, ok := (Env{IAMKey: "k", Token: "t"}).SecretFor("iam"); !ok || secret != "k" {
+		t.Errorf("SecretFor(\"iam\") with a key = %q, %v", secret, ok)
+	}
+}

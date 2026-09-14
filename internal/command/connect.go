@@ -294,7 +294,7 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 		// still has to be asked: clearing it there would dial with an empty
 		// password and turn an answerable question into a 401.
 		switch over.Kind {
-		case string(couch.AuthProxy), string(couch.AuthNone):
+		case string(couch.AuthProxy), string(couch.AuthIAM), string(couch.AuthNone):
 			bare = false
 		}
 	}
@@ -316,7 +316,7 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 	// CDB_PASSWORD and CDB_TOKEN bypass the keyring entirely: the environment
 	// is the override of last resort and must not be second-guessed by, or
 	// blocked behind, an OS keychain prompt.
-	secret, fromEnv := env.Secret()
+	secret, fromEnv := env.SecretFor(profile.Auth)
 	if !fromEnv && profile.Auth != "none" && profileName != "" {
 		store, err := d.SecretStore()
 		if err != nil {
@@ -356,6 +356,13 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 			if len(roles) > 0 {
 				profile.Roles = roles
 			}
+			bare = false
+		case string(couch.AuthIAM):
+			sec, perr := readSecret(s, "IAM API key")
+			if perr != nil {
+				return connection{}, perr
+			}
+			secret = sec
 			bare = false
 		}
 	}
@@ -445,6 +452,7 @@ func attemptLogin(ctx context.Context, profile config.Profile, secret, proxyHash
 		Secret:         secret,
 		Roles:          profile.Roles,
 		ProxyHash:      proxyHash,
+		IAMURL:         profile.IAMURL,
 		InsecureTLS:    profile.InsecureTLS,
 		CAFile:         profile.CAFile,
 		ReplicationURL: profile.ReplicationURL,
@@ -483,10 +491,21 @@ func attemptLogin(ctx context.Context, profile config.Profile, secret, proxyHash
 		e.Auth = couch.AuthProxy
 		return nil, couch.ServerInfo{}, e
 	}
+	// Cloudant answers _session with "authenticated":"iam" for a key it
+	// accepted. The user name is the service id, which cdb never configured
+	// and cannot check, so the method is the whole test.
+	if profile.Auth == string(couch.AuthIAM) && sess.Method != "iam" {
+		_ = cc.Close()
+		e := couch.NewError(http.StatusUnauthorized, "unauthorized",
+			"The server did not authenticate the IAM token.", "authenticate",
+			couch.UnauthorizedTarget("", cc.Host()))
+		e.Auth = couch.AuthIAM
+		return nil, couch.ServerInfo{}, e
+	}
 	// A server with no admins, or a JWT it declines to honour, answers
 	// GET /_session with "name": null and a 200. Asking for authentication and
 	// silently getting none is a failure, not a connection.
-	if sess.Name == "" && profile.Auth != string(couch.AuthNone) {
+	if sess.Name == "" && profile.Auth != string(couch.AuthNone) && profile.Auth != string(couch.AuthIAM) {
 		_ = cc.Close()
 		if profile.Auth == string(couch.AuthJWT) {
 			// The server did not act on the token: below 3.1 there is no JWT
@@ -915,6 +934,11 @@ func promptForProfile(s *session.Session) (config.Profile, string, error) {
 			return config.Profile{}, "", perr
 		}
 		p.Username, p.Roles, secret = user, roles, sec
+	case "iam":
+		secret, err = readSecret(s, "IAM API key")
+		if err != nil {
+			return config.Profile{}, "", err
+		}
 	}
 	return p, secret, nil
 }

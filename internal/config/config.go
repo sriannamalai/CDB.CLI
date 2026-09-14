@@ -28,6 +28,9 @@ type Profile struct {
 	// means none. They are not a secret — the shared secret lives in the
 	// keyring like every other credential — so they belong here beside URL.
 	Roles []string `koanf:"roles"`
+	// IAMURL overrides the IBM Cloud token endpoint under auth = "iam".
+	// Optional; empty means the public one. It is an address, not a secret.
+	IAMURL string `koanf:"iam_url"`
 	// ProxyHash pins the digest the proxy token is computed with, "sha256" or
 	// "sha1". Empty means "not settled yet": connect probes for it and writes
 	// the answer here, so a server that verifies only one of the two is asked
@@ -120,6 +123,7 @@ func (c *Config) Save(path string) error {
 			"auth":            p.Auth,
 			"username":        p.Username,
 			"roles":           p.Roles,
+			"iam_url":         p.IAMURL,
 			"proxy_hash":      p.ProxyHash,
 			"insecure_tls":    p.InsecureTLS,
 			"ca_file":         p.CAFile,

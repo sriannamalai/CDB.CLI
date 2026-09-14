@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sriannamalai/CDB.CLI/internal/config"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
@@ -1186,5 +1189,89 @@ func TestProfilesAddWithAuthProxy(t *testing.T) {
 	secret, err := CurrentDeps().Secrets.Get("old")
 	if err != nil || secret != "proxysecret" {
 		t.Errorf("the shared secret did not reach the keyring: %v", err)
+	}
+}
+
+// cloudantStub is a Cloudant double: an IAM endpoint that mints one token and a
+// server that reports an IAM session for exactly that bearer.
+func cloudantStub(t *testing.T) (serverURL, iamURL string) {
+	t.Helper()
+	iam := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"tok-1","token_type":"Bearer","expires_in":3600,"expiration":`+
+			strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)+`}`)
+	}))
+	t.Cleanup(iam.Close)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("Authorization") != "Bearer tok-1" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"error":"unauthorized","reason":"credentials expired"}`)
+			return
+		}
+		switch r.URL.Path {
+		case "/_session":
+			_, _ = io.WriteString(w, `{"ok":true,"userCtx":{"name":"ServiceId-abc","roles":["_reader","_writer","_admin"]},"info":{"authenticated":"iam","authentication_handlers":["iam","cookie","default","local"]}}`)
+		default:
+			_, _ = io.WriteString(w, `{"couchdb":"Welcome","version":"3.5.2+cloudant","vendor":{"name":"IBM Cloudant"}}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, iam.URL
+}
+
+func TestConnectWithAuthIAMConnects(t *testing.T) {
+	serverURL, iamURL := cloudantStub(t)
+	env := map[string]string{"CDB_IAM_API_KEY": "an-api-key", "CDB_IAM_URL": iamURL}
+	SetDeps(&Deps{
+		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		Secrets:    config.NewMemorySecrets(),
+		LookupEnv:  func(k string) (string, bool) { v, ok := env[k]; return v, ok },
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	if _, err := invoke(t, Connect(), s, serverURL); err != nil {
+		t.Fatalf("connect with CDB_IAM_API_KEY = %v", err)
+	}
+	res, err := invoke(t, SessionCmd(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.(Rows)
+	var auth string
+	for _, r := range rows.Items {
+		if r.Cells[0] == "auth" {
+			auth = r.Cells[1]
+		}
+	}
+	if auth != "iam" {
+		t.Errorf("session auth row = %q, want iam", auth)
+	}
+	// Neither the key nor the token may be anywhere in the rendered result.
+	for _, r := range rows.Items {
+		for _, cell := range r.Cells {
+			if strings.Contains(cell, "an-api-key") || strings.Contains(cell, "tok-1") {
+				t.Errorf("the session table leaked a credential: %v", r.Cells)
+			}
+		}
+	}
+}
+
+// A server that answers _session with anything but "iam" has not authenticated
+// the key, whatever else it may have done.
+func TestConnectWithAuthIAMRejectsANonIAMSession(t *testing.T) {
+	srv := couchtest.New(t) // its stock _session reports "cookie"
+	env := map[string]string{"CDB_IAM_API_KEY": "an-api-key", "CDB_IAM_URL": "http://iam.invalid"}
+	SetDeps(&Deps{
+		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		Secrets:    config.NewMemorySecrets(),
+		LookupEnv:  func(k string) (string, bool) { v, ok := env[k]; return v, ok },
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	if _, err := invoke(t, Connect(), s, srv.URL()); err == nil {
+		t.Fatal("a cookie session passed as an IAM login")
 	}
 }
