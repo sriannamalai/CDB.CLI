@@ -2,7 +2,6 @@ package shell
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -277,8 +276,18 @@ func (sh *Shell) initHistory() error {
 		_, ok := sh.reg.Lookup(name)
 		return ok
 	}}
-	sh.reg.Replace(command.HistoryFrom(func() []string { return historyLines(sh.hist) }))
+	install(sh.reg, command.HistoryFrom(func() []string { return historyLines(sh.hist) }))
 	return nil
+}
+
+// install swaps a placeholder registration for a live one, when the registry
+// holds that name at all. Registry.Replace panics on a name that was never
+// registered, and a test registry built from a handful of stub commands has no
+// reason to carry every shell command in order to run one stage.
+func install(reg *command.Registry, c command.Command) {
+	if _, ok := reg.Lookup(c.Name); ok {
+		reg.Replace(c)
+	}
 }
 
 // initReadline creates the line editor. It is separate from New so tests can
@@ -360,81 +369,7 @@ func (sh *Shell) RunLine(ctx context.Context, input string) error {
 	if err != nil {
 		return err
 	}
-	if len(line.Stages) == 0 {
-		return nil
-	}
-	// The stage executor arrives in Task 3. Until then, a one-command-plus-
-	// one-jq-stage line keeps behaving exactly as it does today (the single
-	// filter below is applied using Stages[1].Expr); anything longer is
-	// rejected with a temporary usage error rather than silently dropped.
-	if len(line.Stages) > 2 {
-		return command.Usagef("", "pipelines with more than one filter stage arrive in Task 3")
-	}
-	name := line.Stages[0].Argv[0]
-	c, ok := sh.reg.Lookup(name)
-	if !ok {
-		return command.Usagef(name, "unknown command. Type \"help\" to see the command list.")
-	}
-	fs := sh.reg.NewFlagSet(c)
-	if err := fs.Parse(line.Stages[0].Argv[1:]); err != nil {
-		return command.Usagef(c.Name, "%v\nusage: %s %s", err, c.Name, c.Usage)
-	}
-	args := fs.Args()
-	if err := c.CheckArgsErr(args); err != nil {
-		return err
-	}
-	// --yes and --verbose are per-line in the shell: they apply to this
-	// invocation only, and the session's own settings come back afterwards.
-	// (--json is not a preference; it reaches the renderer as forceJSON below.)
-	prevYes, prevVerbose := sh.sess.Prefs.Yes, sh.sess.Prefs.Verbose
-	prevAnon := sh.sess.Prefs.Anonymous
-	prevReplication := sh.sess.Prefs.ReplicationURL
-	defer func() {
-		sh.sess.Prefs.Yes, sh.sess.Prefs.Verbose = prevYes, prevVerbose
-		sh.sess.Prefs.Anonymous = prevAnon
-		sh.sess.Prefs.ReplicationURL = prevReplication
-	}()
-	if v, ferr := fs.GetBool("yes"); ferr == nil && v {
-		sh.sess.Prefs.Yes = true
-	}
-	if v, ferr := fs.GetBool("verbose"); ferr == nil && v {
-		sh.sess.Prefs.Verbose = true
-	}
-	// --anonymous has to be on the session before the auto-connect below, and
-	// before "connect" runs: openProfile is what acts on it.
-	if v, ferr := fs.GetBool("anonymous"); ferr == nil && v {
-		sh.sess.Prefs.Anonymous = true
-	}
-	// Like --anonymous, this has to be on the session before the auto-connect
-	// below: openProfile is what acts on it.
-	if v, ferr := fs.GetString("replication-url"); ferr == nil && v != "" {
-		sh.sess.Prefs.ReplicationURL = v
-	}
-	if c.NeedsClient && !sh.sess.Connected() {
-		if err := command.Open(ctx, sh.sess, ""); err != nil {
-			return err
-		}
-	}
-	res, err := c.Run(ctx, sh.sess, command.Invocation{
-		Args:   args,
-		Flags:  fs,
-		Stdin:  sh.sess.Stdin(),
-		Stdout: sh.sess.Stdout,
-		Stderr: sh.sess.Stderr,
-		Shell:  true,
-	})
-	if err != nil {
-		return err
-	}
-	forceJSON, _ := fs.GetBool("json")
-	if len(line.Stages) > 1 {
-		res, err = applyFilterToResult(line.Stages[1].Expr, res)
-		if err != nil {
-			return err
-		}
-		forceJSON = true
-	}
-	return render.New(sh.sess.Stdout, render.OptionsFor(sh.sess.Prefs, sh.sess.Stdout, forceJSON)).Render(res)
+	return sh.runPipeline(ctx, line)
 }
 
 // isCommand reports whether a word names a registered command or alias. The
@@ -442,100 +377,4 @@ func (sh *Shell) RunLine(ctx context.Context, input string) error {
 func (sh *Shell) isCommand(name string) bool {
 	_, ok := sh.reg.Lookup(name)
 	return ok
-}
-
-// applyFilterToResult runs a gojq filter over the JSON side of a result.
-func applyFilterToResult(expr string, res command.Result) (command.Result, error) {
-	// A live stream has no end to collect, so its filter is applied change by
-	// change instead: "tail /db --follow | .id" that waited for the whole feed
-	// would print nothing for as long as it ran.
-	if st, ok := res.(command.Stream); ok && st.Live {
-		return filterLiveStream(expr, st)
-	}
-	docs, err := resultJSON(res)
-	if err != nil {
-		return nil, err
-	}
-	out, err := ApplyFilter(expr, docs)
-	if err != nil {
-		return nil, err
-	}
-	rows := command.Rows{Columns: []command.Column{{Title: "value"}}}
-	for _, v := range out {
-		rows.Items = append(rows.Items, command.Row{Cells: []string{string(v)}, JSON: v})
-	}
-	return rows, nil
-}
-
-// filterLiveStream returns a live stream of the values the filter produces,
-// one row in and none, one or several rows out, each written as it is made.
-// The stream stays Live, so the renderer keeps writing rows through unpaged
-// and unbuffered.
-func filterLiveStream(expr string, src command.Stream) (command.Result, error) {
-	f, err := compileFilter(expr, nil)
-	if err != nil {
-		return nil, err
-	}
-	// One change can produce several values, and a filter such as "select(…)"
-	// produces none, so the values of one change are held until they have all
-	// been handed out and only then is the next change read.
-	var pending []json.RawMessage
-	return command.Stream{
-		Live:    true,
-		Columns: []command.Column{{Title: "value"}},
-		Next: func() (command.Row, bool, error) {
-			for len(pending) == 0 {
-				row, ok, err := src.Next()
-				if err != nil || !ok {
-					return command.Row{}, false, err
-				}
-				if row.JSON == nil {
-					continue
-				}
-				if pending, err = f.apply(row.JSON); err != nil {
-					return command.Row{}, false, err
-				}
-			}
-			v := pending[0]
-			pending = pending[1:]
-			return command.Row{Cells: []string{string(v)}, JSON: v}, true, nil
-		},
-	}, nil
-}
-
-// resultJSON extracts the JSON documents a result carries.
-func resultJSON(res command.Result) ([]json.RawMessage, error) {
-	switch v := res.(type) {
-	case command.Document:
-		return []json.RawMessage{v.JSON}, nil
-	case command.Rows:
-		out := make([]json.RawMessage, 0, len(v.Items))
-		for _, item := range v.Items {
-			if item.JSON != nil {
-				out = append(out, item.JSON)
-			}
-		}
-		return out, nil
-	case command.Stream:
-		var out []json.RawMessage
-		for {
-			row, ok, err := v.Next()
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				return out, nil
-			}
-			if row.JSON != nil {
-				out = append(out, row.JSON)
-			}
-		}
-	case command.Message:
-		b, err := json.Marshal(v.Text)
-		return []json.RawMessage{b}, err
-	case command.Empty:
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("a %s result cannot be filtered", res.ResultKind())
-	}
 }

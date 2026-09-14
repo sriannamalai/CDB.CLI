@@ -76,19 +76,6 @@ func TestRunLineParsesAFilterStage(t *testing.T) {
 	}
 }
 
-// More than two stages is rejected until Task 3 installs the stage executor.
-func TestRunLineRejectsMoreThanOneFilterStage(t *testing.T) {
-	var out bytes.Buffer
-	sh, _ := testShell(t, &out)
-	err := sh.RunLine(context.Background(), "cat doc1 | .name | .")
-	if err == nil {
-		t.Fatal("want an error")
-	}
-	if !strings.Contains(err.Error(), "pipelines with more than one filter stage arrive in Task 3") {
-		t.Errorf("error = %v", err)
-	}
-}
-
 // --yes and --verbose on a shell line apply to that invocation only: the
 // session's own settings must be back in place once the command has run.
 func TestRunLineScopesFlagsToOneInvocation(t *testing.T) {
