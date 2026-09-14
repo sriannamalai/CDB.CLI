@@ -126,14 +126,6 @@ func TestHistoryRedactsCredentialsInTypedLines(t *testing.T) {
 			line: "profiles add prod admin:hunter2@db.example.com",
 			want: "profiles add prod db.example.com",
 		},
-		// The command word is only trustworthy when it is a command. A typo
-		// reaches the history like any other parseable line, and guessing that
-		// an unknown word takes no URL is the guess that leaks a password.
-		{
-			name: "a mistyped command is redacted anyway",
-			line: "conect admin:hunter2@db.example.com",
-			want: "conect db.example.com",
-		},
 		{
 			name: "a mistyped subcommand of a URL command is redacted anyway",
 			line: "profiles a prod admin:hunter2@db.example.com",
@@ -237,5 +229,50 @@ func TestHistoryMasksASetOfACredential(t *testing.T) {
 				t.Errorf("redactLine(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// A word that names no command says nothing about what its arguments are, so
+// the line is not recorded at all: `SET api_token hunter2` and `st api_token
+// hunter2` both parse, and both would otherwise file the credential away.
+func TestHistoryDropsALineWhoseCommandIsUnknown(t *testing.T) {
+	for _, line := range []string{
+		"SET api_token hunter2",
+		"st api_token hunter2",
+		"conect admin:hunter2@db.example.com",
+	} {
+		var out bytes.Buffer
+		sh, _ := testShell(t, &out)
+		if _, err := sh.hist.Write(line); err != nil {
+			t.Fatal(err)
+		}
+		if got := historyLines(sh.hist); len(got) != 0 {
+			t.Errorf("history after %q = %q, want nothing recorded", line, got)
+		}
+	}
+}
+
+// The masking scan reads every stage, not only the first: the command word of
+// "ls | set api_token hunter2" is "ls".
+func TestHistoryMasksASetInALaterStage(t *testing.T) {
+	var out bytes.Buffer
+	sh, _ := testShell(t, &out)
+	if _, err := sh.hist.Write("ls | set api_token hunter2"); err != nil {
+		t.Fatal(err)
+	}
+	got := historyLines(sh.hist)
+	if len(got) != 1 || got[0] != "ls | set api_token ****" {
+		t.Fatalf("history = %q, want [%q]", got, "ls | set api_token ****")
+	}
+}
+
+// Dropping the line is a history rule and nothing else: an unknown command
+// still fails the line with the sentence it always had.
+func TestAnUnknownCommandStillReportsItself(t *testing.T) {
+	var out bytes.Buffer
+	sh, _ := testShell(t, &out)
+	err := sh.RunLine(context.Background(), "st api_token hunter2")
+	if err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("error = %v, want the unknown-command sentence", err)
 	}
 }

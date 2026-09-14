@@ -820,8 +820,9 @@ ls [path]
 ```
 
 `history` numbers the lines you have run. A line that failed to parse is not
-recorded, nor is a repeat of the previous line, and any credential in a URL
-you typed is stripped before the line reaches the history file — delete that
+recorded, nor is a line whose first word names no command, nor a repeat of the
+previous line, and any credential in a URL you typed is stripped before the
+line reaches the history file — delete that
 file to forget everything. A trailing `| <jq expression>` filters the
 command's JSON result before it is rendered; one stage, real jq syntax:
 

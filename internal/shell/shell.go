@@ -64,6 +64,20 @@ func (h *filteredHistory) Write(line string) (int, error) {
 	if _, err := Parse(line, nil); err != nil {
 		return h.src.Len(), nil
 	}
+	// A word that names no command says nothing about what its arguments are:
+	// `SET api_token hunter2` and the typo `st api_token hunter2` both parse,
+	// and the redactor cannot tell which of their words is a credential. The
+	// line is dropped rather than stored on a guess. The line still runs and
+	// still reports its unknown command; only the history turns it away.
+	if h.resolve != nil {
+		word, ok := commandWord(line)
+		if !ok {
+			return h.src.Len(), nil
+		}
+		if _, known := h.resolve(word); !known {
+			return h.src.Len(), nil
+		}
+	}
 	// Redact before the dedup check, so what is compared is what is stored.
 	line = redactLine(line, h.resolve)
 	if n := h.src.Len(); n > 0 {
@@ -89,23 +103,82 @@ func redactLine(line string, resolve func(string) (string, bool)) string {
 	schemeless := takesServerAddress(line, resolve)
 	var b strings.Builder
 	b.Grow(len(line))
+	for i, stage := range splitStages(line) {
+		if i > 0 {
+			b.WriteByte('|')
+		}
+		b.WriteString(redactStage(stage, schemeless, resolve))
+	}
+	return b.String()
+}
+
+// redactStage rewrites one stage of a line. "set" is looked for in every stage
+// rather than in the first alone: the command word of
+// "ls | set api_token hunter2" is "ls", and the credential is two stages down.
+func redactStage(stage string, schemeless bool, resolve func(string) (string, bool)) string {
+	if masked, ok := redactSet(stage, resolve); ok {
+		// The spacing around the stage is kept so that the rest of the line
+		// reads as it was typed.
+		lead := stage[:len(stage)-len(strings.TrimLeft(stage, " \t"))]
+		trail := stage[len(strings.TrimRight(stage, " \t")):]
+		return lead + masked + trail
+	}
+	var b strings.Builder
+	b.Grow(len(stage))
 	start := -1
-	for i := 0; i <= len(line); i++ {
-		if i < len(line) && !isLineSpace(line[i]) {
+	for i := 0; i <= len(stage); i++ {
+		if i < len(stage) && !isLineSpace(stage[i]) {
 			if start < 0 {
 				start = i
 			}
 			continue
 		}
 		if start >= 0 {
-			b.WriteString(redactToken(line[start:i], schemeless))
+			b.WriteString(redactToken(stage[start:i], schemeless))
 			start = -1
 		}
-		if i < len(line) {
-			b.WriteByte(line[i])
+		if i < len(stage) {
+			b.WriteByte(stage[i])
 		}
 	}
 	return b.String()
+}
+
+// splitStages cuts a line at every "|" that is not quoted or escaped, keeping
+// each stage's text exactly as it was typed. It is the redactor's own split:
+// Parse keeps no raw text for a command stage, and a stage is all this needs.
+func splitStages(line string) []string {
+	var (
+		stages  []string
+		quote   rune
+		escaped bool
+		start   int
+	)
+	runes := []rune(line)
+	at := 0
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		w := len(string(r))
+		switch {
+		case escaped:
+			escaped = false
+		case quote != 0:
+			if r == '\\' && quote == '"' {
+				escaped = true
+			} else if r == quote {
+				quote = 0
+			}
+		case r == '\\':
+			escaped = true
+		case r == '\'' || r == '"':
+			quote = r
+		case r == '|':
+			stages = append(stages, line[start:at])
+			start = at + w
+		}
+		at += w
+	}
+	return append(stages, line[start:])
 }
 
 // redactSet rewrites "set api_token abc" as "set api_token ****". A variable
