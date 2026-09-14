@@ -867,6 +867,11 @@ admin@localhost:5984:/movies> tail --follow --include-docs | .doc | put /audit
 
 and a slow stage makes the one above it wait rather than filling memory.
 
+A line whose source has an end is a result like any other: it is paged on a
+terminal, the way `ls` and `find` are on their own. Only a line fed by a feed
+with no end — `tail --follow`, `changes --follow` — writes its rows unpaged, as
+they arrive.
+
 ### What a stage may be
 
 Three commands read a pipeline. `help <command>` says which, and so does each

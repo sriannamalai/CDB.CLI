@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/spf13/pflag"
 	"github.com/sriannamalai/CDB.CLI/internal/command"
@@ -53,6 +54,38 @@ func (f *failure) result() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.first
+}
+
+// liveness is what the executor learns about the stages above the last one:
+// whether any of them produced a live result, a feed with no end such as
+// "tail --follow". Every producer reports once, before it sends its first
+// value, so the last stage can wait for the answer without deadlocking — no
+// stage has to read a value to know what its own result is.
+type liveness struct {
+	pending sync.WaitGroup
+	live    atomic.Bool
+}
+
+// report records one producer's answer and marks it in.
+func (l *liveness) report(live bool) {
+	if live {
+		l.live.Store(true)
+	}
+}
+
+// wait blocks until every producer has reported and answers whether any of
+// them was live. A line with one stage has no producers and answers false at
+// once.
+func (l *liveness) wait() bool {
+	l.pending.Wait()
+	return l.live.Load()
+}
+
+// isLive reports whether a result is a stream that must be written as it
+// arrives.
+func isLive(res command.Result) bool {
+	st, ok := res.(command.Stream)
+	return ok && st.Live
 }
 
 // runPipeline runs a line and renders its last stage.
@@ -107,19 +140,29 @@ func (sh *Shell) execute(ctx context.Context, line Line, into *[]json.RawMessage
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var (
-		fail failure
-		wg   sync.WaitGroup
-		in   <-chan json.RawMessage
+		fail    failure
+		wg      sync.WaitGroup
+		sources liveness
+		in      <-chan json.RawMessage
 	)
 	total := len(line.Stages)
 	for i := 0; i < total-1; i++ {
 		out := make(chan json.RawMessage, stageBuffer)
 		src, dst, n := in, out, i
 		wg.Add(1)
+		sources.pending.Add(1)
 		go func() {
 			defer wg.Done()
 			defer close(dst)
-			if err := sh.feedStage(ctx, line.Stages[n], src, dst); err != nil {
+			// A stage that fails before it knows its own result still has to
+			// report, or the last stage would wait on an answer that is never
+			// coming.
+			reported := sync.OnceFunc(sources.pending.Done)
+			defer reported()
+			if err := sh.feedStage(ctx, line.Stages[n], src, dst, func(live bool) {
+				sources.report(live)
+				reported()
+			}); err != nil {
 				fail.record(stageError(n, total, line.Stages[n], err, verbose))
 				cancel()
 			}
@@ -127,7 +170,7 @@ func (sh *Shell) execute(ctx context.Context, line Line, into *[]json.RawMessage
 		in = out
 	}
 	last := total - 1
-	lastErr := sh.finishStage(ctx, line.Stages[last], in, forceJSON, into)
+	lastErr := sh.finishStage(ctx, line.Stages[last], in, forceJSON, into, sources.wait)
 	if lastErr != nil {
 		fail.record(stageError(last, total, line.Stages[last], lastErr, verbose))
 	}
@@ -282,13 +325,18 @@ func (sh *Shell) connectFor(ctx context.Context, line Line) error {
 }
 
 // feedStage runs one stage that is not the last, writing every value it
-// produces to dst.
-func (sh *Shell) feedStage(ctx context.Context, st Stage, src <-chan json.RawMessage, dst chan<- json.RawMessage) error {
+// produces to dst. report is called once with whether this stage's own result
+// is live, before the first value is sent, so that the last stage can decide
+// how to render without waiting for a feed that may never end.
+func (sh *Shell) feedStage(ctx context.Context, st Stage, src <-chan json.RawMessage, dst chan<- json.RawMessage, report func(live bool)) error {
 	if st.Argv == nil {
 		f, err := compileFilter(st.Expr, sh.bindings())
 		if err != nil {
 			return err
 		}
+		// A jq stage is never a source of its own: it is live exactly when
+		// something above it is, which the stage above has already said.
+		report(false)
 		for {
 			in, ok, err := receive(ctx, src)
 			if err != nil || !ok {
@@ -309,7 +357,52 @@ func (sh *Shell) feedStage(ctx context.Context, st Stage, src <-chan json.RawMes
 	if err != nil {
 		return err
 	}
+	report(isLive(res))
 	return streamResult(ctx, res, func(v json.RawMessage) error { return send(ctx, dst, v) })
+}
+
+// lastResult builds the result the last stage hands over: a jq stage as a
+// stream of the values its filter produces, a command stage as the result the
+// command returned.
+//
+// Either is live only when some stage above it was live. A line whose source
+// is finite — "find … | .id", "ls | cat | put /copies" — is an ordinary
+// result, and a terminal pages it the way it pages "find" on its own; only a
+// feed with no end keeps the unbuffered rendering a feed needs. sources is
+// what the executor learned from the stages above, and it is not asked when
+// there are none.
+func (sh *Shell) lastResult(ctx context.Context, st Stage, src <-chan json.RawMessage, sources func() bool) (command.Result, error) {
+	if st.Argv == nil {
+		f, err := compileFilter(st.Expr, sh.bindings())
+		if err != nil {
+			return nil, err
+		}
+		return filterStream(ctx, f, src, sources()), nil
+	}
+	res, err := sh.runCommandStage(ctx, st, src)
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		// A stage that hands back neither a result nor an error has nothing to
+		// render. On a cancelled line that is the cancellation showing up as a
+		// stage that stopped early, and the line failed of that; anywhere else
+		// it is a command with a bug in it, which is worth a sentence rather
+		// than a line that quietly printed nothing.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%s returned no result", stageName(st))
+	}
+	// put, rm and cat answer with a live stream because the stage above them
+	// may be a feed; when it is not, their rows are a finite result like any
+	// other.
+	if src != nil && isLive(res) && !sources() {
+		s := res.(command.Stream)
+		s.Live = false
+		return s, nil
+	}
+	return res, nil
 }
 
 // finishStage runs the last stage. With into nil it renders: a command stage
@@ -317,33 +410,13 @@ func (sh *Shell) feedStage(ctx context.Context, st Stage, src <-chan json.RawMes
 // JSON forced, which is what the one filter stage did before there were
 // pipelines. With into non-nil the values the stage produced are collected
 // there instead, which is what a capture wants.
-func (sh *Shell) finishStage(ctx context.Context, st Stage, src <-chan json.RawMessage, forceJSON bool, into *[]json.RawMessage) error {
-	var res command.Result
+func (sh *Shell) finishStage(ctx context.Context, st Stage, src <-chan json.RawMessage, forceJSON bool, into *[]json.RawMessage, sources func() bool) error {
+	res, err := sh.lastResult(ctx, st, src, sources)
+	if err != nil {
+		return err
+	}
 	if st.Argv == nil {
-		f, err := compileFilter(st.Expr, sh.bindings())
-		if err != nil {
-			return err
-		}
-		res = filterStream(ctx, f, src)
 		forceJSON = true
-	} else {
-		r, err := sh.runCommandStage(ctx, st, src)
-		if err != nil {
-			return err
-		}
-		if r == nil {
-			// A stage that hands back neither a result nor an error has
-			// nothing to render. On a cancelled line that is the cancellation
-			// showing up as a stage that stopped early, and the line failed of
-			// that; anywhere else it is a command with a bug in it, which is
-			// worth a sentence rather than a line that quietly printed
-			// nothing.
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return fmt.Errorf("%s returned no result", stageName(st))
-		}
-		res = r
 	}
 	if into != nil {
 		return streamResult(ctx, res, func(v json.RawMessage) error {
@@ -380,17 +453,18 @@ func (sh *Shell) runCommandStage(ctx context.Context, st Stage, src <-chan json.
 	return sc.cmd.Run(ctx, sh.sess, inv)
 }
 
-// filterStream is a jq stage as a live stream of the values it produces: one
-// input value in, and none, one or several out, each written as it is made. It
-// is live because the source above it may be, and a stream collected before
-// printing shows a change feed nothing.
-func filterStream(ctx context.Context, f *filter, src <-chan json.RawMessage) command.Result {
+// filterStream is a jq stage as a stream of the values it produces: one input
+// value in, and none, one or several out, each written as it is made. It is
+// live when the source above it is — a stream collected before printing shows
+// a change feed nothing — and finite otherwise, so that a result with an end
+// is paged.
+func filterStream(ctx context.Context, f *filter, src <-chan json.RawMessage, live bool) command.Result {
 	// One input can produce several values, and "select(…)" produces none, so
 	// the values of one input are held until they have all been handed out and
 	// only then is the next one read.
 	var pending []json.RawMessage
 	return command.Stream{
-		Live:    true,
+		Live:    live,
 		Columns: []command.Column{{Title: "value"}},
 		Next: func() (command.Row, bool, error) {
 			for len(pending) == 0 {
