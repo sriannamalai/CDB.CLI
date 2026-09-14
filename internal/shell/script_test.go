@@ -155,12 +155,12 @@ func TestScriptGetsItsOwnVariableScope(t *testing.T) {
 func TestScriptNestingStopsAtEight(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "loop.cdb")
-	if err := os.WriteFile(path, []byte("run "+path+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("run '"+path+"'\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
 	sh := scriptShell(t, &out)
-	err := sh.RunScript(context.Background(), strings.NewReader("run "+path+"\n"), "top.cdb", nil, false)
+	err := sh.RunScript(context.Background(), strings.NewReader("run '"+path+"'\n"), "top.cdb", nil, false)
 	if err == nil || !strings.Contains(out.String(), "scripts nest more than 8 deep") {
 		t.Fatalf("err = %v, stderr = %q", err, out.String())
 	}
@@ -196,7 +196,7 @@ func TestScriptReportsANestedFailureOnce(t *testing.T) {
 	}
 	var out bytes.Buffer
 	sh := scriptShell(t, &out)
-	if err := runText(t, sh, "run "+path+"\n"); err == nil {
+	if err := runText(t, sh, "run '"+path+"'\n"); err == nil {
 		t.Fatal("the nested failure did not stop the outer script")
 	}
 	if !strings.Contains(out.String(), path+":1: no") {
