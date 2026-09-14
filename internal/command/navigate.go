@@ -27,7 +27,11 @@ admin@localhost:5984:/movies/_design/app>`,
 		MinArgs:     0,
 		MaxArgs:     1,
 		NeedsClient: true,
-		Complete:    completePath,
+		Details: "A server path reports the version and the features it was built with, a database\n" +
+			"path its sizes and counts, and a search index path the index statistics the\n" +
+			"backend keeps — which members those are is Clouseau's or Nouveau's to decide, so\n" +
+			"they are listed as they came.",
+		Complete: completePath,
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
 			arg := inv.Arg(0)
 			if arg == "" {
@@ -170,6 +174,11 @@ $ cdb ls /movies --start tt0245429 --fields title,year`,
 				return lsDatabase(ctx, s, inv, t)
 			case path.KindDesignDoc:
 				return lsDesignDoc(ctx, s, t)
+			case path.KindSearch:
+				// An index has no rows to list and no body to read: the only
+				// thing it answers is a query, so say so rather than sending
+				// the operator to cat, which sends them back here.
+				return nil, Usagef("ls", "%s is %s %s, not something that can be listed. Use \"search\" to query it.", t.Path, t.Kind.Article(), t.Kind)
 			default:
 				return nil, Usagef("ls", "%s is %s %s, not something that can be listed. Use \"cat\" to read it.", t.Path, t.Kind.Article(), t.Kind)
 			}
@@ -330,7 +339,18 @@ func Info() Command {
  shards      | 2
  replicas    | 1
 
-$ cdb info /`,
+$ cdb info /
+
+$ cdb info /movies/_design/app/_nouveau/by_title
+ FIELD      | VALUE
+------------+-------------------------
+ name       | _design/app/by_title
+ backend    | nouveau
+ disk_size  | 193
+ num_docs   | 12
+ purge_seq  | 0
+ signature  | abc
+ update_seq | 26`,
 		Usage:       "[path]",
 		MinArgs:     0,
 		MaxArgs:     1,
@@ -373,8 +393,27 @@ $ cdb info /`,
 				add("features", strings.Join(si.Features, ", "))
 				return rows, nil
 			}
+			if t.Kind == path.KindSearch {
+				si, err := s.Client.SearchInfo(ctx, t)
+				if err != nil {
+					return nil, searchSentence(ctx, s, t, err)
+				}
+				add("name", si.Name)
+				add("backend", string(t.Backend))
+				// The two backends report different members, so they are
+				// listed as they came, in a stable order rather than the map's.
+				keys := make([]string, 0, len(si.Index))
+				for k := range si.Index {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					add(k, infoValue(si.Index[k]))
+				}
+				return rows, nil
+			}
 			if t.Database == "" {
-				return nil, Usagef("info", "%s is not a server or a database", t.Path)
+				return nil, Usagef("info", "%s is not a server, a database or a search index", t.Path)
 			}
 			di, err := s.Client.DatabaseInfo(ctx, t.Database)
 			if err != nil {
@@ -423,6 +462,26 @@ func mustJSON(v any) json.RawMessage {
 }
 
 // humanBytes formats a byte count for a table cell.
+// infoValue renders one metadata value for a two-column table: a whole number
+// without JSON's exponent, a string bare, anything else as compact JSON.
+func infoValue(v any) string {
+	switch x := v.(type) {
+	case float64:
+		if x == float64(int64(x)) {
+			return strconv.FormatInt(int64(x), 10)
+		}
+		return strconv.FormatFloat(x, 'g', -1, 64)
+	case string:
+		return x
+	case bool:
+		return strconv.FormatBool(x)
+	case nil:
+		return ""
+	default:
+		return string(compactJSON(x))
+	}
+}
+
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {

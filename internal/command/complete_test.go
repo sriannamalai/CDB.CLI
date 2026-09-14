@@ -45,6 +45,21 @@ func TestCompleteOffersSearchSegmentsUnderADesignDoc(t *testing.T) {
 	}
 }
 
+// The tag is the group heading the shell prints above the candidates, so a
+// search separator filed under "views" reads as a lie.
+func TestCompleteTagsTheSearchSegments(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_design/app", 200,
+		`{"_id":"_design/app","views":{"by_year":{}},"indexes":{"by_title":{}},"nouveau":{"by_body":{}}}`)
+	s := connected(t, srv)
+	want := map[string]string{"_view": "views", "_search": "search", "_nouveau": "search"}
+	for _, c := range CompletePath(context.Background(), s, nil, "/movies/_design/app/_") {
+		if w, ok := want[c.Display]; ok && c.Tag != w {
+			t.Errorf("%s is tagged %q, want %q", c.Display, c.Tag, w)
+		}
+	}
+}
+
 func TestCompleteListsSearchIndexNames(t *testing.T) {
 	srv := couchtest.New(t)
 	srv.JSON("GET", "/movies/_design/app", 200,

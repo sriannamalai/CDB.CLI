@@ -61,6 +61,10 @@ $ cdb cat /movies/tt0211915/poster.txt > poster.txt`,
 				return Document{JSON: body}, nil
 			case path.KindAttachment:
 				return catAttachment(ctx, s, t, inv.String("rev"))
+			case path.KindSearch:
+				// An index has no body to print. ls cannot list it either, so
+				// the only useful answer is the command that can.
+				return nil, Usagef("cat", "%s is %s %s; use \"search\" to query it.", t.Path, t.Kind.Article(), t.Kind)
 			default:
 				return nil, Usagef("cat", "%s is %s %s; use \"ls\" to list it.", t.Path, t.Kind.Article(), t.Kind)
 			}

@@ -152,7 +152,11 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 		var out []Candidate
 		for _, sep := range []string{"_view", "_search", "_nouveau"} {
 			if partial != sep && strings.HasPrefix(sep, partial) {
-				out = append(out, Candidate{Value: join(sep), Display: sep, Tag: "views"})
+				tag := "views"
+				if sep != "_view" {
+					tag = "search"
+				}
+				out = append(out, Candidate{Value: join(sep), Display: sep, Tag: tag})
 			}
 		}
 		if len(out) > 0 {

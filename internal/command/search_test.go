@@ -279,3 +279,56 @@ func TestSearchBadQuerySentence(t *testing.T) {
 		t.Errorf("got %q", err)
 	}
 }
+
+func TestInfoOnASearchPath(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_design/app/_nouveau_info/by_body", 200,
+		`{"name":"_design/app/by_body","search_index":{"update_seq":26,"purge_seq":0,"num_docs":12,"disk_size":193,"signature":"abc"}}`)
+	s := connected(t, srv)
+	res, err := invoke(t, Info(), s, "/movies/_design/app/_nouveau/by_body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range res.(Rows).Items {
+		got[r.Cells[0]] = r.Cells[1]
+	}
+	if got["name"] != "_design/app/by_body" || got["backend"] != "nouveau" {
+		t.Errorf("rows = %v", got)
+	}
+	if got["num_docs"] != "12" || got["signature"] != "abc" {
+		t.Errorf("rows = %v", got)
+	}
+}
+
+// A 503 from _search_info is the same missing Clouseau the query path reports,
+// so info borrows the sentence rather than printing "service unavailable".
+func TestInfoOnASearchPathUsesTheSearchSentence(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_design/app/_search_info/by_title", http.StatusServiceUnavailable,
+		`{"error":"service unavailable","reason":"Search is not available"}`)
+	s := connected(t, srv)
+	_, err := invoke(t, Info(), s, "/movies/_design/app/_search/by_title")
+	if err == nil || !strings.Contains(err.Error(), "Clouseau must be installed") {
+		t.Errorf("info on a Clouseau index without Clouseau = %v", err)
+	}
+}
+
+// ls and cat both used to send an operator standing on a search index to the
+// other one. Neither reads an index; search does.
+func TestLsAndCatOnASearchIndexPointAtSearch(t *testing.T) {
+	srv := couchtest.New(t)
+	s := connected(t, srv)
+	for _, c := range []Command{Ls(), Cat()} {
+		_, err := invoke(t, c, s, "/movies/_design/app/_search/by_title")
+		if err == nil {
+			t.Fatalf("%s on a search index succeeded", c.Name)
+		}
+		if !strings.Contains(err.Error(), `"search"`) {
+			t.Errorf("%s says %q; it should point at search", c.Name, err)
+		}
+		if strings.Contains(err.Error(), `"cat"`) || strings.Contains(err.Error(), `"ls"`) {
+			t.Errorf("%s still points at the other reader: %q", c.Name, err)
+		}
+	}
+}

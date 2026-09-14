@@ -50,6 +50,17 @@ $ cdb info /movies
  replicas    | 1
 
 $ cdb info /
+
+$ cdb info /movies/_design/app/_nouveau/by_title
+ FIELD      | VALUE
+------------+-------------------------
+ name       | _design/app/by_title
+ backend    | nouveau
+ disk_size  | 193
+ num_docs   | 12
+ purge_seq  | 0
+ signature  | abc
+ update_seq | 26
 ```
 
 ## See also
