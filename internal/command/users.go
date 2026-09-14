@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -84,6 +85,12 @@ $ cdb users rm alice --yes`,
 				return usersList(ctx, s)
 			case "show":
 				return usersShow(ctx, s, inv.Arg(1))
+			case "add":
+				return usersAdd(ctx, s, inv)
+			case "passwd":
+				return usersPasswd(ctx, s, inv)
+			case "rm":
+				return usersRemove(ctx, s, inv)
 			default:
 				return nil, Usagef("users", "unknown subcommand %q; expected list, show, add, passwd or rm", sub)
 			}
@@ -213,4 +220,227 @@ func passwordState(members map[string]json.RawMessage) string {
 		}
 	}
 	return "not set"
+}
+
+// passwordFor obtains the password for an account. It is never a command-line
+// argument: an argument reaches the shell history and every process list on
+// the machine. --password-stdin takes one line, which is what a script uses;
+// otherwise the operator is asked twice with the echo off.
+func passwordFor(s *session.Session, inv Invocation, name string) (string, error) {
+	if inv.Bool("password-stdin") {
+		line, err := s.Reader().ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			return "", Usagef("users", "no password arrived on standard input")
+		}
+		// A short read that still produced a line is a file with no trailing
+		// newline, which is fine; only an empty line is a failure.
+		_ = err
+		return line, nil
+	}
+	if !s.Prefs.Interactive {
+		return "", Usagef("users", "reading a password needs a terminal; pass it as one line on standard input with --password-stdin")
+	}
+	first, err := readSecret(s, "Password for "+name)
+	if err != nil {
+		return "", err
+	}
+	again, err := readSecret(s, "Repeat password for "+name)
+	if err != nil {
+		return "", err
+	}
+	if first != again {
+		return "", Errorf(nil, "The two passwords did not match; nothing was changed.")
+	}
+	if first == "" {
+		return "", Errorf(nil, "An empty password is not accepted.")
+	}
+	return first, nil
+}
+
+// isServerAdmin reports whether the name is a key in [admins].
+func isServerAdmin(ctx context.Context, s *session.Session, name string) (bool, error) {
+	admins, err := serverAdmins(ctx, s)
+	if err != nil {
+		return false, couch.AsAdmin(err, "managing users")
+	}
+	for _, a := range admins {
+		if a == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// usersAdd creates an account. --admin writes the [admins] configuration key,
+// which is what a server admin is; everything else writes a _users document.
+func usersAdd(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+	name := inv.Arg(1)
+	if name == "" {
+		return nil, Usagef("users", "usage: users add <name> [--roles r1,r2] [--admin]")
+	}
+	admin, err := isServerAdmin(ctx, s, name)
+	if err != nil {
+		return nil, err
+	}
+	if admin {
+		return nil, Errorf(nil, "Server admin %q already exists; \"users passwd %s --admin\" changes the password.", name, name)
+	}
+	if inv.Bool("admin") {
+		password, err := passwordFor(s, inv, name)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := s.Client.SetConfig(ctx, defaultNode, "admins", name, password); err != nil {
+			return nil, couch.AsAdmin(err, "managing users")
+		}
+		return Message{Text: fmt.Sprintf("Created server admin %q.", name)}, nil
+	}
+
+	created, err := ensureUsersDB(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	if !created {
+		if _, _, err := s.Client.GetDocument(ctx, usersDB, userDocID(name), couch.GetOptions{}); err == nil {
+			return nil, Errorf(nil, "User %q already exists; \"users passwd %s\" changes the password.", name, name)
+		} else if e, ok := couch.AsError(err); !ok || e.Status != 404 {
+			return nil, couch.AsAdmin(err, "managing users")
+		}
+	}
+	password, err := passwordFor(s, inv, name)
+	if err != nil {
+		return nil, err
+	}
+	roles := splitRoles(inv.String("roles"))
+	if roles == nil {
+		roles = []string{}
+	}
+	doc, err := json.Marshal(map[string]any{
+		"_id": userDocID(name), "name": name, "type": "user",
+		"roles": roles, "password": password,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.Client.PutDocument(ctx, usersDB, userDocID(name), doc, ""); err != nil {
+		return nil, couch.AsAdmin(err, "managing users")
+	}
+	if created {
+		return Message{Text: fmt.Sprintf("Created the _users database and user %q.", name)}, nil
+	}
+	return Message{Text: fmt.Sprintf("Created user %q.", name)}, nil
+}
+
+// ensureUsersDB creates the authentication database when the server has none,
+// reporting whether it had to. CouchDB needs it before a user document can be
+// written, and a server that has never had an admin has never had one.
+func ensureUsersDB(ctx context.Context, s *session.Session) (bool, error) {
+	exists, err := s.Client.DatabaseExists(ctx, usersDB)
+	if err != nil {
+		return false, couch.AsAdmin(err, "managing users")
+	}
+	if exists {
+		return false, nil
+	}
+	if err := s.Client.CreateDatabase(ctx, usersDB, false, 0); err != nil {
+		return false, couch.AsAdmin(err, "managing users")
+	}
+	s.Cache().InvalidateDatabases()
+	return true, nil
+}
+
+// usersPasswd sets a new password. For a _users document the hash members are
+// removed first: CouchDB's update hook replaces "password" with fresh ones, and
+// a document carrying both is one the server refuses to authenticate against.
+func usersPasswd(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+	name := inv.Arg(1)
+	if name == "" {
+		return nil, Usagef("users", "usage: users passwd <name> [--admin] [--password-stdin]")
+	}
+	admin, err := isServerAdmin(ctx, s, name)
+	if err != nil {
+		return nil, err
+	}
+	if admin || inv.Bool("admin") {
+		password, err := passwordFor(s, inv, name)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := s.Client.SetConfig(ctx, defaultNode, "admins", name, password); err != nil {
+			return nil, couch.AsAdmin(err, "managing users")
+		}
+		return Message{Text: fmt.Sprintf("Changed the password of server admin %q.", name)}, nil
+	}
+
+	raw, rev, err := s.Client.GetDocument(ctx, usersDB, userDocID(name), couch.GetOptions{})
+	if err != nil {
+		return nil, couch.AsAdmin(err, "managing users")
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return nil, err
+	}
+	password, err := passwordFor(s, inv, name)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range hashFields {
+		delete(members, f)
+	}
+	quoted, err := json.Marshal(password)
+	if err != nil {
+		return nil, err
+	}
+	members["password"] = quoted
+	doc, err := json.Marshal(members)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.Client.PutDocument(ctx, usersDB, userDocID(name), doc, rev); err != nil {
+		return nil, couch.AsAdmin(err, "managing users")
+	}
+	return Message{Text: fmt.Sprintf("Changed the password of %q.", name)}, nil
+}
+
+// usersRemove deletes an account, after refusing to delete the one the session
+// is using. Removing your own account mid-session leaves a connection that
+// works until it is closed and then cannot be reopened, which is the worst
+// possible way to find out.
+func usersRemove(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+	name := inv.Arg(1)
+	if name == "" {
+		return nil, Usagef("users", "usage: users rm <name>")
+	}
+	sess, err := s.Client.Session(ctx)
+	if err != nil {
+		return nil, couch.AsAdmin(err, "managing users")
+	}
+	if sess.Name == name {
+		return nil, Errorf(nil, "You are connected as %s; remove that user from another account.", name)
+	}
+	admin, err := isServerAdmin(ctx, s, name)
+	if err != nil {
+		return nil, err
+	}
+	if admin || inv.Bool("admin") {
+		if err := Confirm(ctx, s, fmt.Sprintf("Delete server admin %s?", name)); err != nil {
+			return nil, err
+		}
+		if _, err := s.Client.DeleteConfig(ctx, defaultNode, "admins", name); err != nil {
+			return nil, couch.AsAdmin(err, "managing users")
+		}
+		return Message{Text: fmt.Sprintf("Deleted server admin %q.", name)}, nil
+	}
+	if err := Confirm(ctx, s, fmt.Sprintf("Delete user %s?", name)); err != nil {
+		return nil, err
+	}
+	rev, err := s.Client.GetRev(ctx, usersDB, userDocID(name))
+	if err != nil {
+		return nil, couch.AsAdmin(err, "managing users")
+	}
+	if _, err := s.Client.DeleteDocument(ctx, usersDB, userDocID(name), rev); err != nil {
+		return nil, couch.AsAdmin(err, "managing users")
+	}
+	return Message{Text: fmt.Sprintf("Deleted user %q.", name)}, nil
 }

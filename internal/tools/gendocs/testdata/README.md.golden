@@ -43,6 +43,7 @@ before it acts, unless `--yes` is given.
 | [`session`](session.md) |  | Show the current user, roles and server version |  |
 | [`tail`](tail.md) |  | Read a database's changes feed |  |
 | [`tasks`](tasks.md) |  | List the tasks CouchDB is running right now |  |
+| [`users`](users.md) |  | List and manage CouchDB accounts |  |
 
 ## Global flags
 
