@@ -20,6 +20,7 @@ func TestExitCode(t *testing.T) {
 		{"usage", command.Usagef("ls", "too many arguments"), ExitUsage},
 		{"unreachable", couch.NewError(couch.StatusUnreachable, "connection_refused", "connection refused", "read", "server"), ExitConnection},
 		{"401", couch.NewError(401, "unauthorized", "nope", "read", "server"), ExitConnection},
+		{"401 admin refusal", couch.AsAdmin(couch.NewError(401, "unauthorized", "You are not a server admin.", "read", "server"), "listing active tasks"), ExitError},
 		{"403", couch.NewError(403, "forbidden", "nope", "read", "db"), ExitError},
 		{"404", couch.NewError(404, "not_found", "missing", "read", "db"), ExitError},
 		{"cancelled", context.Canceled, ExitInterrupted},

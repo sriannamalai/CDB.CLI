@@ -35,7 +35,11 @@ func ExitCode(err error) int {
 		return ExitConnection
 	}
 	if ce, ok := couch.AsError(err); ok {
-		if ce.Status == couch.StatusUnreachable || ce.Status == http.StatusUnauthorized {
+		// A 401 that AsAdmin retargeted onto AdminOp is "you are not a server
+		// admin" on a login that worked, not a connection failure: the spec
+		// gives those refusals exit 1, the same as the 403 ones.
+		if ce.Status == couch.StatusUnreachable ||
+			(ce.Status == http.StatusUnauthorized && ce.Op != couch.AdminOp) {
 			return ExitConnection
 		}
 	}
