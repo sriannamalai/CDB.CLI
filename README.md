@@ -165,7 +165,10 @@ or `cat`:
 admin@localhost:5984:/movies> find '{}' | select(.year > 2000) | put /recent
 ```
 
-See `help pipelines` for the full grammar, plus variables and scripts.
+See `help pipelines` for the full grammar, plus variables and scripts. `cdb run
+<file> [arg...]` runs a file of these lines outside the shell too, with
+arguments, variables and stop-on-first-failure; `cdb < file` does the same
+reading from standard input.
 
 Partitioned databases are addressed with a `_partition` segment:
 
@@ -301,7 +304,7 @@ cdb completion powershell | Out-String | Invoke-Expression
 |---|---|
 | `connect`, `profiles`, `session` | Connect, manage saved profiles, show who you are |
 | `cd`, `pwd`, `ls`, `info` | Move around and list databases, documents, views |
-| `cat`, `put`, `rm`, `edit` | Read and write documents |
+| `cat`, `put`, `rm`, `edit` | Read and write documents, singly or from a pipeline |
 | `find`, `query` | Mango queries and map/reduce views |
 | `search` | Full-text queries against Clouseau and Nouveau indexes |
 | `tail` | Watch a database's changes feed |
@@ -311,8 +314,8 @@ cdb completion powershell | Out-String | Invoke-Expression
 | `backup`, `restore` | Attachment-safe dump and load, resumable |
 | `replicate`, `replications` | Start and watch replications |
 | `tasks`, `config`, `users`, `security`, `compact`, `cluster` | Administer the server: active tasks, configuration, accounts, database security, compaction, single-node setup |
+| `run`, `set`, `unset` | Run a file of cdb commands; define and list shell variables |
 | `help`, `history`, `clear`, `exit` | Shell only |
-| `set`, `unset`, `run` | Shell only: variables and scripts; see `help pipelines` |
 
 Destructive commands (`rm`, `rmdir`, `resolve`, `replications cancel`, `users rm`,
 `config unset`, `compact`, `cluster setup`) ask before acting. Pass `--yes` to skip the prompt in scripts. `rmdir` also asks you

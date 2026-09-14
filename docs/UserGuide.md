@@ -840,7 +840,152 @@ that line alone: `--profile` and `--url` have `connect` as their equivalent,
 `--path` has `cd`, and `--format`, `--color` and `--pager` are read from
 `config.toml` for the whole session.
 
+## Pipelines and scripts
+
+A shell line is one or more stages separated by `|`. The first stage is a
+command; every later stage is a command when its first word names one, and a jq
+expression otherwise.
+
+```
+admin@localhost:5984:/movies> ls | .id
+admin@localhost:5984:/movies> find '{"year":{"$gt":2000}}' | del(._rev) | put /old
+admin@localhost:5984:/movies> ls | cat | .title
+```
+
+Values flow from stage to stage as JSON, one at a time, and the stages run at
+the same time. A feed with no end therefore keeps working:
+
+```
+admin@localhost:5984:/movies> tail --follow --include-docs | .doc | put /audit
+```
+
+and a slow stage makes the one above it wait rather than filling memory.
+
+### What a stage may be
+
+Three commands read a pipeline. `help <command>` says which, and so does each
+command's reference page.
+
+| Stage | Reads | What it does |
+|---|---|---|
+| `put [<db>]` | documents | Writes each value, which must be a JSON object, through `_bulk_docs` in batches of 100. An incoming `_rev` is dropped: `put` looks up each batch's ids in the target database first and writes over the current revision when one exists, so a pipeline copies and updates without conflicting and without asking to confirm the overwrite. One row per document: `id`, `rev`, `status`. A document the server refuses is a row with its error name as the status — `conflict`, say — not a failed line. |
+| `rm [<db>]` | references | Confirms once (`Delete the piped documents from <db>?`), then deletes in batches. A document that is not there is a row with the status `not_found`. |
+| `cat [<db>]` | references | Fetches each document named and emits it. An id the database does not hold ends the stage: `"tt0211915" is not in movies`. |
+
+A **reference** is what `ls`, `find`, `query`, `search`, `tail` and `cat`
+produce: a document id, an object carrying `_id` or `id`, or an absolute
+`/db/id` path, which overrides the stage's own database. The database may be
+left out when the current directory is inside one; at `/` the answer is
+`put needs a database path when the current directory is /`.
+
+Piping into a command that reads no pipeline is a mistake, not a silent drop:
+`mkdir does not read a pipeline.`
+
+A command that changes the session rather than reading or writing
+data — `connect`, `profiles`, `cd`, `exit`, `clear`, `history`, `help`, `run`,
+`set` and `unset` — cannot start a line of more than one stage:
+`cd cannot start a pipeline.` A line of one stage is unaffected; `cd /movies`
+is the command it has always been.
+
+### When a line fails
+
+The failing stage stops the others, and the sentence says which stage it was:
+
+```
+admin@localhost:5984:/movies> ls | put /nowhere
+stage 2 (put): The database nowhere does not exist.
+```
+
+The exit code is the one that failure would have had on its own. Ctrl-C cancels
+the whole line: the shell prints nothing and returns to the prompt, and a script
+or a one-shot run exits 130.
+
+`--json`, `--yes`, `--verbose`, `--anonymous` and `--replication-url` are read
+from the first stage and apply to the whole line.
+
+### Variables
+
+```
+admin@localhost:5984:/movies> set year 2001
+admin@localhost:5984:/movies> find --field year | select(.year > $year)
+admin@localhost:5984:/movies> set rev = cat tt0211915 | ._rev
+admin@localhost:5984:/movies> set
+ NAME | VALUE
+------+------------------------------------
+ rev  | 1-fe587ae7ef952dbac249a78f49bb51e6
+ year | 2001
+```
+
+`$name` and `${name}` are replaced inside a word of a command stage, and the
+word is never re-split — a value holding a space stays one argument. They are
+never replaced inside a word any part of which is single-quoted, which is how
+a Mango selector or a jq expression keeps a `$` of its own, a backslash
+protects a lone `$` the same way (`\$a`), and `$$` is a literal `$`. In a jq
+stage the variables are not text-replaced at all: each is bound as a jq
+variable of the same name with its stored value, so a number is a number.
+
+`set <name> = <pipeline>` stores what the pipeline produced: one value as that
+value, several as a JSON array. Everything after the `=` is the pipeline, taken
+exactly as it was typed — a `|` in it belongs to the pipeline, not to the `set`
+line — so nothing needs quoting. `unset <name>` removes a variable; unsetting one
+that was never set is not an error.
+
+A variable whose name ends in `password`, `secret` or `token` prints as `****`
+in `set`'s listing and is recorded in the history the same way. Nothing is
+persisted: variables live as long as the shell does.
+
+### Script files
+
+```
+$ cdb run nightly.cdb
+$ cdb run --yes purge.cdb movies 2001
+$ cdb < nightly.cdb
+admin@localhost:5984:/> run nightly.cdb
+```
+
+A script is a file of the same lines the shell reads. A `#` that begins a
+bare, unquoted word starts a comment that runs to the end of its line — the
+same rule the shell itself uses, so a note after a command
+(`ls /movies # spot check`) and a whole line of comment are both written the
+same way. Blank lines are skipped, and a line continues onto the next the way
+it does in the shell. The `.cdb` extension is a convention, not a rule.
+
+A script is never interactive, whatever terminals the process has: no prompt and
+no guided builder is reachable while it runs, so a line that would confirm needs
+`--yes` — on the line, or on `run` itself, which is read before the file name
+(`cdb run --yes purge.cdb movies 2001`; everything after the file name reaches
+the script as `$1`, `$2`, …). Execution stops at the first failing line:
+
+```
+$ cdb run nightly.cdb
+nightly.cdb:4: The database nowhere does not exist.
+$ echo $?
+1
+```
+
+A line too long to read is reported the same way, `<file>:<line>: the line is
+longer than 1048576 bytes.` A line beginning with `-` has its failure reported
+and then ignored. `exit` ends the script with success. Arguments after the
+file name are `$1` to `$9`, and `$#` is how many there are. A script gets its
+own variable scope, so it never changes its caller's variables, while
+`connect` and `cd` lines take effect for the rest of it — and, when it was run
+from the shell, for the shell afterwards. Scripts nest eight deep.
+
+```
+# nightly.cdb — archive last year's films
+cd /movies
+set rev = cat tt0211915 | ._rev
+find '{"year":{"$lt":2000}}' | del(._rev) | put /archive
+ls | rm --yes
+```
+
+`help pipelines` prints all of this in the shell.
+
 ## Scripting
+
+This chapter is about calling `cdb` from an outside shell script. For cdb's own
+pipelines, variables and script files — `cdb run job.cdb`, `cdb < job.cdb` —
+read [Pipelines and scripts](#pipelines-and-scripts) above.
 
 Every shell command is also a subcommand. When stdout is not a terminal the
 output is compact JSON, one document per line, with no colour and no pager:

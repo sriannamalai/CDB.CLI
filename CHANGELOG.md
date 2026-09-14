@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-14
+
+### Added
+
+- Multi-stage shell pipelines. A line is now one or more stages separated by
+  `|`: the first is a command, and every later stage is a command when its
+  first word names one and a jq expression otherwise. Stages run at the same
+  time and values flow between them as JSON, so `tail --follow | put /audit`
+  keeps working as changes arrive. A failing stage stops the line and says
+  which it was, as `stage 2 (put): …`, with that failure's own exit code
+  ([#21](https://github.com/sriannamalai/CDB.CLI/issues/21)).
+- `put`, `rm` and `cat` read a pipeline. `put` writes each document through
+  `_bulk_docs` in batches of 100 and reports `id`, `rev` and `status` per
+  document; `rm` confirms once and deletes in batches; `cat` fetches and emits
+  each document named. A reference is an id, an object carrying `_id` or `id`,
+  or an absolute `/db/id` path. The database may be left out when the current
+  directory is inside one.
+- Shell variables: `set`, `unset`, `set` alone to list. `$name` and `${name}`
+  are replaced inside a word of a command stage — never inside single quotes,
+  and `$$` is a literal `$` — while a jq stage binds every variable as a jq
+  variable of the same name with its stored value. `set <name> = <pipeline>`
+  captures what a pipeline produced. A name ending in `password`, `secret` or
+  `token` prints and is recorded as `****`.
+- Script files: `cdb run <file> [arg...]`, `run` inside the shell, and
+  `cdb < file`. A script is the lines the shell reads, run non-interactively,
+  stopping at the first failing line with `<file>:<line>: <sentence>` on
+  standard error; a line beginning with `-` has its failure ignored, `exit`
+  ends the script with success, arguments are `$1` to `$9` with `$#`, and
+  scripts nest eight deep.
+- `help pipelines`, a built-in page covering all of the above.
+
+### Changed
+
+- The shell's single trailing jq filter is now the last stage of a pipeline.
+  `ls | .[] | .id` is two jq stages rather than one expression, and produces
+  the same values.
+- `put`, `rm` and `cat` take their path as an optional argument, since a piped
+  call may take its database from the current directory instead.
+
 ## [1.4.0] - 2026-09-14
 
 ### Added
@@ -272,7 +311,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `info /` may show a `replication url` row, and `resolve`'s chooser shows
   diffs rather than body previews.
 
-[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.0...v1.2.1
