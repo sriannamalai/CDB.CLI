@@ -45,6 +45,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same values.
 - `put`, `rm` and `cat` take their path as an optional argument, since a piped
   call may take its database from the current directory instead.
+- A pipeline whose source is finite renders through the pager like any other
+  result; only a line fed by a live source such as `tail --follow` streams
+  rows as they arrive ([#52](https://github.com/sriannamalai/CDB.CLI/issues/52)).
+- `cdb run` and `cdb < file` open the connection before the first line when
+  `--url`, `--profile` or their environment variables name a target, so a
+  server that cannot be reached is reported once, with exit code 3, and no
+  line runs ([#54](https://github.com/sriannamalai/CDB.CLI/issues/54)).
+- A user name embedded in the server URL wins over `CDB_USER`, which now
+  applies only to a URL that names nobody.
+- `help`, `history` and `clear` may start a pipeline; only commands that change
+  the connection or the directory cannot.
+
+### Fixed
+
+- `config set` accepts an empty value, and `proxy_use_secret` is no longer
+  masked as if it were a secret ([#48](https://github.com/sriannamalai/CDB.CLI/issues/48)).
+- `users add --admin` and `users passwd --admin` say on standard error when
+  the server has not finished hashing the new password within the wait
+  ([#49](https://github.com/sriannamalai/CDB.CLI/issues/49)).
+- `connect --save` no longer stores a user name with an anonymous connection
+  ([#50](https://github.com/sriannamalai/CDB.CLI/issues/50)).
+- In a command stage a backslash protects only the next character and single
+  quotes protect only what they enclose, so `"\$literal and $var"` and
+  `'$a'$b` expand the part that is not protected; `$1abc` reads as `$1`
+  followed by `abc`, `${a-b}` reports that it is not a variable name, and a
+  bare `$env` says to write `$env.NAME`. A `#` after a `|` ends the line
+  rather than becoming a jq stage. `put` refuses a listing row (an object with
+  only `id` and `rev`) and says to pipe it through `cat` first. `put`, `rm` and
+  `cat` show `<path>` in their one-shot usage line again
+  ([#53](https://github.com/sriannamalai/CDB.CLI/issues/53)).
 
 ## [1.4.0] - 2026-09-14
 
