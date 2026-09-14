@@ -97,7 +97,11 @@ func (sh *Shell) RunScript(ctx context.Context, r io.Reader, name string, args [
 		return command.Reported(err)
 	}
 	if strings.TrimSpace(buf.String()) != "" {
-		return command.Usagef("run", "%s:%d: the last line is unfinished", name, start)
+		// Named the way a failing line is: the file and the line, once. The
+		// error carries no command of its own, so nothing prefixes it again.
+		err := command.Usagef("", "the last line is unfinished")
+		fmt.Fprintf(sh.sess.Stderr, "%s:%d: %s\n", name, start, render.ErrorMessage(err, sh.sess.Prefs.Verbose))
+		return command.Reported(err)
 	}
 	return nil
 }

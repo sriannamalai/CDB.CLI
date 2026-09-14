@@ -169,10 +169,22 @@ func TestScriptNestingStopsAtEight(t *testing.T) {
 func TestScriptUnfinishedLastLine(t *testing.T) {
 	var out bytes.Buffer
 	sh := scriptShell(t, &out)
-	err := runText(t, sh, "say \"one\n")
+	err := runText(t, sh, "say one\nsay \"two\n")
 	var ue *command.UsageError
 	if !errors.As(err, &ue) || !strings.Contains(err.Error(), "unfinished") {
 		t.Fatalf("err = %v", err)
+	}
+	// The failure is named the way every other script failure is: the file and
+	// the line, once, with no command prefix in front of them.
+	var re *command.ReportedError
+	if !errors.As(err, &re) {
+		t.Errorf("err = %#v; the sentence is out, so it is a reported failure", err)
+	}
+	if want := "script.cdb:2: the last line is unfinished\n"; !strings.HasSuffix(out.String(), want) {
+		t.Errorf("stderr = %q, want it to end with %q", out.String(), want)
+	}
+	if strings.Contains(out.String(), "run:") {
+		t.Errorf("stderr = %q; the failure must not carry a second prefix", out.String())
 	}
 }
 
