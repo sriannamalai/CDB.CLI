@@ -141,10 +141,44 @@ func Open(ctx context.Context, s *session.Session, nameOrURL string) error {
 	return err
 }
 
+// resolveTarget settles which target a connection is for: the one the caller
+// named, or the one --profile/--url put on the session.
+//
+// The flags are resolved here because this is where every target is resolved.
+// They used to be read only by the front-end's lazy auto-connect, which
+// "connect" never takes — it opens its own connection — so "cdb connect --url
+// http://elsewhere" dialled the default profile and reported success for a
+// server the operator never named (issue #36).
+//
+// "connect" is also the only command that takes a target of its own, so it is
+// the only place the two can disagree. docs/reference/connect.md says what
+// --url overrides — the profile and CDB_URL — and says nothing about the
+// argument, so a disagreement is reported rather than resolved by an invented
+// precedence. --profile still wins over --url, which is what the front-end did
+// before.
+func resolveTarget(s *session.Session, nameOrURL string) (string, error) {
+	flag, which := s.Prefs.Profile, "--profile"
+	if flag == "" {
+		flag, which = s.Prefs.URL, "--url"
+	}
+	if flag == "" || flag == nameOrURL {
+		return nameOrURL, nil
+	}
+	if nameOrURL != "" {
+		// Neither value is echoed: a URL argument may carry a password.
+		return "", Usagef("connect", "%s and the argument name different servers; pass one of them", which)
+	}
+	return flag, nil
+}
+
 // openProfile does the work of Open. The returned profile's Name is "" when
 // the caller passed a bare URL.
 func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (connection, error) {
 	d := CurrentDeps()
+	nameOrURL, err := resolveTarget(s, nameOrURL)
+	if err != nil {
+		return connection{}, err
+	}
 	cfg, err := loadConfig()
 	if err != nil {
 		return connection{}, err

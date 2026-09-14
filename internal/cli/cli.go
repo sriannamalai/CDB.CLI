@@ -127,11 +127,10 @@ func newSubcommand(reg *command.Registry, c command.Command, s *session.Session)
 			}
 			applyGlobalFlags(cc, s)
 			if c.NeedsClient && !s.Connected() {
-				target, _ := cc.Flags().GetString("profile")
-				if target == "" {
-					target, _ = cc.Flags().GetString("url")
-				}
-				if err := command.Open(cc.Context(), s, target); err != nil {
+				// --profile and --url reach the resolution through the
+				// session preferences applyGlobalFlags has just set, the same
+				// way "connect" reaches it: see command.resolveTarget.
+				if err := command.Open(cc.Context(), s, ""); err != nil {
 					return err
 				}
 			}
@@ -173,6 +172,14 @@ func applyGlobalFlags(c *cobra.Command, s *session.Session) {
 	// Read before the auto-connect below, which is what acts on it.
 	if v, err := flags.GetBool("anonymous"); err == nil && v {
 		s.Prefs.Anonymous = true
+	}
+	// The target flags, for the same reason: openProfile is what acts on them,
+	// whether it is reached by the auto-connect below or by "connect" itself.
+	if v, err := flags.GetString("profile"); err == nil && v != "" {
+		s.Prefs.Profile = v
+	}
+	if v, err := flags.GetString("url"); err == nil && v != "" {
+		s.Prefs.URL = v
 	}
 	if v, err := flags.GetString("replication-url"); err == nil && v != "" {
 		s.Prefs.ReplicationURL = v

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `connect` obeys `--url` and `--profile`. `cdb connect --url http://other`
+  dialled the default profile instead and reported that server's version, and
+  `--profile` was ignored the same way — an unknown name did not even raise an
+  error. Both flags were read only by the lazy auto-connect the other commands
+  take, and `connect` opens its own connection. They are resolved alongside
+  every other target now, so a flag that disagrees with `connect`'s own
+  argument is reported rather than quietly dropped.
 - The Homebrew cask no longer trips Homebrew 6's deprecation warning on
   every command. Its post-install step, which clears the macOS quarantine
   attribute from the downloaded binary, is now written as the declarative

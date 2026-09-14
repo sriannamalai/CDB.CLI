@@ -49,6 +49,13 @@ type Prefs struct {
 	// this shell line. It overrides CDB_REPLICATION_URL and the profile key,
 	// mirroring how --url overrides CDB_URL.
 	ReplicationURL string
+	// Profile and URL are the values of the --profile and --url flags: the
+	// target the operator named for this run. They live here rather than being
+	// read at the auto-connect, because "connect" opens its own connection and
+	// so never reaches that branch; a flag only one front-end path consults is
+	// a flag the other path silently drops.
+	Profile string
+	URL     string
 }
 
 // DefaultPrefs are the settings used before any config or flag is applied.
