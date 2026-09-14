@@ -46,3 +46,22 @@ func TestApplyFilterReportsARuntimeError(t *testing.T) {
 		t.Fatal("ApplyFilter hid a runtime error")
 	}
 }
+
+// compileFilter's second argument is the hook a later task fills from the
+// session's variable table: each entry is readable as a jq variable.
+func TestCompileFilterBindsVariables(t *testing.T) {
+	f, err := compileFilter(`select(.year == $year) | .title`, map[string]any{"year": 2001, "unused": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vals, err := f.apply(json.RawMessage(`{"year":2001,"title":"Amelie"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != 1 || string(vals[0]) != `"Amelie"` {
+		t.Fatalf("values = %v", vals)
+	}
+	if vals, err = f.apply(json.RawMessage(`{"year":1999,"title":"Magnolia"}`)); err != nil || len(vals) != 0 {
+		t.Fatalf("values = %v, err = %v; a non-matching document produces nothing", vals, err)
+	}
+}

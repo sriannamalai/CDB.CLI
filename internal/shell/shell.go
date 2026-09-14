@@ -472,7 +472,7 @@ func applyFilterToResult(expr string, res command.Result) (command.Result, error
 // The stream stays Live, so the renderer keeps writing rows through unpaged
 // and unbuffered.
 func filterLiveStream(expr string, src command.Stream) (command.Result, error) {
-	f, err := compileFilter(expr)
+	f, err := compileFilter(expr, nil)
 	if err != nil {
 		return nil, err
 	}
