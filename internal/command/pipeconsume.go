@@ -308,14 +308,21 @@ func rmBatch(ctx context.Context, s *session.Session, db string, refs []ref) ([]
 	var (
 		docs []json.RawMessage
 		out  []couchBulkResult
-		at   = map[string]int{}
+		// sent[i] is the row the i-th document written belongs to. _bulk_docs
+		// answers in the order it was asked, which is the only way to tell two
+		// rows for the same id apart: a view emits several keys per document,
+		// so one batch can carry the same id twice, and every tombstone after
+		// the first conflicts. Keyed by id instead, the later result would
+		// overwrite one row and leave the others reporting an "ok" that never
+		// happened.
+		sent []int
 	)
 	for _, r := range refs {
 		if r.Rev == "" {
 			out = append(out, couchBulkResult{ID: r.ID, Status: "not_found"})
 			continue
 		}
-		at[r.ID] = len(out)
+		sent = append(sent, len(out))
 		out = append(out, couchBulkResult{ID: r.ID, Rev: r.Rev, Status: "ok"})
 		docs = append(docs, jsonDeleted(r.ID, r.Rev))
 	}
@@ -326,9 +333,9 @@ func rmBatch(ctx context.Context, s *session.Session, db string, refs []ref) ([]
 	if err != nil {
 		return nil, err
 	}
-	for _, w := range written {
-		if i, ok := at[w.ID]; ok {
-			out[i] = w
+	for i, w := range written {
+		if i < len(sent) {
+			out[sent[i]] = w
 		}
 	}
 	return out, nil

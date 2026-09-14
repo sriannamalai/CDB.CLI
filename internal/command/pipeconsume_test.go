@@ -350,3 +350,32 @@ func TestRmPipelineBatchesAtTheBoundary(t *testing.T) {
 		t.Errorf("_bulk_docs requests = %d, want 2", bulkDocs)
 	}
 }
+
+// A view can emit several keys per document, so one batch can carry the same
+// id twice. The second tombstone conflicts, and the row must say so: the
+// server's results are matched by position, not by id.
+func TestRmPipelineReportsEachReferenceByPosition(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_bulk_docs", 201, `[
+		{"ok":true,"id":"a","rev":"2-dead"},
+		{"id":"a","error":"conflict","reason":"Document update conflict."},
+		{"id":"a","error":"conflict","reason":"Document update conflict."}]`)
+	s := connected(t, srv)
+	s.Prefs.Yes = true
+	row := `{"id":"a","value":{"rev":"1-x"}}`
+	rows, err := piped(t, Rm(), s, []string{"/movies"}, row, row, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %v", rows)
+	}
+	if rows[0][2] != "ok" {
+		t.Errorf("row 0 = %v, want ok", rows[0])
+	}
+	for i := 1; i < 3; i++ {
+		if rows[i][2] != "conflict" {
+			t.Errorf("row %d = %v; a repeated id must carry the server's own status", i, rows[i])
+		}
+	}
+}
