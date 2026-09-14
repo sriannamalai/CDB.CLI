@@ -179,9 +179,25 @@ func resolveTarget(s *session.Session, nameOrURL string) (string, error) {
 	return flag, nil
 }
 
-// openProfile does the work of Open. The returned profile's Name is "" when
-// the caller passed a bare URL.
+// authOverride carries "connect --auth" and "--roles" into profile
+// resolution. The kind decides which credential is asked for and which
+// transport is built, so it has to arrive before the profile is dialled rather
+// than after -- which is why it travels as a parameter instead of being
+// applied to the resolved profile by the caller.
+type authOverride struct {
+	Kind  string
+	Roles []string
+}
+
+// openProfile does the work of Open, with no command-line override.
 func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (connection, error) {
+	return openProfileWith(ctx, s, nameOrURL, authOverride{})
+}
+
+// openProfileWith is openProfile with the kind and roles the operator named on
+// the command line. The returned profile's Name is "" when the caller passed a
+// bare URL.
+func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, over authOverride) (connection, error) {
 	d := CurrentDeps()
 	nameOrURL, err := resolveTarget(s, nameOrURL)
 	if err != nil {
@@ -268,6 +284,23 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 		bare = false
 	}
 	profile = env.Apply(profile)
+	// A named kind beats the profile and the environment both: it is the most
+	// specific thing the operator said, and the same precedence --url has over
+	// CDB_URL.
+	if over.Kind != "" {
+		profile.Auth = over.Kind
+		// Only the kinds that have no password to be asked for clear the
+		// bare-URL prompt below. "--auth session" on a credential-free URL
+		// still has to be asked: clearing it there would dial with an empty
+		// password and turn an answerable question into a 401.
+		switch over.Kind {
+		case string(couch.AuthProxy), string(couch.AuthNone):
+			bare = false
+		}
+	}
+	if len(over.Roles) > 0 {
+		profile.Roles = over.Roles
+	}
 	// The flag wins over CDB_REPLICATION_URL, which Env.Apply has just layered
 	// over the profile key — the same order --url, CDB_URL and the profile's
 	// url follow. A flag the operator got wrong is a usage error, not a
@@ -304,6 +337,26 @@ func openProfile(ctx context.Context, s *session.Session, nameOrURL string) (con
 			return connection{}, Connectionf(err,
 				"Could not read the password for profile %q from the system keyring: %s. The passphrase or the keychain permission may be wrong; set CDB_PASSWORD to bypass it.",
 				profileName, trimSentence(err))
+		}
+	}
+
+	// A proxy profile with no secret anywhere has its own questions: the kind
+	// takes no password, so the bare-URL prompt below would ask the wrong
+	// ones. On a terminal, ask; without one, let the connection fail with the
+	// server's own answer, which the proxy sentence turns into something
+	// actionable.
+	if secret == "" && s.Prefs.Interactive && !s.Prefs.Anonymous {
+		switch profile.Auth {
+		case string(couch.AuthProxy):
+			user, roles, sec, perr := promptForProxy(s, profile.Username)
+			if perr != nil {
+				return connection{}, perr
+			}
+			profile.Username, secret = user, sec
+			if len(roles) > 0 {
+				profile.Roles = roles
+			}
+			bare = false
 		}
 	}
 
@@ -355,11 +408,43 @@ const anonymousNotice = "Connected anonymously; pass --anonymous to silence this
 // hands back to the session; "profiles add" closes it again, because it is
 // only asking whether the password works before writing it down.
 func verifyLogin(ctx context.Context, profile config.Profile, secret string) (*couch.Client, couch.ServerInfo, error) {
+	cc, info, err := attemptLogin(ctx, profile, secret, profile.ProxyHash)
+	// Only an unpinned proxy profile has a second thing to try. A pinned hash
+	// is the answer to the question the probe asks, so asking it again would
+	// send the token the operator already ruled out.
+	if err == nil || profile.Auth != string(couch.AuthProxy) || profile.ProxyHash != "" || !proxyRejected(err) {
+		return cc, info, err
+	}
+	// The server would not act on the SHA-256 token. That is either a secret
+	// that disagrees or a server too old to verify anything but HMAC-SHA1 --
+	// CouchDB gained hash_algorithms in 3.4 -- and the two are
+	// indistinguishable from the answer, since both are an anonymous session.
+	// So the other digest is tried once, on a client built for it: the token
+	// is computed at construction, and rewriting a live transport would leave
+	// the client's own view of itself wrong for the replication endpoints that
+	// read it back.
+	return attemptLogin(ctx, profile, secret, couch.ProxyHashSHA1)
+}
+
+// proxyRejected reports whether err is the 401 a proxy login that the server
+// did not act on produces -- the synthetic one below, or a real one from the
+// server. Anything else (a refused connection, a 500) is not a reason to try
+// the other digest.
+func proxyRejected(err error) bool {
+	ce, ok := couch.AsError(err)
+	return ok && ce.Status == http.StatusUnauthorized && ce.Auth == couch.AuthProxy
+}
+
+// attemptLogin is one verification attempt, with proxyHash naming the digest a
+// proxy token is computed with ("" meaning the default).
+func attemptLogin(ctx context.Context, profile config.Profile, secret, proxyHash string) (*couch.Client, couch.ServerInfo, error) {
 	cc, err := couch.New(couch.Config{
 		URL:            profile.URL,
 		Auth:           couch.AuthKind(profile.Auth),
 		Username:       profile.Username,
 		Secret:         secret,
+		Roles:          profile.Roles,
+		ProxyHash:      proxyHash,
 		InsecureTLS:    profile.InsecureTLS,
 		CAFile:         profile.CAFile,
 		ReplicationURL: profile.ReplicationURL,
@@ -385,6 +470,18 @@ func verifyLogin(ctx context.Context, profile config.Profile, secret string) (*c
 			ce.Hint = jwtVersionHint(info.Version)
 		}
 		return nil, couch.ServerInfo{}, err
+	}
+	// A proxy token the server will not accept does not fail: the request is
+	// simply anonymous, or -- with a cookie in play -- somebody else. Both are
+	// checked, because "a name came back" is not the same as "the name cdb
+	// asked for came back".
+	if profile.Auth == string(couch.AuthProxy) && (sess.Method != "proxy" || sess.Name != profile.Username) {
+		_ = cc.Close()
+		e := couch.NewError(http.StatusUnauthorized, "unauthorized",
+			"The server did not act on the proxy credentials.", "authenticate",
+			couch.UnauthorizedTarget(profile.Username, cc.Host()))
+		e.Auth = couch.AuthProxy
+		return nil, couch.ServerInfo{}, e
 	}
 	// A server with no admins, or a JWT it declines to honour, answers
 	// GET /_session with "name": null and a 200. Asking for authentication and
@@ -415,6 +512,12 @@ func dial(ctx context.Context, s *session.Session, profile config.Profile, attac
 	if err != nil {
 		return connection{}, err
 	}
+	// The digest the probe settled on travels back with the profile, so
+	// "--save" writes down which one this server verifies instead of making
+	// every later connection discover it again.
+	if profile.Auth == string(couch.AuthProxy) {
+		profile.ProxyHash = cc.ProxyHash()
+	}
 	if !supportedVersion(info.Version) {
 		fmt.Fprintf(s.Stderr, "warning: this server reports CouchDB %s; cdb supports 3.0 through 3.5.\n", info.Version)
 	}
@@ -425,13 +528,30 @@ func dial(ctx context.Context, s *session.Session, profile config.Profile, attac
 	return connection{Profile: profile, Secret: secret, Info: info}, nil
 }
 
-// validAuthKind reports whether s is one of the three kinds couch.New acts on.
-func validAuthKind(s string) bool {
-	switch couch.AuthKind(s) {
-	case couch.AuthSession, couch.AuthJWT, couch.AuthNone:
-		return true
+// validAuthKind reports whether s is one of the kinds couch.New acts on.
+func validAuthKind(s string) bool { return config.ValidAuthKind(s) }
+
+// authOverrideFrom reads --auth and --roles off an invocation, rejecting a
+// kind cdb does not have a transport for before any network work is done.
+func authOverrideFrom(inv Invocation) (authOverride, error) {
+	kind := inv.String("auth")
+	if kind != "" && !validAuthKind(kind) {
+		return authOverride{}, Usagef("connect", "%q is not an authentication kind; expected session, jwt, proxy, iam or none", kind)
 	}
-	return false
+	return authOverride{Kind: kind, Roles: splitRoles(inv.String("roles"))}, nil
+}
+
+// splitRoles turns a comma-separated role list into a slice, dropping empty
+// entries so "a,,b" and a trailing comma behave as typed rather than claiming
+// an empty role.
+func splitRoles(raw string) []string {
+	var out []string
+	for _, r := range strings.Split(raw, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // supportedVersion reports whether v is CouchDB 3.0 through 3.5.
@@ -478,6 +598,8 @@ Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 		Flags: func(fs *pflag.FlagSet) {
 			fs.Bool("save", false, "save the connection as a profile after connecting")
 			fs.String("as", "", "profile name to save under")
+			fs.String("auth", "", "authentication kind: session, jwt, proxy, iam or none")
+			fs.String("roles", "", "roles to claim under proxy authentication, comma-separated")
 		},
 		Complete: func(_ context.Context, _ *session.Session, _ []string, cur string) []Candidate {
 			cfg, err := loadConfig()
@@ -554,7 +676,11 @@ Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 			} else {
 				// openProfile owns the bare-URL question, because every other
 				// command reaches a server through it too.
-				conn, err = openProfile(ctx, s, arg)
+				over, oerr := authOverrideFrom(inv)
+				if oerr != nil {
+					return nil, oerr
+				}
+				conn, err = openProfileWith(ctx, s, arg, over)
 			}
 			if err != nil {
 				return nil, err
@@ -710,6 +836,32 @@ func promptForCredentials(s *session.Session) (user, secret string, err error) {
 	return user, secret, nil
 }
 
+// promptForProxy asks the three questions proxy authentication needs: who cdb
+// claims to be, what roles it claims, and the secret that proves the claim.
+// def is the user name already known (from a profile or CDB_USER), which is
+// offered as the default.
+//
+// The roles answer may be blank: a proxy user with no roles is a real user,
+// and an empty X-Auth-CouchDB-Roles header is not the way to say so.
+func promptForProxy(s *session.Session, def string) (user string, roles []string, secret string, err error) {
+	if def == "" {
+		def = "admin"
+	}
+	user, err = askLine(s, "Username", def)
+	if err != nil {
+		return "", nil, "", err
+	}
+	raw, err := askLine(s, "Roles (comma-separated, blank for none)", "")
+	if err != nil {
+		return "", nil, "", err
+	}
+	secret, err = readSecret(s, "Shared secret")
+	if err != nil {
+		return "", nil, "", err
+	}
+	return user, splitRoles(raw), secret, nil
+}
+
 // promptForProfile walks an operator through creating the first profile.
 func promptForProfile(s *session.Session) (config.Profile, string, error) {
 	ask := func(label, def string) (string, error) { return askLine(s, label, def) }
@@ -723,14 +875,14 @@ func promptForProfile(s *session.Session) (config.Profile, string, error) {
 	// offer to save a profile that can never log in.
 	var auth string
 	for {
-		auth, err = ask("Authentication (session, jwt, none)", "session")
+		auth, err = ask("Authentication (session, jwt, proxy, iam, none)", "session")
 		if err != nil {
 			return config.Profile{}, "", err
 		}
 		if validAuthKind(auth) {
 			break
 		}
-		fmt.Fprintf(s.Stdout, "%q is not an authentication kind; expected session, jwt or none.\n", auth)
+		fmt.Fprintf(s.Stdout, "%q is not an authentication kind; expected session, jwt, proxy, iam or none.\n", auth)
 	}
 	name, err := ask("Profile name", "local")
 	if err != nil {
@@ -757,6 +909,12 @@ func promptForProfile(s *session.Session) (config.Profile, string, error) {
 		if err != nil {
 			return config.Profile{}, "", err
 		}
+	case "proxy":
+		user, roles, sec, perr := promptForProxy(s, "")
+		if perr != nil {
+			return config.Profile{}, "", perr
+		}
+		p.Username, p.Roles, secret = user, roles, sec
 	}
 	return p, secret, nil
 }
@@ -819,6 +977,10 @@ Default profile is now "local".`,
 		Usage:   "[list | add <name> <url> | remove <name> | default <name>]",
 		MinArgs: 0,
 		MaxArgs: 3,
+		Flags: func(fs *pflag.FlagSet) {
+			fs.String("auth", "", "authentication kind: session, jwt, proxy, iam or none")
+			fs.String("roles", "", "roles to claim under proxy authentication, comma-separated")
+		},
 		Details: "\"profiles add\" saves a server without connecting to it. A URL with no user name\n" +
 			"and password is asked about on a terminal, the way connect asks: it prompts for\n" +
 			"the user name and the password with echo off, proves them against the server, and\n" +
@@ -965,6 +1127,36 @@ Default profile is now "local".`,
 // it.
 func profileToAdd(ctx context.Context, s *session.Session, inv Invocation, name, serverURL string) (config.Profile, string, error) {
 	profile := config.Profile{Name: name, URL: serverURL, Auth: "session"}
+	over, err := authOverrideFrom(inv)
+	if err != nil {
+		return config.Profile{}, "", err
+	}
+	if over.Kind != "" {
+		profile.Auth, profile.Roles = over.Kind, over.Roles
+	}
+	if profile.Auth == string(couch.AuthProxy) {
+		// A proxy profile has no password to ask for and a digest to settle,
+		// so it takes its own path: ask the three questions, prove them, and
+		// write down the digest the server actually verified.
+		if !s.Prefs.Interactive || s.Prefs.Anonymous {
+			return profile, "", nil
+		}
+		user, roles, secret, perr := promptForProxy(s, profile.Username)
+		if perr != nil {
+			return config.Profile{}, "", perr
+		}
+		profile.Username = user
+		if len(roles) > 0 {
+			profile.Roles = roles
+		}
+		cc, _, verr := verifyLogin(ctx, profile, secret)
+		if verr != nil {
+			return config.Profile{}, "", verr
+		}
+		profile.ProxyHash = cc.ProxyHash()
+		_ = cc.Close()
+		return profile, secret, nil
+	}
 	_, urlUser, urlSecret := splitURLCredentials(serverURL)
 	switch {
 	case inv.Bool("anonymous") || s.Prefs.Anonymous:

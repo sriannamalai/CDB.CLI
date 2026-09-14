@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sriannamalai/CDB.CLI/internal/config"
+	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
 )
@@ -706,7 +710,7 @@ func TestConnectGuidedPromptReAsksForAnUnknownAuthKind(t *testing.T) {
 	if _, err := Connect().Run(context.Background(), s, Invocation{}); err != nil {
 		t.Fatalf("guided connect: %v (output: %s)", err, out.String())
 	}
-	if !strings.Contains(out.String(), "session, jwt or none") {
+	if !strings.Contains(out.String(), "session, jwt, proxy, iam or none") {
 		t.Errorf("the walk-through did not name the valid authentication kinds:\n%s", out.String())
 	}
 	if n := strings.Count(out.String(), "Authentication ("); n != 2 {
@@ -931,5 +935,256 @@ func TestProfilesListRedactsURLCredentials(t *testing.T) {
 	}
 	if got := string(rows.Items[0].JSON); strings.Contains(got, "hunter2") {
 		t.Errorf("profiles list JSON printed a password: %q", got)
+	}
+}
+
+// The SHA-256 and SHA-1 tokens for user "ops" under the shared secret
+// "proxysecret", computed the way CouchDB computes them:
+//
+//	printf 'ops' | openssl dgst -sha256 -hmac "proxysecret" -r
+const (
+	proxyTokenSHA256 = "9fd98e6f0b43d9a40402668112d5bc133a04ffffdba3051d8cb68f1bd1945929"
+	proxyTokenSHA1   = "ce2e3c21babe720409fce16423fb13caa1d7532f"
+)
+
+// proxyStub answers GET /_session the way a CouchDB with the proxy handler in
+// its chain does: the name and roles come from the headers, and "authenticated"
+// is "proxy". A request with no token, or a token the stub does not recognise,
+// gets the anonymous answer a real server gives -- 200 with "name": null.
+func proxyStub(t *testing.T, wantToken string) *couchtest.Server {
+	t.Helper()
+	srv := couchtest.New(t)
+	srv.On("GET", "/_session", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		name := r.Header.Get("X-Auth-CouchDB-UserName")
+		if r.Header.Get("X-Auth-CouchDB-Token") != wantToken || name == "" {
+			_, _ = io.WriteString(w, `{"ok":true,"userCtx":{"name":null,"roles":[]},"info":{"authenticated":"default","authentication_handlers":["proxy","cookie","default"]}}`)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"ok":true,"userCtx":{"name":%q,"roles":["_admin"]},"info":{"authenticated":"proxy","authentication_handlers":["proxy","cookie","default"]}}`, name)
+	})
+	return srv
+}
+
+// proxyEnvSession installs a Deps whose environment supplies the shared secret
+// through CDB_PASSWORD, which is the secret slot for every kind, and a config
+// file and keyring that live only for the test.
+func proxyEnvSession(t *testing.T, secret string) *session.Session {
+	t.Helper()
+	env := map[string]string{"CDB_PASSWORD": secret, "CDB_USER": "ops"}
+	SetDeps(&Deps{
+		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		Secrets:    config.NewMemorySecrets(),
+		LookupEnv:  func(k string) (string, bool) { v, ok := env[k]; return v, ok },
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	return s
+}
+
+// sentTokens is every X-Auth-CouchDB-Token the stub saw, in order, so a test
+// can say which digests were tried without counting requests.
+func sentTokens(srv *couchtest.Server) []string {
+	var out []string
+	for _, r := range srv.Requests() {
+		if tok := r.Header.Get("X-Auth-CouchDB-Token"); tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+func TestConnectWithAuthProxyConnects(t *testing.T) {
+	srv := proxyStub(t, proxyTokenSHA256)
+	s := proxyEnvSession(t, "proxysecret")
+	res, err := invoke(t, Connect(), s, srv.URL(), "--auth", "proxy", "--roles", "_admin,editor")
+	if err != nil {
+		t.Fatalf("connect --auth proxy = %v", err)
+	}
+	if msg, ok := res.(Message); !ok || !strings.Contains(msg.Text, "as ops") {
+		t.Errorf("result = %#v", res)
+	}
+	// The roles flag has to reach the wire, not just the profile.
+	var seen bool
+	for _, r := range srv.Requests() {
+		if r.Header.Get("X-Auth-CouchDB-Roles") == "_admin,editor" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Error("no request carried the roles from --roles")
+	}
+}
+
+// The whole point of the _session check: a wrong secret is a 200 with a null
+// name, so a connection that trusts the status code reports success and then
+// acts as nobody.
+func TestConnectWithAuthProxyRejectsAWrongSecret(t *testing.T) {
+	srv := proxyStub(t, proxyTokenSHA256)
+	s := proxyEnvSession(t, "wrong-secret")
+	_, err := invoke(t, Connect(), s, srv.URL(), "--auth", "proxy")
+	if err == nil {
+		t.Fatal("a wrong shared secret connected")
+	}
+	ce, ok := couch.AsError(err)
+	if !ok {
+		t.Fatalf("err is %T (%v), want a *couch.Error", err, err)
+	}
+	if ce.Status != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 so the exit code is 3", ce.Status)
+	}
+	if ce.Auth != couch.AuthProxy {
+		t.Errorf("Auth = %q, want %q", ce.Auth, couch.AuthProxy)
+	}
+	// The secret and the computed token never reach the operator.
+	if msg := ce.Error(); strings.Contains(msg, "wrong-secret") {
+		t.Errorf("the error leaked the secret: %s", msg)
+	}
+}
+
+// A server that authenticated somebody else -- a stale cookie, say -- is not a
+// successful proxy login either.
+func TestConnectWithAuthProxyRejectsAnotherUsersSession(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_session", 200, `{"ok":true,"userCtx":{"name":"admin","roles":["_admin"]},"info":{"authenticated":"cookie","authentication_handlers":["proxy","cookie","default"]}}`)
+	s := proxyEnvSession(t, "proxysecret")
+	_, err := invoke(t, Connect(), s, srv.URL(), "--auth", "proxy")
+	if err == nil {
+		t.Fatal("a cookie session passed as a proxy login")
+	}
+}
+
+// CouchDB before 3.4 verifies HMAC-SHA1 only, and answers the SHA-256 token
+// with an anonymous session rather than an error, so the only way to tell that
+// server from a wrong secret is to try the other digest.
+func TestConnectWithAuthProxyFallsBackToSHA1(t *testing.T) {
+	srv := proxyStub(t, proxyTokenSHA1)
+	s := proxyEnvSession(t, "proxysecret")
+	if _, err := invoke(t, Connect(), s, srv.URL(), "--auth", "proxy", "--save", "--as", "old"); err != nil {
+		t.Fatalf("connect --auth proxy against a SHA-1 server = %v", err)
+	}
+	tokens := sentTokens(srv)
+	if len(tokens) < 2 || tokens[0] != proxyTokenSHA256 {
+		t.Errorf("tokens = %v, want the SHA-256 one tried first", tokens)
+	}
+	if tokens[len(tokens)-1] != proxyTokenSHA1 {
+		t.Errorf("the connection did not settle on the SHA-1 token: %v", tokens)
+	}
+	// The digest that worked is written down, so the next connection does not
+	// pay for the probe -- or, worse, fail it when the server is slow.
+	cfg, err := config.Load(CurrentDeps().ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := cfg.Profile("old")
+	if !ok {
+		t.Fatal("the profile was not saved")
+	}
+	if p.ProxyHash != couch.ProxyHashSHA1 {
+		t.Errorf("proxy_hash = %q, want %q", p.ProxyHash, couch.ProxyHashSHA1)
+	}
+	if p.Auth != "proxy" {
+		t.Errorf("auth = %q, want proxy", p.Auth)
+	}
+}
+
+// A pinned proxy_hash is the answer to the question the probe asks, so the
+// probe is not asked again.
+func TestConnectWithAPinnedProxyHashSkipsTheProbe(t *testing.T) {
+	srv := proxyStub(t, proxyTokenSHA1)
+	s := proxyEnvSession(t, "proxysecret")
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "old", URL: srv.URL(), Auth: "proxy", Username: "ops", ProxyHash: couch.ProxyHashSHA1})
+	if err := cfg.Save(CurrentDeps().ConfigPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invoke(t, Connect(), s, "old"); err != nil {
+		t.Fatalf("connect old = %v", err)
+	}
+	for _, tok := range sentTokens(srv) {
+		if tok != proxyTokenSHA1 {
+			t.Errorf("a pinned profile still sent %q", tok)
+		}
+	}
+}
+
+func TestConnectRejectsAnUnknownAuthFlag(t *testing.T) {
+	srv := couchtest.New(t)
+	s := proxyEnvSession(t, "proxysecret")
+	_, err := invoke(t, Connect(), s, srv.URL(), "--auth", "prxy")
+	var ue *UsageError
+	if !errors.As(err, &ue) {
+		t.Fatalf("err is %T (%v), want a *UsageError so the exit code is 2", err, err)
+	}
+	if !strings.Contains(err.Error(), "proxy") {
+		t.Errorf("the message does not list the kinds: %v", err)
+	}
+}
+
+// The guided walk-through's kind prompt has to offer the new kinds, and take
+// them: an operator who types "proxy" at a prompt that lists it must not be
+// told it is not a kind.
+func TestGuidedWalkthroughAcceptsProxy(t *testing.T) {
+	srv := proxyStub(t, proxyTokenSHA256)
+	SetDeps(&Deps{
+		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		Secrets:    config.NewMemorySecrets(),
+		LookupEnv:  func(string) (string, bool) { return "", false },
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	s.Prefs.Interactive = true
+	// URL, kind, profile name, user name, roles, shared secret, then "no" to
+	// saving the profile.
+	s.SetStdin(strings.NewReader(srv.URL() + "\nproxy\nops\nops\n_admin\nproxysecret\nn\n"))
+	if _, err := invoke(t, Connect(), s); err != nil {
+		t.Fatalf("guided connect with proxy = %v", err)
+	}
+	out := s.Stdout.(*bytes.Buffer).String()
+	if !strings.Contains(out, "proxy") {
+		t.Errorf("the kind prompt does not offer proxy: %s", out)
+	}
+	if strings.Contains(out, "proxysecret") {
+		t.Errorf("the shared secret was echoed: %s", out)
+	}
+}
+
+// "profiles add --auth proxy" has the same three questions to ask and the same
+// verification to do, and it must write the digest it settled on.
+func TestProfilesAddWithAuthProxy(t *testing.T) {
+	srv := proxyStub(t, proxyTokenSHA1)
+	SetDeps(&Deps{
+		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		Secrets:    config.NewMemorySecrets(),
+		LookupEnv:  func(string) (string, bool) { return "", false },
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	s.Prefs.Interactive = true
+	s.SetStdin(strings.NewReader("ops\n_admin,editor\nproxysecret\n"))
+	if _, err := invoke(t, Profiles(), s, "add", "old", srv.URL(), "--auth", "proxy"); err != nil {
+		t.Fatalf("profiles add --auth proxy = %v", err)
+	}
+	cfg, err := config.Load(CurrentDeps().ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := cfg.Profile("old")
+	if !ok {
+		t.Fatal("the profile was not saved")
+	}
+	if p.Auth != "proxy" || p.Username != "ops" || p.ProxyHash != couch.ProxyHashSHA1 {
+		t.Errorf("profile = %+v", p)
+	}
+	if strings.Join(p.Roles, ",") != "_admin,editor" {
+		t.Errorf("roles = %v", p.Roles)
+	}
+	secret, err := CurrentDeps().Secrets.Get("old")
+	if err != nil || secret != "proxysecret" {
+		t.Errorf("the shared secret did not reach the keyring: %v", err)
 	}
 }

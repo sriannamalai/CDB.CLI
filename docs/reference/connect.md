@@ -28,6 +28,8 @@ Takes at most 1 argument.
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--as` | string |  | profile name to save under |
+| `--auth` | string |  | authentication kind: session, jwt, proxy, iam or none |
+| `--roles` | string |  | roles to claim under proxy authentication, comma-separated |
 | `--save` | bool | `false` | save the connection as a profile after connecting |
 
 ## Global flags

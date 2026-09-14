@@ -26,6 +26,13 @@ terminal nothing is asked and the URL is stored as typed.
 
 Takes at most 3 arguments.
 
+## Flags
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--auth` | string |  | authentication kind: session, jwt, proxy, iam or none |
+| `--roles` | string |  | roles to claim under proxy authentication, comma-separated |
+
 ## Global flags
 
 | Flag | Type | Default | Description |
