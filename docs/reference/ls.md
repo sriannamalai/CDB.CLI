@@ -63,6 +63,13 @@ $ cdb ls /movies --limit 2
 more documents: ls /movies --start "tt0245429"
 
 $ cdb ls /movies --start tt0245429 --fields title,year
+
+$ cdb ls /movies/_design/app
+ KIND   | NAME     | BACKEND
+--------+----------+----------
+ view   | by_year  |
+ search | by_title | clouseau
+ search | by_body  | nouveau
 ```
 
 ## See also

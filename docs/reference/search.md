@@ -16,7 +16,8 @@ Run a full-text query against a search index.
 
 The query is Lucene syntax, sent to the server as it stands. --sort and --ranges are
 passed through verbatim too, because their grammar belongs to the backend. Paging is
-by bookmark: run the command again with the --bookmark the last page printed.
+by bookmark: run the command again with the --bookmark the last page printed,
+which --json carries in its trailing object as "bookmark".
 
 ## Arguments
 

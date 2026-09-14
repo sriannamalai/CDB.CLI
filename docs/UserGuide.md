@@ -145,9 +145,11 @@ server works the same way it would against 3.5.
 environment variable `CDB_IAM_API_KEY`, authenticates to Cloudant with an IBM
 Cloud IAM API key instead of a CouchDB user name and password. The key is
 asked for once and kept in the keychain like a password; `cdb` exchanges it
-for a bearer token before the first request and refreshes it in the
-background well before the token's one-hour lifetime runs out, so a
-long-running command or an open shell session does not fail partway through.
+for a bearer token before the first request and exchanges it again, in the
+request that needs it, once less than a minute of the token's one-hour
+lifetime remains -- and once more if the server answers 401 anyway -- so a
+long-running command or an open shell session does not fail partway
+through.
 `CDB_IAM_URL`, or `iam_url` in the profile, points the exchange at a token
 endpoint other than IBM's public one; the exchange itself is subject to the
 same `ca_file` and `insecure_tls` profile settings as every other request, so
@@ -365,10 +367,14 @@ $ cdb search /movies/_design/app/_search/by_title 'title:a*' --limit 10
 more results: search /movies/_design/app/_search/by_title "title:a*" --bookmark "g1AAAAF9eJ…"
 ```
 
+Under `--json` the same bookmark rides in the trailing object as `bookmark`,
+so a script can page without parsing the hint.
+
 `--counts field` (repeatable) returns facet counts for a field, `--ranges`
 takes a JSON object of named ranges, and `--drilldown field:value`
-(repeatable) restricts to a facet value; all three are printed as a hint line
-alongside the rows. `info` on an index path — the same command used for a
+(repeatable) restricts to a facet value. The counts and the ranges the server
+returns are printed as a hint line alongside the rows, and ride in the JSON
+tail under `--json`; a drilldown only narrows the query. `info` on an index path — the same command used for a
 database or a view — reports the index's own statistics instead of running a
 query:
 

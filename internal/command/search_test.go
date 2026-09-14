@@ -65,8 +65,14 @@ func TestSearchPagingHint(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `more results: search /movies/_design/app/_search/by_title "title:a*" --bookmark "g1AAAA"`
-	if got := res.(Rows).Hint; got != want {
+	rows := res.(Rows)
+	if got := rows.Hint; got != want {
 		t.Errorf("hint  = %q\nwant %q", got, want)
+	}
+	// The hint is for a person; --json renders Extra, and a script that cannot
+	// read the bookmark cannot page.
+	if got := string(rows.Extra["bookmark"]); got != `"g1AAAA"` {
+		t.Errorf("Extra[bookmark] = %s, want the bookmark of the next page", got)
 	}
 }
 

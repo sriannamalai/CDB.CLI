@@ -298,6 +298,16 @@ func Resolve(base, input string) (Target, error) {
 			t.Kind = KindDesignDoc
 			return t, nil
 		case 4:
+			// CouchDB reserves _view, _search and _nouveau under a design
+			// document, so none of them can name an attachment there. "ls .."
+			// out of an index lands on exactly this path, and calling it an
+			// attachment sent the operator to "cat"; name the design document
+			// instead, which is what they were stepping up to.
+			if kind, ok := indexSeparator(dec[3]); ok {
+				return Target{}, &Error{Input: input, Reason: fmt.Sprintf(
+					"a %s path needs a name, as in /%s/_design/%s/%s/<name>; the design document itself is /%s/_design/%s",
+					kind, segs[0], segs[2], dec[3], segs[0], segs[2])}
+			}
 			t.Kind = KindAttachment
 			t.Attachment = dec[3]
 			return t, nil
@@ -332,6 +342,19 @@ func Resolve(base, input string) (Target, error) {
 	default:
 		return Target{}, &Error{Input: input, Reason: "path has too many segments"}
 	}
+}
+
+// indexSeparator reports whether seg is one of the three words that separate a
+// design document from the index it holds, and names the kind of index it
+// introduces for an error sentence.
+func indexSeparator(seg string) (string, bool) {
+	switch seg {
+	case "_view":
+		return "view", true
+	case "_search", "_nouveau":
+		return "search index", true
+	}
+	return "", false
 }
 
 // PartitionDocID applies CouchDB's partitioned-document convention: a document

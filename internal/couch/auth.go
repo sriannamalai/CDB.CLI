@@ -237,8 +237,9 @@ func (t *proxyTransport) CloseIdleConnections() { closeIdle(t.base) }
 // means the default, SHA-256.
 //
 // Which digest the server verifies is a version question, not a preference.
-// CouchDB 3.4 added [chttpd_auth] hash_algorithms, whose default "sha256, sha"
-// accepts either; every server before it verifies HMAC-SHA1 and nothing else
+// CouchDB 3.3.2 added [chttpd_auth] hash_algorithms, whose default
+// "sha256, sha" accepts either; 3.0 through 3.3.1 verify HMAC-SHA1 and nothing
+// else
 // (checked live against 3.0.1, which refuses the SHA-256 token, and 3.5.2,
 // which takes both). cdb therefore emits SHA-256 by default and keeps SHA-1
 // for the servers that need it, rather than picking one and calling the other
@@ -257,7 +258,7 @@ func proxyToken(secret, username, hash string) string {
 }
 
 // normaliseProxyHash fills in the default and rejects anything cdb cannot
-// compute. A hand-edited profile_hash of "md5" would otherwise fall back to
+// compute. A hand-edited proxy_hash of "md5" would otherwise fall back to
 // the default and authenticate as nobody against the very server it was pinned
 // for, which is the failure the pin exists to avoid.
 func normaliseProxyHash(hash string) (string, error) {

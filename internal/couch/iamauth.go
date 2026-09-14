@@ -194,20 +194,3 @@ func (t *iamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // CloseIdleConnections delegates to the base transport; see sessionTransport's
 // method for why it has to exist.
 func (t *iamTransport) CloseIdleConnections() { closeIdle(t.base) }
-
-// cachedIAMBearer is the token the IAM transport is currently holding, or ""
-// when the client is not IAM-authenticated or has not exchanged yet. It does
-// no I/O, so it is safe to call from ReplicationEndpointFor, which has no
-// context -- and by the time an endpoint is built the client has always made at
-// least one authenticated request, so the cache is warm.
-//
-// Like the key it was minted from, the result is for request bodies only.
-func (c *Client) cachedIAMBearer() string {
-	t, ok := c.hc.Transport.(*iamTransport)
-	if !ok {
-		return ""
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.token
-}

@@ -87,9 +87,10 @@ func searchEndpoint(b path.Backend, info bool) string {
 	}
 }
 
-// searchPath builds /db[/_partition/key]/_design/app/<endpoint>/<index>. It
-// sits beside mangoPath and uses the same two helpers, so a database or index
-// name with a slash or a "#" in it is escaped exactly once, in one place.
+// searchPath builds /db[/_partition/key]/_design/app/<endpoint>/<index>. It is
+// mangoPath's counterpart for search and uses the same two helpers, so a
+// database or index name with a slash or a "#" in it is escaped exactly once,
+// in one place.
 func searchPath(db, partition, ddocID, endpoint, index string) string {
 	return dbBase(db, partition) + "/" + encodeDocID(ddocID) + "/" + endpoint + "/" + path.Encode(index)
 }

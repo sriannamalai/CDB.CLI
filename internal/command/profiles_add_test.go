@@ -339,3 +339,53 @@ func TestProfilesAddNeverWritesTheSecretIntoTheProfile(t *testing.T) {
 		})
 	}
 }
+
+// Roles belong to proxy authentication and nothing else reads them: couch.New
+// sends X-Auth-CouchDB-Roles only under auth = "proxy". A --roles that rode
+// along with a session connection used to be written into the saved profile,
+// where it looks like a claim cdb honours and is never sent anywhere.
+func TestRolesAreSavedOnlyForProxyProfiles(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), map[string]string{"CDB_PASSWORD": "hunter2", "CDB_USER": "admin"})
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	fs := NewRegistry().NewFlagSet(Connect())
+	if err := fs.Parse([]string{srv.URL(), "--auth", "session", "--roles", "a,b", "--save", "--as", "saved"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Connect().Run(context.Background(), s, Invocation{Args: fs.Args(), Flags: fs}); err != nil {
+		t.Fatal(err)
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("saved")
+	if !ok {
+		t.Fatalf("no profile named \"saved\" in %s", path)
+	}
+	if len(p.Roles) != 0 {
+		t.Errorf("session profile = %+v, want no roles", p)
+	}
+}
+
+// The same rule where "profiles add" writes the profile.
+func TestProfilesAddSavesRolesOnlyForProxyProfiles(t *testing.T) {
+	srv := couchtest.New(t)
+	path := withDeps(t, config.Defaults(), nil)
+	s, out := guidedSession("a.jwt.token\n")
+
+	if _, err := profilesAdd(t, s, "add", "bearer", srv.URL(), "--auth", "jwt", "--roles", "a,b"); err != nil {
+		t.Fatalf("profiles add --auth jwt --roles: %v (output: %s)", err, out.String())
+	}
+	back, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("bearer")
+	if !ok {
+		t.Fatalf("profiles = %v, want one named bearer", back.Profiles)
+	}
+	if len(p.Roles) != 0 {
+		t.Errorf("jwt profile = %+v, want no roles", p)
+	}
+}

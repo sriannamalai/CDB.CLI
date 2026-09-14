@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ls --json` rows for a design document's members carry a new `backend`
   field (empty for a view, `clouseau` or `nouveau` for a search index); the
   table gains a matching column.
+- A path that stops at `_view`, `_search` or `_nouveau` under a design
+  document — where `ls ..` from a view or an index lands — is no longer read
+  as a design-document attachment. CouchDB reserves all three words, so it
+  says what the path is missing and names the design document instead of
+  sending the operator to `cat`.
 
 ## [1.2.1] - 2026-09-14
 

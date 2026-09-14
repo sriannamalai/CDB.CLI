@@ -146,7 +146,14 @@ $ cdb ls /movies --limit 2
  tt0211915   | 1-fe587ae7ef952dbac249a78f49bb51e6
 more documents: ls /movies --start "tt0245429"
 
-$ cdb ls /movies --start tt0245429 --fields title,year`,
+$ cdb ls /movies --start tt0245429 --fields title,year
+
+$ cdb ls /movies/_design/app
+ KIND   | NAME     | BACKEND
+--------+----------+----------
+ view   | by_year  |
+ search | by_title | clouseau
+ search | by_body  | nouveau`,
 		Usage:       "[path]",
 		MinArgs:     0,
 		MaxArgs:     1,

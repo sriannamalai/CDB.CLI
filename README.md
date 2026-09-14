@@ -95,9 +95,12 @@ cdb connect --auth proxy --roles _admin https://couch.example.com
 It asks for the user name, the roles to claim, and the shared secret from the
 server's `[chttpd_auth] secret`, with echo off; the secret goes into the OS
 keychain like any password. `cdb` sends `X-Auth-CouchDB-UserName`,
-`X-Auth-CouchDB-Roles` and an `X-Auth-CouchDB-Token` that is an HMAC-SHA256 of
-the user name keyed by that secret, and the same three headers are written into
-any replication job it starts. A wrong secret does not fail at the server —
+`X-Auth-CouchDB-Roles` and an `X-Auth-CouchDB-Token` that is an HMAC of the
+user name keyed by that secret, and the same three headers are written into any
+replication job it starts. CouchDB 3.3.2 and later verify that HMAC as SHA-256;
+3.0 through 3.3.1 verify SHA-1 only, so `connect` probes the server once and
+pins the answer as the profile's `proxy_hash` — that is what a `proxy_hash =
+"sha1"` in your `config.toml` means. A wrong secret does not fail at the server —
 CouchDB just treats the request as anonymous — so `connect` checks
 `GET /_session` and refuses unless it reports `proxy` for the name you gave.
 `CDB_PASSWORD` supplies the shared secret for a saved proxy profile in a
@@ -116,7 +119,9 @@ refreshes it before it expires — an IAM token lasts an hour, so a long backup
 or a `tail` outlives one and is refreshed under it. Set `iam_url` in the
 profile, or `CDB_IAM_URL`, to use a different token endpoint. The API key is
 the profile's keychain secret; no token ever reaches `config.toml` or your
-shell history.
+shell history. A replication job started under an IAM profile carries the key
+in the job document's own `auth.iam.api_key`, which Cloudant accepts natively,
+so a continuous job keeps working without `cdb` refreshing anything for it.
 
 A URL typed with no user name and password — `cdb connect
 http://localhost:5984` — is asked about rather than assumed. A CouchDB with
@@ -425,7 +430,7 @@ working alongside the token. The test skips unless both `CDB_TEST_URL` and
 The proxy integration test needs a server with
 `proxy_authentication_handler` in its chain and a shared secret, which is not
 CouchDB's default either. Which config section holds the secret is a version
-question: 3.4 and later read `[chttpd_auth]`, everything before it reads
+question: 3.3.2 and later read `[chttpd_auth]`, 3.0 through 3.3.1 read
 `[couch_httpd_auth]`, so write both and the same command works on any supported
 server. The handler list is read at start-up, so restart afterwards:
 
@@ -442,8 +447,8 @@ CDB_TEST_URL=http://localhost:15984/ CDB_TEST_PROXY_SECRET=proxysecret go test .
 
 The test skips unless both `CDB_TEST_URL` and `CDB_TEST_PROXY_SECRET` are set.
 There is no version gate: the handler exists on every supported server. Which
-digest it verifies differs — 3.4 and later take HMAC-SHA256 or HMAC-SHA1, older
-servers only SHA-1 — and cdb finds that out for itself, saving the answer as
+digest it verifies differs — 3.3.2 and later take HMAC-SHA256 or HMAC-SHA1, 3.0
+through 3.3.1 only SHA-1 — and cdb finds that out for itself, saving the answer as
 the profile's `proxy_hash`.
 
 The search integration test needs a server with a full-text backend, which

@@ -204,3 +204,33 @@ func TestParentOfASearchPathMatchesAView(t *testing.T) {
 		}
 	}
 }
+
+// "ls .." out of an index lands on /db/_design/app/_nouveau, which the
+// four-segment grammar used to read as a design-document attachment -- so the
+// operator stepping up towards the design document was told they had an
+// attachment and sent to "cat". CouchDB reserves all three words, so none of
+// them can name an attachment: say what the path is missing and where the
+// design document is.
+func TestResolveRejectsAnIndexSeparatorWithNoName(t *testing.T) {
+	for _, sep := range []string{"_view", "_search", "_nouveau"} {
+		in := "/movies/_design/app/" + sep
+		_, err := Resolve("/", in)
+		if err == nil {
+			t.Fatalf("Resolve(%q) succeeded, want a path error", in)
+		}
+		if strings.Contains(err.Error(), "attachment") {
+			t.Errorf("Resolve(%q) error = %q, still calls it an attachment", in, err)
+		}
+		if !strings.Contains(err.Error(), "/movies/_design/app") {
+			t.Errorf("Resolve(%q) error = %q, does not name the design document", in, err)
+		}
+	}
+	// A design document's real attachments still parse.
+	t2, err := Resolve("/", "/movies/_design/app/logo.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if t2.Kind != KindAttachment || t2.Attachment != "logo.png" {
+		t.Errorf("Resolve of a design-doc attachment = %+v", t2)
+	}
+}

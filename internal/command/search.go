@@ -32,7 +32,8 @@ $ cdb search /movies/_design/app/_search/by_title 'title:a*' --limit 10 --counts
 		NeedsClient: true,
 		Details: "The query is Lucene syntax, sent to the server as it stands. --sort and --ranges are\n" +
 			"passed through verbatim too, because their grammar belongs to the backend. Paging is\n" +
-			"by bookmark: run the command again with the --bookmark the last page printed.",
+			"by bookmark: run the command again with the --bookmark the last page printed,\n" +
+			"which --json carries in its trailing object as \"bookmark\".",
 		Complete: completePath,
 		Flags: func(fs *pflag.FlagSet) {
 			fs.Int("limit", 25, "results per page")
@@ -113,6 +114,12 @@ $ cdb search /movies/_design/app/_search/by_title 'title:a*' --limit 10 --counts
 			// exactly the reasoning find's hint follows.
 			if page.Bookmark != "" && opts.Limit > 0 && len(page.Rows) == opts.Limit {
 				hints = append(hints, fmt.Sprintf("more results: search %s %q --bookmark %q", t.Path, query, page.Bookmark))
+				// The same fact in the shape --json can act on: the hint is a
+				// sentence for a person, and a script that cannot read the
+				// bookmark cannot page at all.
+				if raw, err := json.Marshal(page.Bookmark); err == nil {
+					rows.Extra = setExtra(rows.Extra, "bookmark", raw)
+				}
 			}
 			rows.Hint = strings.Join(hints, "\n")
 			return rows, nil

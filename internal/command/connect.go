@@ -298,7 +298,10 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 			bare = false
 		}
 	}
-	if len(over.Roles) > 0 {
+	// Roles are proxy's alone: couch.New sends X-Auth-CouchDB-Roles under that
+	// kind and no other, so a --roles that rode along with a session or jwt
+	// connection would be saved as a claim nothing ever makes.
+	if len(over.Roles) > 0 && profile.Auth == string(couch.AuthProxy) {
 		profile.Roles = over.Roles
 	}
 	// The flag wins over CDB_REPLICATION_URL, which Env.Apply has just layered
@@ -424,7 +427,7 @@ func verifyLogin(ctx context.Context, profile config.Profile, secret string) (*c
 	}
 	// The server would not act on the SHA-256 token. That is either a secret
 	// that disagrees or a server too old to verify anything but HMAC-SHA1 --
-	// CouchDB gained hash_algorithms in 3.4 -- and the two are
+	// CouchDB gained hash_algorithms in 3.3.2 -- and the two are
 	// indistinguishable from the answer, since both are an anonymous session.
 	// So the other digest is tried once, on a client built for it: the token
 	// is computed at construction, and rewriting a live transport would leave
@@ -973,7 +976,10 @@ func promptForProfile(s *session.Session, over authOverride) (config.Profile, st
 	if err := checkProfileName("connect", name); err != nil {
 		return config.Profile{}, "", err
 	}
-	p := config.Profile{Name: name, URL: serverURL, Auth: auth, Roles: over.Roles}
+	p := config.Profile{Name: name, URL: serverURL, Auth: auth}
+	if auth == string(couch.AuthProxy) {
+		p.Roles = over.Roles
+	}
 	secret, err := promptForAuthKind(s, auth, &p)
 	if err != nil {
 		return config.Profile{}, "", err
@@ -1194,7 +1200,10 @@ func profileToAdd(ctx context.Context, s *session.Session, inv Invocation, name,
 		return config.Profile{}, "", err
 	}
 	if over.Kind != "" {
-		profile.Auth, profile.Roles = over.Kind, over.Roles
+		profile.Auth = over.Kind
+		if profile.Auth == string(couch.AuthProxy) {
+			profile.Roles = over.Roles
+		}
 	}
 	if profile.Auth != string(couch.AuthSession) {
 		// Only a session profile has a user name and a password to ask for.
