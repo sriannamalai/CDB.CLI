@@ -125,6 +125,9 @@ func page(c command.Command) string {
 	if c.Destructive {
 		b.WriteString("\nDestructive: asks for confirmation unless `--yes` is given.\n")
 	}
+	if c.Pipe != command.PipeNone {
+		fmt.Fprintf(&b, "\nReads a pipeline: %s. In a later stage of a shell pipeline this\ncommand consumes the previous stage's values.\n", c.Pipe)
+	}
 	b.WriteString("\n## Arguments\n\n")
 	fmt.Fprintf(&b, "%s\n", argumentRule(c))
 
@@ -275,6 +278,9 @@ func notes(c command.Command) string {
 	}
 	if c.Destructive {
 		out = append(out, "destructive")
+	}
+	if c.Pipe != command.PipeNone {
+		out = append(out, "reads a pipeline")
 	}
 	return strings.Join(out, ", ")
 }

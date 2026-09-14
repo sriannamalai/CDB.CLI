@@ -73,6 +73,9 @@ ls [path]
 				if c.Destructive {
 					text += "\n  " + destructiveNote
 				}
+				if c.Pipe != PipeNone {
+					text += "\n  Reads a pipeline: " + c.Pipe.String()
+				}
 				if len(c.Aliases) > 0 {
 					text += "\n  aliases: " + strings.Join(c.Aliases, ", ")
 				}

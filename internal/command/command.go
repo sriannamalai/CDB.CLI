@@ -28,6 +28,9 @@ type Invocation struct {
 	Stderr io.Writer
 	// Shell is true when the call came from the interactive shell.
 	Shell bool
+	// Pipe is the previous stage's output, set only when the command is not
+	// the first stage of a shell line. It is nil in a one-shot run.
+	Pipe *Pipe
 }
 
 // Arg returns positional argument n, or "" when it is absent.
@@ -151,8 +154,11 @@ type Command struct {
 	// that a command whose subcommands differ (replications list versus
 	// replications cancel) can confirm only where it matters.
 	Destructive bool
-	Complete    func(ctx context.Context, s *session.Session, args []string, cur string) []Candidate
-	Run         func(ctx context.Context, s *session.Session, inv Invocation) (Result, error)
+	// Pipe says what this command reads when it is not the first stage of a
+	// line. PipeNone, the zero value, means it cannot be piped into.
+	Pipe     PipeKind
+	Complete func(ctx context.Context, s *session.Session, args []string, cur string) []Candidate
+	Run      func(ctx context.Context, s *session.Session, inv Invocation) (Result, error)
 }
 
 // CheckArgsErr validates the argument count.
