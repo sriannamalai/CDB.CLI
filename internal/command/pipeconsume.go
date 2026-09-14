@@ -208,13 +208,14 @@ type ref struct {
 	Rev string
 }
 
-// referenceRev reads a revision out of a piped value, for the two shapes that
-// carry one: a document's own "_rev", and the "value":{"rev":…} of an _all_docs
-// or view row. It returns "" when the value names none, and the consumer looks
-// the current revision up.
+// referenceRev reads a revision out of a piped value, for the three shapes that
+// carry one: a document's own "_rev", the flat "rev" of an ls or tail row, and
+// the "value":{"rev":…} of an _all_docs or view row. It returns "" when the
+// value names none, and the consumer looks the current revision up.
 func referenceRev(v json.RawMessage) string {
 	var obj struct {
 		Rev   string `json:"_rev"`
+		Flat  string `json:"rev"`
 		Value struct {
 			Rev string `json:"rev"`
 		} `json:"value"`
@@ -224,6 +225,9 @@ func referenceRev(v json.RawMessage) string {
 	}
 	if obj.Rev != "" {
 		return obj.Rev
+	}
+	if obj.Flat != "" {
+		return obj.Flat
 	}
 	return obj.Value.Rev
 }

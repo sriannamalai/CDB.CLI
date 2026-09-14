@@ -379,3 +379,25 @@ func TestRmPipelineReportsEachReferenceByPosition(t *testing.T) {
 		}
 	}
 }
+
+// An "ls" or "tail" row carries {"id","rev"}, so the revision is already known
+// and the _all_docs round trip is waste.
+func TestRmPipelineTakesAFlatRevFromTheRow(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_bulk_docs", 201, `[{"ok":true,"id":"a","rev":"2-dead"}]`)
+	s := connected(t, srv)
+	s.Prefs.Yes = true
+	rows, err := piped(t, Rm(), s, []string{"/movies"}, `{"id":"a","rev":"1-x"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0][2] != "ok" {
+		t.Fatalf("rows = %v", rows)
+	}
+	if req := srv.Last("POST", "/movies/_all_docs"); req != nil {
+		t.Errorf("a keyed read was sent: %s; the row already carried its rev", req.Body)
+	}
+	if body := srv.Last("POST", "/movies/_bulk_docs").Body; !strings.Contains(string(body), "1-x") {
+		t.Errorf("request body = %s; the row's own rev must be the one deleted", body)
+	}
+}
