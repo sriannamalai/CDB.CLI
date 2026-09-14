@@ -58,3 +58,43 @@ func TestBulkWriteWithNoDocumentsAsksNothing(t *testing.T) {
 		t.Error("an empty batch reached the server")
 	}
 }
+
+func TestAllDocsByKeysReturnsARowPerKey(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_all_docs", 200, `{"total_rows":2,"offset":0,"rows":[
+		{"id":"a","key":"a","value":{"rev":"1-x"},"doc":{"_id":"a","_rev":"1-x","title":"Amelie"}},
+		{"key":"gone","error":"not_found"}]}`)
+	c := testClient(t, srv)
+	rows, err := c.AllDocsByKeys(context.Background(), "movies", []string{"a", "gone"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+	if rows[0].ID != "a" || rows[0].Rev != "1-x" || !strings.Contains(string(rows[0].Doc), "Amelie") {
+		t.Errorf("row 0 = %#v", rows[0])
+	}
+	if rows[1].ID != "gone" || rows[1].Error != "not_found" {
+		t.Errorf("row 1 = %#v; a missing key keeps the id that was asked for", rows[1])
+	}
+	req := srv.Last("POST", "/movies/_all_docs")
+	if req.Query("include_docs") != "true" {
+		t.Errorf("query = %q", req.RawQuery)
+	}
+	if !strings.Contains(string(req.Body), `"keys"`) {
+		t.Errorf("body = %s", req.Body)
+	}
+}
+
+func TestAllDocsByKeysWithNoKeysAsksNothing(t *testing.T) {
+	srv := couchtest.New(t)
+	c := testClient(t, srv)
+	rows, err := c.AllDocsByKeys(context.Background(), "movies", nil, false)
+	if err != nil || rows != nil {
+		t.Fatalf("AllDocsByKeys(nil) = %v, %v", rows, err)
+	}
+	if srv.Last("POST", "/movies/_all_docs") != nil {
+		t.Error("an empty key list reached the server")
+	}
+}

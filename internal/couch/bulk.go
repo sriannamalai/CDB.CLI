@@ -388,3 +388,51 @@ func (c *Client) BulkWrite(ctx context.Context, db string, docs []json.RawMessag
 	}
 	return out, nil
 }
+
+// AllDocsRow is one row of a keyed _all_docs read. Error is the server's own
+// word for a key it could not answer — "not_found" for an id that is not in
+// the database — and is empty for a row that was found.
+type AllDocsRow struct {
+	ID    string
+	Rev   string
+	Doc   json.RawMessage
+	Error string
+}
+
+// AllDocsByKeys reads exactly the documents named by keys, in the order the
+// server answers. A missing id comes back as a row with Error set rather than
+// as a failed request, so a caller can name the one id that was wrong.
+func (c *Client) AllDocsByKeys(ctx context.Context, db string, keys []string, includeDocs bool) ([]AllDocsRow, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	apiPath := "/" + path.Encode(db) + "/_all_docs"
+	if includeDocs {
+		apiPath += "?include_docs=true"
+	}
+	var body struct {
+		Rows []struct {
+			ID    string          `json:"id"`
+			Key   json.RawMessage `json:"key"`
+			Value json.RawMessage `json:"value"`
+			Doc   json.RawMessage `json:"doc"`
+			Error string          `json:"error"`
+		} `json:"rows"`
+	}
+	req := map[string]any{"keys": keys}
+	if err := c.DoJSON(ctx, "POST", apiPath, req, &body, "read", fmt.Sprintf("documents in %q", db)); err != nil {
+		return nil, err
+	}
+	out := make([]AllDocsRow, 0, len(body.Rows))
+	for _, r := range body.Rows {
+		row := AllDocsRow{ID: r.ID, Doc: r.Doc, Error: r.Error}
+		if row.ID == "" {
+			// A row for a key the database does not hold carries no "id"; the
+			// key is the id that was asked for.
+			_ = json.Unmarshal(r.Key, &row.ID)
+		}
+		row.Rev = revFromValue(r.Value)
+		out = append(out, row)
+	}
+	return out, nil
+}
