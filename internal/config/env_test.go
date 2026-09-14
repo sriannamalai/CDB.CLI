@@ -130,3 +130,22 @@ func TestSecretForIAMIgnoresCDBToken(t *testing.T) {
 		t.Errorf("SecretFor(\"iam\") with a key = %q, %v", secret, ok)
 	}
 }
+
+// CDB_IAM_API_KEY is a selector as well as a credential, but a profile that
+// already names proxy authentication has said what it is: a key exported for
+// some other server must not silently turn it into an IAM connection.
+func TestApplyIAMKeyDoesNotOverrideAnExplicitKind(t *testing.T) {
+	if got := (Env{IAMKey: "k"}).Apply(Profile{Auth: "proxy"}).Auth; got != "proxy" {
+		t.Errorf("auth = %q, want proxy", got)
+	}
+	if got := (Env{IAMKey: "k"}).Apply(Profile{Auth: "iam"}).Auth; got != "iam" {
+		t.Errorf("auth = %q, want iam", got)
+	}
+	// An unsettled profile is still switched: that is what the key is for.
+	if got := (Env{IAMKey: "k"}).Apply(Profile{}).Auth; got != "iam" {
+		t.Errorf("auth = %q, want iam", got)
+	}
+	if got := (Env{IAMKey: "k"}).Apply(Profile{Auth: "session"}).Auth; got != "iam" {
+		t.Errorf("auth = %q, want iam", got)
+	}
+}

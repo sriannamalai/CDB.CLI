@@ -61,11 +61,6 @@ func (e Env) Apply(p Profile) Profile {
 		p.InsecureTLS = *e.InsecureTLS
 	}
 	switch {
-	case e.IAMKey != "":
-		// The key is both the selector and the credential, so a shell that
-		// exports one has said which kind it means as plainly as a profile
-		// key would.
-		p.Auth = "iam"
 	case p.Auth == "proxy" || p.Auth == "iam":
 		// A profile that names proxy or IAM authentication keeps it. Neither
 		// kind takes its credential from CDB_TOKEN, and CDB_PASSWORD — which a
@@ -73,7 +68,14 @@ func (e Env) Apply(p Profile) Profile {
 		// proxy profile into a session one behind the operator's back. The
 		// secret itself still comes from Secret() below, so CDB_PASSWORD can
 		// still supply a proxy profile's shared secret without changing what
-		// the profile is.
+		// the profile is. This arm sits above the IAM one for the same
+		// reason: a stray CDB_IAM_API_KEY, exported for another server, must
+		// not turn an explicitly proxy-authenticated profile into an IAM one.
+	case e.IAMKey != "":
+		// The key is both the selector and the credential, so a shell that
+		// exports one has said which kind it means as plainly as a profile
+		// key would.
+		p.Auth = "iam"
 	case e.Token != "":
 		p.Auth = "jwt"
 	case e.Password != "":

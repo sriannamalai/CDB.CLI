@@ -1360,3 +1360,34 @@ func TestFirstRunWalkthroughRejectsAnUnknownAuthKind(t *testing.T) {
 		t.Errorf("the walk-through asked a question before rejecting the kind:\n%s", out)
 	}
 }
+
+// An IAM login has no username to report: the credential is a key, and the
+// only name the account ever has comes back from _session as the service id.
+// Falling through to "anonymous" would tell an operator who had just
+// authenticated that they had not.
+func TestConnectUnderIAMNamesTheServiceID(t *testing.T) {
+	serverURL, iamURL := cloudantStub(t)
+	env := map[string]string{"CDB_IAM_API_KEY": "an-api-key", "CDB_IAM_URL": iamURL}
+	SetDeps(&Deps{
+		ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		Secrets:    config.NewMemorySecrets(),
+		LookupEnv:  func(k string) (string, bool) { v, ok := env[k]; return v, ok },
+	})
+	t.Cleanup(func() { SetDeps(nil) })
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	t.Cleanup(func() { _ = s.Detach() })
+	res, err := invoke(t, Connect(), s, serverURL)
+	if err != nil {
+		t.Fatalf("connect with CDB_IAM_API_KEY = %v", err)
+	}
+	msg, ok := res.(Message)
+	if !ok {
+		t.Fatalf("result is %T, want Message", res)
+	}
+	if !strings.Contains(msg.Text, "as ServiceId-abc.") {
+		t.Errorf("banner = %q, want the service id from _session", msg.Text)
+	}
+	if strings.Contains(msg.Text, "anonymous") {
+		t.Errorf("banner = %q, want no mention of anonymous", msg.Text)
+	}
+}

@@ -711,6 +711,18 @@ Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 			}
 			who := s.Client.Username()
 			if who == "" {
+				// An IAM connection has no username to report — the
+				// credential is an API key — but the account does have a
+				// name, and _session is where it comes back as the service
+				// id. Asking for it only when there is nothing else to print
+				// keeps the extra round trip off every other login, and a
+				// server that will not answer still leaves "anonymous",
+				// which is the truth for a genuinely anonymous connection.
+				if info, serr := s.Client.Session(ctx); serr == nil {
+					who = info.Name
+				}
+			}
+			if who == "" {
 				who = "anonymous"
 			}
 			text := fmt.Sprintf("Connected to CouchDB %s at %s as %s.", conn.Info.Version, s.Client.Host(), who)
