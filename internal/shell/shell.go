@@ -49,10 +49,11 @@ type Shell struct {
 // every accepted line straight through to its source.
 type filteredHistory struct {
 	src readline.History
-	// known reports whether a word is a registered command name or alias. The
-	// redactor asks before it trusts the word to say what the line's arguments
-	// are; see takesServerAddress.
-	known func(string) bool
+	// resolve reports the registered name a word stands for, an alias
+	// included, and whether it names a command at all. The redactor asks
+	// before it trusts the word to say what the line's arguments are; see
+	// takesServerAddress and redactSet.
+	resolve func(string) (string, bool)
 }
 
 func (h *filteredHistory) Write(line string) (int, error) {
@@ -64,7 +65,7 @@ func (h *filteredHistory) Write(line string) (int, error) {
 		return h.src.Len(), nil
 	}
 	// Redact before the dedup check, so what is compared is what is stored.
-	line = redactLine(line, h.known)
+	line = redactLine(line, h.resolve)
 	if n := h.src.Len(); n > 0 {
 		if last, err := h.src.GetLine(n - 1); err == nil && last == line {
 			return n, nil
@@ -81,11 +82,11 @@ func (h *filteredHistory) Write(line string) (int, error) {
 // stored is still a command the operator can re-run, and only the tokens that
 // are recognisably a server URL are touched: a document id that merely
 // contains an "@" must survive intact.
-func redactLine(line string, known func(string) bool) string {
-	if masked, ok := redactSet(line); ok {
+func redactLine(line string, resolve func(string) (string, bool)) string {
+	if masked, ok := redactSet(line, resolve); ok {
 		return masked
 	}
-	schemeless := takesServerAddress(line, known)
+	schemeless := takesServerAddress(line, resolve)
 	var b strings.Builder
 	b.Grow(len(line))
 	start := -1
@@ -109,13 +110,53 @@ func redactLine(line string, known func(string) bool) string {
 
 // redactSet rewrites "set api_token abc" as "set api_token ****". A variable
 // whose name says it holds a credential must not reach the history file any
-// more than a password in a URL does.
-func redactSet(line string) (string, bool) {
+// more than a password in a URL does, and the line is found by parsing rather
+// than by its first word: a flag may come before the name, the command may
+// have been typed as an alias, and the capture form "set api_token = …" runs a
+// pipeline whose text can carry the secret too.
+func redactSet(line string, resolve func(string) (string, bool)) (string, bool) {
 	fields := strings.Fields(line)
-	if len(fields) < 3 || fields[0] != "set" || !session.Masked(fields[1]) {
+	i := commandField(fields)
+	if i < 0 {
 		return line, false
 	}
-	return "set " + fields[1] + " " + maskedHistoryValue, true
+	name := fields[i]
+	if resolve != nil {
+		n, ok := resolve(name)
+		if !ok {
+			return line, false
+		}
+		name = n
+	}
+	if name != "set" {
+		return line, false
+	}
+	// The first word after the command that could be a variable name is the
+	// name: a flag is skipped, and so is a flag's separate value, which cannot
+	// be a name unless it happens to look like one — in which case "set" would
+	// have read it as the name too.
+	for _, f := range fields[i+1:] {
+		if strings.HasPrefix(f, "-") || !session.ValidName(f) {
+			continue
+		}
+		if !session.Masked(f) {
+			return line, false
+		}
+		return "set " + f + " " + maskedHistoryValue, true
+	}
+	return line, false
+}
+
+// commandField is the index of the word naming the command, leading flags
+// skipped, or -1 when the line is only flags.
+func commandField(fields []string) int {
+	for i, f := range fields {
+		if strings.HasPrefix(f, "-") {
+			continue
+		}
+		return i
+	}
+	return -1
 }
 
 // maskedHistoryValue is what a masked variable's value is recorded as. It is
@@ -146,13 +187,17 @@ var urlCommands = map[string]bool{
 // registered command or alias is therefore treated as one that takes a URL —
 // the conservative direction, since the cost of a wrong guess is a rewritten
 // argument in one unusable line, against a leaked password the other way.
-func takesServerAddress(line string, known func(string) bool) bool {
+func takesServerAddress(line string, resolve func(string) (string, bool)) bool {
 	word, ok := commandWord(line)
 	if !ok {
 		return false
 	}
-	if known != nil && !known(word) {
-		return true
+	if resolve != nil {
+		name, known := resolve(word)
+		if !known {
+			return true
+		}
+		word = name
 	}
 	return urlCommands[word]
 }
@@ -162,13 +207,12 @@ func takesServerAddress(line string, known func(string) bool) bool {
 // A flag's separate value would be skipped as a command word too, which is why
 // an unrecognised word is treated as URL-taking rather than as safe.
 func commandWord(line string) (string, bool) {
-	for _, f := range strings.Fields(line) {
-		if strings.HasPrefix(f, "-") {
-			continue
-		}
-		return f, true
+	fields := strings.Fields(line)
+	i := commandField(fields)
+	if i < 0 {
+		return "", false
 	}
-	return "", false
+	return fields[i], true
 }
 
 func isLineSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
@@ -297,9 +341,12 @@ func (sh *Shell) initHistory() error {
 			return ferr
 		}
 	}
-	sh.hist = &filteredHistory{src: src, known: func(name string) bool {
-		_, ok := sh.reg.Lookup(name)
-		return ok
+	sh.hist = &filteredHistory{src: src, resolve: func(name string) (string, bool) {
+		c, ok := sh.reg.Lookup(name)
+		if !ok {
+			return "", false
+		}
+		return c.Name, true
 	}}
 	install(sh.reg, command.HistoryFrom(func() []string { return historyLines(sh.hist) }))
 	install(sh.reg, command.SetFrom(sh.Capture))

@@ -212,11 +212,30 @@ func TestHistoryFileNeverHoldsACredential(t *testing.T) {
 }
 
 func TestHistoryMasksASetOfACredential(t *testing.T) {
-	got := redactLine("set api_token s3cret", func(string) bool { return true })
-	if got != "set api_token ****" {
-		t.Errorf("redactLine = %q", got)
+	// A registry that knows "set" and one alias for it, which is what the live
+	// history filter passes.
+	resolve := func(name string) (string, bool) {
+		switch name {
+		case "set", "connect":
+			return name, true
+		case "s":
+			return "set", true
+		}
+		return "", false
 	}
-	if plain := redactLine("set year 2001", func(string) bool { return true }); plain != "set year 2001" {
-		t.Errorf("an ordinary variable was rewritten: %q", plain)
+	for _, tc := range []struct{ name, in, want string }{
+		{"plain", "set api_token s3cret", "set api_token ****"},
+		{"flag before the name", "set --json api_token s3cret", "set api_token ****"},
+		{"alias", "s api_token s3cret", "set api_token ****"},
+		{"capture", "set api_token = cat /secrets/a | ._value", "set api_token ****"},
+		{"ordinary name", "set year 2001", "set year 2001"},
+		{"the value is not the name", "set year password", "set year password"},
+		{"listing", "set", "set"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := redactLine(tc.in, resolve); got != tc.want {
+				t.Errorf("redactLine(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }
