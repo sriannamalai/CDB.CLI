@@ -258,3 +258,95 @@ func TestPipelineReadsPreferencesFromTheFirstStage(t *testing.T) {
 		t.Error("--yes leaked past the line")
 	}
 }
+
+// A command that hands back neither a result nor an error has a bug in it, and
+// a line that printed nothing and reported nothing would hide it.
+func TestPipelineReportsAStageThatReturnedNothing(t *testing.T) {
+	var out bytes.Buffer
+	emit, _ := emitter("emit", `{"id":"a"}`)
+	silent := command.Command{
+		Name: "silent", Pipe: command.PipeDocuments, MinArgs: 0, MaxArgs: -1,
+		Run: func(ctx context.Context, _ *session.Session, inv command.Invocation) (command.Result, error) {
+			for {
+				if _, ok, err := inv.Pipe.Next(ctx); err != nil || !ok {
+					return nil, nil
+				}
+			}
+		},
+	}
+	sh := pipeShell(t, &out, emit, silent)
+	err := sh.RunLine(context.Background(), "emit | silent")
+	if err == nil || err.Error() != "stage 2 (silent): silent returned no result" {
+		t.Fatalf("error = %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("output = %q", out.String())
+	}
+}
+
+// The same stage on a cancelled line reports the cancellation, not the missing
+// result: it stopped early because the line was cancelled.
+func TestPipelineCancellationOutranksAMissingResult(t *testing.T) {
+	var out bytes.Buffer
+	emit, _ := emitter("emit", `{"id":"a"}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	silent := command.Command{
+		Name: "silent", Pipe: command.PipeDocuments, MinArgs: 0, MaxArgs: -1,
+		Run: func(context.Context, *session.Session, command.Invocation) (command.Result, error) {
+			cancel()
+			return nil, nil
+		},
+	}
+	sh := pipeShell(t, &out, emit, silent)
+	err := sh.RunLine(ctx, "emit | silent")
+	cancel()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+// Stage 1 is numbered like every other stage: an unknown command there reads
+// the same way as an unknown command further down the line.
+func TestPipelinePrefixesAFailureInStageOne(t *testing.T) {
+	var out bytes.Buffer
+	sh := pipeShell(t, &out)
+	err := sh.RunLine(context.Background(), "nosuch | .id")
+	var se *command.StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("error = %v (%T), want a *command.StageError", err, err)
+	}
+	if se.Stage != 1 || se.Name != "nosuch" || !strings.HasPrefix(se.Text, "stage 1 (nosuch): ") {
+		t.Errorf("error = %q", se.Text)
+	}
+	var ue *command.UsageError
+	if !errors.As(err, &ue) {
+		t.Errorf("the cause is no longer a *command.UsageError, so the line loses exit code 2")
+	}
+}
+
+// A command that changes the session cannot head a line whose other stages run
+// beside it, because they share the one session.
+func TestPipelineRefusesASessionCommandAtTheHead(t *testing.T) {
+	var out bytes.Buffer
+	var ran int
+	cd := command.Command{
+		Name: "cd", MinArgs: 0, MaxArgs: -1,
+		Run: func(context.Context, *session.Session, command.Invocation) (command.Result, error) {
+			ran++
+			return command.Message{Text: "/movies"}, nil
+		},
+	}
+	sh := pipeShell(t, &out, cd)
+	err := sh.RunLine(context.Background(), "cd /movies | .id")
+	var ue *command.UsageError
+	if !errors.As(err, &ue) || err.Error() != "cd cannot start a pipeline." {
+		t.Fatalf("error = %v (%T)", err, err)
+	}
+	if ran != 0 {
+		t.Error("the refused command ran anyway")
+	}
+	// The same command on its own is untouched.
+	if err := sh.RunLine(context.Background(), "cd /movies"); err != nil || ran != 1 {
+		t.Fatalf("error = %v, ran = %d", err, ran)
+	}
+}

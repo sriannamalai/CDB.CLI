@@ -60,9 +60,17 @@ func (sh *Shell) runPipeline(ctx context.Context, line Line) error {
 	if len(line.Stages) == 0 {
 		return nil
 	}
+	// A command that changes the session cannot head a line whose other stages
+	// run beside it; the check comes before anything is prepared or opened.
+	if err := sh.checkPipelineHead(line); err != nil {
+		return err
+	}
 	restore, forceJSON, verbose, err := sh.applyLinePrefs(line.Stages[0])
 	if err != nil {
-		return err
+		// Stage 1 fails before any stage is numbered, and an unknown command
+		// or a misspelled flag there is as much a stage failure as the same
+		// mistake in stage 2: the operator is owed the same "stage 1 (…)".
+		return stageError(0, len(line.Stages), line.Stages[0], err, verbose)
 	}
 	defer restore()
 	// Every command stage runs in its own goroutine and a session is not safe
@@ -192,6 +200,44 @@ func (sh *Shell) applyLinePrefs(first Stage) (restore func(), forceJSON, verbose
 	return restore, forceJSON, p.Verbose, nil
 }
 
+// sessionCommands are the commands that change the session every stage of a
+// line shares: the connection, the profile, the working directory, the
+// history, the variables. A *session.Session is not safe for concurrent use
+// (internal/session/session.go:66-67), and a stage that mutates one while the
+// stages below it read it is a race no test would reliably catch, so such a
+// command may head a line only when it is the whole line.
+var sessionCommands = map[string]struct{}{
+	"connect":  {},
+	"profiles": {},
+	"cd":       {},
+	"exit":     {},
+	"clear":    {},
+	"history":  {},
+	"help":     {},
+	"run":      {},
+	"set":      {},
+	"unset":    {},
+}
+
+// checkPipelineHead refuses a session command at the head of a line with more
+// stages after it. A line of one stage is unaffected: "cd /movies" and
+// "connect prod" are the same commands they have always been.
+func (sh *Shell) checkPipelineHead(line Line) error {
+	if len(line.Stages) < 2 || line.Stages[0].Argv == nil {
+		return nil
+	}
+	// The name is resolved through the registry first, so that an alias for a
+	// session command is refused by the name the set is written in.
+	name := line.Stages[0].Argv[0]
+	if c, ok := sh.reg.Lookup(name); ok {
+		name = c.Name
+	}
+	if _, ok := sessionCommands[name]; ok {
+		return command.Usagef("", "%s cannot start a pipeline.", name)
+	}
+	return nil
+}
+
 // connectFor opens the connection once when any command stage needs one.
 func (sh *Shell) connectFor(ctx context.Context, line Line) error {
 	if sh.sess.Connected() {
@@ -260,11 +306,15 @@ func (sh *Shell) renderStage(ctx context.Context, st Stage, src <-chan json.RawM
 		}
 		if r == nil {
 			// A stage that hands back neither a result nor an error has
-			// nothing to render. The one way to get here is a line that was
-			// cancelled while the stage was reading, and whose last read found
-			// a value already queued and so returned no error of its own;
-			// ctx.Err() is what the line failed of, and nil otherwise.
-			return ctx.Err()
+			// nothing to render. On a cancelled line that is the cancellation
+			// showing up as a stage that stopped early, and the line failed of
+			// that; anywhere else it is a command with a bug in it, which is
+			// worth a sentence rather than a line that quietly printed
+			// nothing.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return fmt.Errorf("%s returned no result", stageName(st))
 		}
 		res = r
 	}
