@@ -372,3 +372,30 @@ func TestUnauthorizedAdminEndpointNamesTheAction(t *testing.T) {
 		t.Errorf("message = %q", got)
 	}
 }
+
+// CouchDB 3.5 answers a structurally invalid bearer token with 400
+// bad_request rather than 401, so the per-kind sentence has to accept that
+// status too; otherwise the operator is told to check a password.
+func TestRejectedTokenOnABadRequest(t *testing.T) {
+	e := couch.NewError(http.StatusBadRequest, "bad_request",
+		"Malformed token", "authenticate", "server localhost:15984")
+	e.Auth = couch.AuthJWT
+
+	got := ErrorMessage(e, false)
+	if got != "The server rejected the token." {
+		t.Errorf("got %q, want the JWT sentence", got)
+	}
+	if strings.Contains(got, "password") {
+		t.Errorf("a rejected token must not be reported as a password problem: %q", got)
+	}
+}
+
+func TestRejectedIAMTokenOnABadRequest(t *testing.T) {
+	e := couch.NewError(http.StatusBadRequest, "bad_request", "Malformed token", "read",
+		couch.UnauthorizedTarget("", "example.cloudantnosqldb.appdomain.cloud"))
+	e.Auth = couch.AuthIAM
+	want := "The server rejected the IAM token at example.cloudantnosqldb.appdomain.cloud."
+	if got := ErrorMessage(e, false); got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}

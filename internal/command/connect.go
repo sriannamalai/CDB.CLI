@@ -512,20 +512,17 @@ func attemptLogin(ctx context.Context, profile config.Profile, secret, proxyHash
 	info, err := cc.ServerInfo(ctx)
 	if err != nil {
 		_ = cc.Close()
-		return nil, couch.ServerInfo{}, err
+		// A token 3.5 will not even parse is refused here, before the session
+		// check below is reached, so the kind is recorded on this answer too.
+		// There is no version to test for the pre-3.1 hint yet.
+		return nil, couch.ServerInfo{}, tagAuthKind(err, profile.Auth, "")
 	}
 	// Spec 6.1: the connection is verified with GET /_session, which is what
 	// proves the credentials were accepted; GET / answers for anyone.
 	sess, err := cc.Session(ctx)
 	if err != nil {
 		_ = cc.Close()
-		// A 401 on a bearer token reads as a password failure otherwise.
-		var ce *couch.Error
-		if profile.Auth == string(couch.AuthJWT) && errors.As(err, &ce) && ce.Status == http.StatusUnauthorized {
-			ce.Auth = couch.AuthJWT
-			ce.Hint = jwtVersionHint(info.Version)
-		}
-		return nil, couch.ServerInfo{}, err
+		return nil, couch.ServerInfo{}, tagAuthKind(err, profile.Auth, info.Version)
 	}
 	// A proxy token the server will not accept does not fail: the request is
 	// simply anonymous, or -- with a cookie in play -- somebody else. Both are
@@ -640,6 +637,25 @@ func supportedVersion(v string) bool {
 // server is too old to have a JWT handler at all: CouchDB gained
 // jwt_authentication_handler in 3.1, so 3.0 ignores a bearer token and answers
 // as if the request carried no credentials.
+// tagAuthKind records the profile's authentication kind on a refusal that does
+// not name one, so the JWT and IAM sentences are used instead of advice about a
+// password neither kind has. CouchDB 3.5 answers a structurally invalid bearer
+// token with 400 bad_request rather than 401, so both statuses are tagged.
+func tagAuthKind(err error, auth, version string) error {
+	var ce *couch.Error
+	if !errors.As(err, &ce) || (ce.Status != http.StatusUnauthorized && ce.Status != http.StatusBadRequest) {
+		return err
+	}
+	switch auth {
+	case string(couch.AuthJWT):
+		ce.Auth = couch.AuthJWT
+		ce.Hint = jwtVersionHint(version)
+	case string(couch.AuthIAM):
+		ce.Auth = couch.AuthIAM
+	}
+	return err
+}
+
 func jwtVersionHint(version string) string {
 	if version != "3.0" && !strings.HasPrefix(version, "3.0.") {
 		return ""

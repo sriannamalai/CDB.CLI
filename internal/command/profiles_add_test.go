@@ -502,3 +502,38 @@ func TestProfilesAddSavesAVerifiedJWT(t *testing.T) {
 		t.Errorf("keyring secret = %q, %v", got, gerr)
 	}
 }
+
+// CouchDB 3.5 answers a structurally invalid bearer token with 400
+// bad_request, not 401. The kind has to be recorded there too, or render tells
+// the operator to check a password that does not exist.
+func TestProfilesAddTagsTheKindOnABadRequestToken(t *testing.T) {
+	// 3.5 refuses the malformed token at GET / as well, which is reached
+	// first; both answers have to carry the kind.
+	for _, refuseBanner := range []bool{true, false} {
+		srv := couchtest.New(t)
+		if refuseBanner {
+			srv.JSON("GET", "/", 400, `{"error":"bad_request","reason":"Malformed token"}`)
+		} else {
+			srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2","vendor":{"name":"The Apache Software Foundation"}}`)
+		}
+		srv.JSON("GET", "/_session", 400, `{"error":"bad_request","reason":"Malformed token"}`)
+		path := withDeps(t, config.Defaults(), nil)
+		s, out := guidedSession("not-a-real-token\n")
+
+		_, err := profilesAdd(t, s, "add", "jwtprofile", srv.URL(), "--auth", "jwt")
+		if err == nil {
+			t.Fatalf("a token the server refused was saved (output: %s)", out.String())
+		}
+		e, ok := couch.AsError(err)
+		if !ok || e.Status != 400 || e.Auth != couch.AuthJWT {
+			t.Fatalf("banner refused = %t: error = %#v, want a 400 carrying AuthJWT", refuseBanner, e)
+		}
+		back, loadErr := config.Load(path)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if _, saved := back.Profile("jwtprofile"); saved {
+			t.Error("the profile was written despite the failure")
+		}
+	}
+}

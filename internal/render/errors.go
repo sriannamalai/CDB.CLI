@@ -3,6 +3,7 @@ package render
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/sriannamalai/CDB.CLI/internal/command"
@@ -71,7 +72,7 @@ func plainSentence(e *couch.Error) string {
 		// at all. Telling the operator to check the password is advice about a
 		// password that does not exist.
 		return fmt.Sprintf("The server requires credentials for %s %s. Connect with a username and password, or set CDB_USER and CDB_PASSWORD.", e.Op, e.Target)
-	case e.Status == 401 && e.Auth == couch.AuthJWT:
+	case (e.Status == 401 || e.Status == http.StatusBadRequest) && e.Auth == couch.AuthJWT:
 		// A bearer token the server did not accept is not a password problem,
 		// and "check the password" is advice about a password that does not
 		// exist. CouchDB below 3.1 has no JWT handler at all, so the token is
@@ -94,7 +95,7 @@ func plainSentence(e *couch.Error) string {
 		// key is the only thing the operator can act on; IBM's own
 		// errorMessage travels in Reason and --verbose prints it.
 		return "IBM IAM did not issue a token for the API key. Check the key."
-	case e.Status == 401 && e.Auth == couch.AuthIAM:
+	case (e.Status == 401 || e.Status == http.StatusBadRequest) && e.Auth == couch.AuthIAM:
 		// A token was issued and Cloudant refused it twice, so refreshing
 		// again would not help: the service id has no access to what was
 		// asked for, or the instance is not the one the key belongs to.
