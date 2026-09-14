@@ -384,8 +384,15 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 	// anonymous connection into a failure. Connect the way the URL alone used
 	// to, with the user name still recorded, and let the anonymous notice say
 	// what happened.
+	// fellBack records that the URL's user name was dropped. The connection is
+	// as anonymous as the bare-URL one below, so it gets the same notice:
+	// silence is how "cdb --url http://alice@host ls /" ends up looking like a
+	// logged-in session that is not one. --anonymous asked for this, so it is
+	// still quiet.
+	fellBack := false
 	if secret == "" && urlUserOnly && profile.Auth == string(couch.AuthSession) {
 		profile.Auth = string(couch.AuthNone)
+		fellBack = !s.Prefs.Anonymous
 	}
 
 	// A proxy or IAM profile with no secret anywhere has its own questions:
@@ -415,7 +422,7 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 	// than in the "connect" command because this is the door every subcommand
 	// and the shell's own startup go through — "cdb --url http://host ls /" is
 	// the common case, not "cdb connect".
-	notice := false
+	notice := fellBack
 	if bare && !s.Prefs.Anonymous {
 		if s.Prefs.Interactive {
 			user, promptSecret, err := promptForCredentials(s)

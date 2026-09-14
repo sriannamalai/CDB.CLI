@@ -235,3 +235,27 @@ func TestConnectPromptedCredentialsCanBeSaved(t *testing.T) {
 		t.Errorf("the password was written into the config file:\n%s", raw)
 	}
 }
+
+// A URL that names a user and no password falls back to an anonymous
+// connection when there is nowhere left to find one. That is the same silent
+// surprise the bare-URL case gets a notice for, so it gets the same notice.
+func TestConnectSaysSoWhenAURLUserFallsBackToAnonymous(t *testing.T) {
+	srv := couchtest.New(t)
+	withDeps(t, config.Defaults(), nil)
+	var stdout, stderr bytes.Buffer
+	s := session.New(strings.NewReader(""), &stdout, &stderr)
+
+	withUser := strings.Replace(srv.URL(), "http://", "http://alice@", 1)
+	if _, err := connectWith(t, s, withUser); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if n := strings.Count(stderr.String(), anonymousNotice); n != 1 {
+		t.Errorf("the notice appeared %d times on stderr, want once: %q", n, stderr.String())
+	}
+	if strings.Contains(stdout.String(), anonymousNotice) {
+		t.Errorf("the notice went to stdout, where it would join a pipeline:\n%s", stdout.String())
+	}
+	if srv.Last("POST", "/_session") != nil {
+		t.Error("an empty password was sent to the login endpoint")
+	}
+}
