@@ -415,6 +415,11 @@ func filterStream(ctx context.Context, f *filter, src <-chan json.RawMessage) co
 func streamResult(ctx context.Context, res command.Result, emit func(json.RawMessage) error) error {
 	switch v := res.(type) {
 	case command.Document:
+		// A document with no JSON has nothing to hand on, and emitting the nil
+		// would put an empty value in a capture's array.
+		if v.JSON == nil {
+			return nil
+		}
 		return emit(v.JSON)
 	case command.Rows:
 		for _, item := range v.Items {

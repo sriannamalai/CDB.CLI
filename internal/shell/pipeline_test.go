@@ -350,3 +350,17 @@ func TestPipelineRefusesASessionCommandAtTheHead(t *testing.T) {
 		t.Fatalf("error = %v, ran = %d", err, ran)
 	}
 }
+
+func TestStreamResultSkipsADocumentWithNoJSON(t *testing.T) {
+	var got []json.RawMessage
+	emit := func(v json.RawMessage) error {
+		got = append(got, v)
+		return nil
+	}
+	if err := streamResult(context.Background(), command.Document{}, emit); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("emitted %#v; a document with no JSON has nothing to pipe", got)
+	}
+}
