@@ -635,6 +635,169 @@ $ cdb info / --replication-url http://couchdb:5984
 
 `profiles list` does not show it, so its columns stay stable for scripts.
 
+## Administration
+
+These six commands cover what Fauxton's admin pages do. All of them need
+server administrator rights; without them, every one answers
+
+    Server administrator rights are required for changing configuration.
+
+with the action named, and exits 1.
+
+### What the server is doing
+
+`cdb tasks` lists `_active_tasks`: one row per running replication, database
+or view compaction, and index build.
+
+    $ cdb tasks
+     TYPE                | PROGRESS | TARGET | STARTED  | UPDATED  | NODE
+    ---------------------+----------+--------+----------+----------+---------------
+     database_compaction | 84%      | movies | 15:20:00 | 15:20:31 | nonode@nohost
+
+`--type` keeps one kind of task, `--db /movies` keeps the tasks for one
+database (a replication counts if either of its endpoints is that database),
+and `--watch` re-reads the list every two seconds — `--interval 5s` to slow it
+down — printing the rows again whenever the set of tasks changes. A task that
+has finished is simply gone; `tasks` is a snapshot, not a history.
+
+### Configuration
+
+`cdb config` reads `_node/<node>/_config`. With no argument it prints
+everything, with a section name that section, and with `section/key` one
+value:
+
+    $ cdb config log/level
+     SECTION | KEY   | VALUE
+    ---------+-------+-------
+     log     | level | info
+
+**Credentials are redacted.** Everything under `[admins]` and `[jwt_keys]`,
+the shared proxy secret in `[chttpd_auth] secret` and `[couch_httpd_auth]
+secret`, and any key whose name ends in `password`, `secret` or `token`
+prints as `****`. `--reveal` prints the real value, and the same rule applies
+to `--json`, so a redirected `cdb config --json > config.json` does not leave
+a secret on disk by accident.
+
+`cdb config set section/key value` writes one setting and reports what it
+replaced; `cdb config unset section/key` removes it and always asks first.
+
+**Some settings are read only when CouchDB starts.** The ports and bind
+addresses, `[chttpd] authentication_handlers`, the data directories,
+`[couchdb] uuid` and `single_node`, `[cluster] n` and `q`, every JWT key,
+everything under `[ssl]`, and the Nouveau switches. Changing one of those
+changes what the *next* start will use and nothing about the running server,
+so `config set` asks first and then says so:
+
+    $ cdb config set chttpd/port 5985
+    Change chttpd/port on _local? [y/N] y
+    Set chttpd/port (was "5984"). This setting is read at start-up; restart CouchDB for it to take effect.
+
+`cdb config reload` makes the node re-read its `.ini` files, which discards
+any change made through this command that was never written to disk. It is
+not a substitute for a restart on the settings above.
+
+`--node` names the node; it defaults to `_local`, CouchDB's alias for
+whichever node answered.
+
+### Accounts
+
+CouchDB has two kinds of account and `cdb users` manages both. An ordinary
+user is a document in the `_users` database; a **server admin** is a key in
+the `[admins]` configuration section and may do anything on the server.
+
+    $ cdb users
+     NAME  | KIND         | ROLES
+    -------+--------------+----------------
+     admin | server admin |
+     alice | user         | editor, reader
+
+    $ cdb users add alice --roles editor,reader
+    Password for alice:
+    Repeat password for alice:
+    Created user "alice".
+
+`--admin` makes the account a server admin instead. `cdb users passwd <name>`
+changes a password, `cdb users rm <name>` removes an account, and
+`cdb users show <name>` prints the account's fields — never the password hash,
+only whether one is set.
+
+**A password is never a command-line argument**, where it would reach the
+shell history and every process list on the machine. cdb prompts for it twice
+with the echo off, or reads it as a single line on standard input:
+
+    printf '%s\n' "$NEW_PASSWORD" | cdb users passwd alice --password-stdin
+
+`cdb users add` creates the `_users` database if the server has none yet, and
+`cdb users rm` refuses to remove the account you are connected as.
+
+**A server admin's password is hashed asynchronously.** After `users add
+--admin` or `users passwd` on a server admin, CouchDB's PUT to `[admins]`
+returns before the password is actually hashed — hashing takes roughly
+100–200 ms. cdb waits for it, polling the config entry for up to two seconds,
+so that a login attempted right after the command returns succeeds instead of
+being refused against the still-plaintext value. On a very slow server that
+two-second wait can itself run out; cdb still reports success, since the
+write did land, but a login attempted immediately afterwards can be refused
+once — retry it.
+
+### Who may read a database
+
+`cdb security /movies` prints the database's `_security` document, one entry
+per row, and the eight `--add-*`/`--remove-*` flags edit it:
+
+    $ cdb security /movies --add-member carol --remove-member bob
+    Grant member access on movies to carol, revoke member access on movies from bob? [y/N] y
+    Changed the security of movies.
+
+Every flag in one call is applied in a single `PUT` and confirmed by a single
+question, and members of the document cdb does not manage are left alone.
+
+### Reclaiming space
+
+`cdb compact /movies` starts a compaction: CouchDB rewrites the database file
+without the superseded revisions of its documents. It is safe — the database
+stays readable and writable — but it is long-running on a large database and
+needs room for a second copy of the file while it runs, so cdb asks first.
+
+`--ddoc by_year` compacts that design document's view indexes instead of the
+database. `--cleanup` additionally deletes the index files left behind by
+design documents that have changed or gone. `--watch` follows the matching
+`_active_tasks` entry to the end:
+
+    $ cdb compact /movies --watch --yes
+    type                 progress  target  started   updated   node
+    database_compaction  12%       movies  15:20:00  15:20:02  nonode@nohost
+    database_compaction  86%       movies  15:20:00  15:20:14  nonode@nohost
+                                   Compaction of movies finished.
+
+A small database compacts faster than the first poll and never produces a task
+at all; a watch that has seen nothing after ten seconds reports the compaction
+as finished, because it is.
+
+### Cluster state and single-node setup
+
+`cdb cluster status` reports what `_cluster_setup` and `_membership` say,
+plus the `[cluster] n` and `q` of the node `--node` names:
+
+    $ cdb cluster status
+     FIELD            | VALUE
+    ------------------+------------------
+     state            | cluster_finished
+     cluster n        | 3
+     cluster q        | 2
+     all_nodes[0]     | node1@127.0.0.1
+     cluster_nodes[0] | node1@127.0.0.1
+
+A server whose setup endpoint is switched off reports the state as
+`unavailable`; the node rows still work.
+
+`cdb cluster setup --single-node` turns a fresh server into a working
+single-node install: CouchDB sets `[cluster] n` to 1 and creates the `_users`
+and `_replicator` databases. A node that is already set up is reported and
+left alone. **Multi-node setup is not supported** — `enable_cluster`,
+`add_node` and `finish_cluster` are not offered, and a real cluster is still
+built with Fauxton or `curl`.
+
 ## The interactive shell
 
 `cdb` with no subcommand starts the shell when both stdin and stdout are a
@@ -823,6 +986,34 @@ force, and `cdb replications show <id>` reads back the error.
 **`put` seems to hang at a terminal.** It does not: run interactively, `put`
 asks for a file argument or an explicit `-` rather than reading the terminal
 to end-of-file. Pass the file, or pipe the JSON in.
+
+**`Server administrator rights are required for …`**
+The account you are connected as is not a server admin. `_active_tasks`, the
+configuration, `_users`, `_security`, compaction and cluster setup are all
+admin-only. `cdb session` shows who you are connected as; `cdb users` lists
+the server admins, and `cdb users add <name> --admin` creates one if you have
+an admin account already.
+
+**`config set` said the setting was changed and nothing happened**
+The setting is one CouchDB reads only when it starts. `config set` says so in
+the same breath; restart the server. `config reload` will not do it — it
+re-reads the `.ini` files, which is a different thing.
+
+**A user cannot log in after `users passwd`**
+Check that nothing else wrote the `_users` document between the read and the
+write. cdb strips the `password_sha`, `salt`, `derived_key`, `iterations` and
+`password_scheme` fields before writing the new password, because CouchDB
+ignores a plaintext `password` on a document that still carries the old hash;
+a document edited by hand with `cdb put` can end up in that state.
+
+**`cluster setup --single-node` says the node is already set up**
+It is: `GET /_cluster_setup` reports `single_node_enabled` or
+`cluster_finished`. Nothing was changed. `cdb cluster status` shows the state.
+
+**`This node reports the setup state "…", which cdb does not know how to configure`**
+cdb configures a node from `cluster_disabled`, `single_node_disabled` or
+`cluster_enabled`. Any other state means someone has started a multi-node
+setup, which cdb does not finish; use Fauxton or `curl`.
 
 Beyond this guide: the [command reference](reference/README.md), `help` inside
 the shell, and `cdb <command> --help` outside it.

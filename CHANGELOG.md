@@ -7,23 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-14
+
+### Added
+
+- **`tasks`.** One row per `_active_tasks` entry — replications, database and
+  view compactions, index builds — with `--type` and `--db` filters and a
+  `--watch` that re-reads the list every `--interval` and reprints it only
+  when the set of tasks changes. Replication endpoints are redacted in the
+  table and in `--json`.
+- **`config`.** Read and change `_node/<node>/_config`: the whole
+  configuration, one section, or one key; `set`, `unset` and `reload`.
+  Credentials — everything under `[admins]` and `[jwt_keys]`, the shared proxy
+  secret, and any key whose name ends in `password`, `secret` or `token` —
+  print as `****` unless `--reveal` is given, in the table and in `--json`
+  alike. A setting CouchDB reads only at start-up is confirmed first and
+  reported with the sentence that says a restart is needed.
+- **`users`.** List, show, add, re-password and remove both `_users` accounts
+  and `[admins]` server admins, with `--admin` choosing which. Passwords are
+  prompted twice with the echo off or read as one line with
+  `--password-stdin`, and never accepted on the command line. `add` creates
+  the `_users` database when the server has none; `passwd` strips the stored
+  hash fields before writing a new password, which is what makes the new
+  password take effect; `rm` refuses to remove the account the session is
+  connected as.
+- **`security`.** Show a database's `_security` document one entry per row, or
+  edit it with eight `--add-*`/`--remove-*` flags that are applied in a single
+  `PUT` behind a single confirmation. Members of the document cdb does not
+  manage are preserved.
+- **`compact`.** Compact a database, or one design document's view indexes
+  with `--ddoc`, optionally followed by a view cleanup with `--cleanup`.
+  `--watch` follows the `_active_tasks` entry to the end, and reports a
+  database that compacted faster than the first poll as finished rather than
+  waiting for a task that will never appear.
+- **`cluster`.** `cluster status` reports the `_cluster_setup` state, the
+  node's `[cluster] n` and `q`, and `_membership`; a server with no setup
+  endpoint reports the state as `unavailable` instead of failing.
+  `cluster setup --single-node` configures a fresh node once — CouchDB sets
+  `[cluster] n` to 1 and creates the system databases — and reports a node
+  that is already configured without touching it. Multi-node setup is not
+  offered.
+
 ### Fixed
 
-- `replications cancel` no longer loses a race with the scheduler. Cancelling
-  a busy replication reads the document's revision and then deletes it, and a
-  continuous job is written to between the two, so the delete came back as a
-  409 and the job kept running while the operator was told the document "was
-  changed by someone else". The revision is re-read and the delete retried up
-  to three times now, and a conflict that survives all three says the job is
-  being updated faster than `cdb` can cancel it and to try again in a moment.
-- A server URL that carries a user name and no password logs in as that user.
-  `cdb --url http://alice@localhost:5984 ls /` read the name out of the URL,
-  wrote it down as the connection's user and then connected anonymously, so
-  every command failed with a message about credentials for a user `cdb` had
-  been told about. The password is now taken from `CDB_PASSWORD`, then the
-  profile's keyring entry, then a prompt for that user — the order every other
-  credential follows — and a run with no password anywhere and no terminal to
-  ask on still connects anonymously rather than sending an empty one.
+- `replications cancel` no longer fails when the scheduler updates the
+  replication document between cdb reading its revision and deleting it: the
+  revision is re-read and the delete retried up to three times, and a conflict
+  that survives all three is reported as a job being updated rather than as a
+  document somebody else changed. ([#43])
+- A server URL that carries a user name and no password — `cdb --url
+  http://alice@localhost:5984` — now logs in as that user, taking the password
+  from `CDB_PASSWORD`, then the profile's keyring entry, then a prompt.
+  It used to connect anonymously and remember a name it never used. ([#44])
+- `profiles add --auth jwt` and `--auth iam` now verify the token or the API
+  key before writing the profile and the keyring entry, as `--auth session`
+  and `--auth proxy` already did. ([#46])
+
+[#43]: https://github.com/sriannamalai/CDB.CLI/issues/43
+[#44]: https://github.com/sriannamalai/CDB.CLI/issues/44
+[#46]: https://github.com/sriannamalai/CDB.CLI/issues/46
 
 ## [1.3.0] - 2026-09-14
 
@@ -218,7 +260,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `info /` may show a `replication url` row, and `resolve`'s chooser shows
   diffs rather than body previews.
 
-[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.1...v1.2.0
