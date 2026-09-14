@@ -342,3 +342,49 @@ func (c *Client) BulkDocs(ctx context.Context, db string, docs []json.RawMessage
 	}
 	return failures, nil
 }
+
+// BulkResult is one document's outcome from _bulk_docs. Status is "ok" for a
+// document the server wrote and the server's own error name — "conflict",
+// "forbidden" — for one it refused; a refusal of a single document is a result,
+// not a failed request.
+type BulkResult struct {
+	ID     string
+	Rev    string
+	Status string
+	Reason string
+}
+
+// BulkWrite writes docs through _bulk_docs and returns one result per
+// document, successes included.
+//
+// It is BulkDocs's sibling rather than a replacement: BulkDocs answers "what
+// failed" for restore, which writes with new_edits=false and needs nothing
+// back about a document that worked. BulkWrite writes with the server's
+// default new_edits, so an id with no _rev creates and an id with the current
+// _rev updates, which is what a pipeline of documents means.
+func (c *Client) BulkWrite(ctx context.Context, db string, docs []json.RawMessage) ([]BulkResult, error) {
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	var rows []struct {
+		OK     bool   `json:"ok"`
+		ID     string `json:"id"`
+		Rev    string `json:"rev"`
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+	}
+	apiPath := "/" + path.Encode(db) + "/_bulk_docs"
+	req := map[string]any{"docs": docs}
+	if err := c.DoJSON(ctx, "POST", apiPath, req, &rows, "write", fmt.Sprintf("documents in %q", db)); err != nil {
+		return nil, err
+	}
+	out := make([]BulkResult, 0, len(rows))
+	for _, r := range rows {
+		res := BulkResult{ID: r.ID, Rev: r.Rev, Status: "ok", Reason: r.Reason}
+		if r.Error != "" {
+			res.Status = r.Error
+		}
+		out = append(out, res)
+	}
+	return out, nil
+}
