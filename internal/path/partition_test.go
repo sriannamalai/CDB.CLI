@@ -54,9 +54,9 @@ func TestResolvePartitionRefusals(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"/db/_partition", "a partition path looks like /db/_partition/<key>"},
 		{"/db/_partition/p1/_design", "a design document path needs a name, as in /db/_design/app"},
-		{"/db/_partition/p1/_design/app", "a design document is not partition-scoped; use /db/_design/app, or add /_view/<name> to run the view against the partition"},
-		{"/db/_partition/p1/_design/app/_view", "a design document is not partition-scoped; use /db/_design/app, or add /_view/<name> to run the view against the partition"},
-		{"/db/_partition/p1/_design/app/notview/x", "expected _view after a design document name"},
+		{"/db/_partition/p1/_design/app", "a design document is not partition-scoped; use /db/_design/app, or add /_view/<name>, /_search/<name> or /_nouveau/<name> to run it against the partition"},
+		{"/db/_partition/p1/_design/app/_view", "a design document is not partition-scoped; use /db/_design/app, or add /_view/<name>, /_search/<name> or /_nouveau/<name> to run it against the partition"},
+		{"/db/_partition/p1/_design/app/notview/x", "expected _view, _search or _nouveau after a design document name"},
 		{"/db/_partition/p1/_design/app/_view/by_date/extra", "path has too many segments"},
 		{"/db/_partition/p1/doc1/photo.jpg/extra", "path has too many segments"},
 	} {

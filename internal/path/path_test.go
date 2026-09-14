@@ -1,6 +1,9 @@
 package path
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestResolve(t *testing.T) {
 	tests := []struct {
@@ -117,5 +120,87 @@ func TestResolveUpOutOfAPartition(t *testing.T) {
 	// steps over the separator.
 	if _, err := Resolve("/", "/mydb/_partition"); err == nil {
 		t.Error("Resolve(/mydb/_partition) = nil error, want the missing-key error")
+	}
+}
+
+func TestResolveSearchPaths(t *testing.T) {
+	for _, tc := range []struct {
+		in        string
+		db        string
+		docID     string
+		index     string
+		backend   Backend
+		partition string
+	}{
+		{"/movies/_design/app/_search/by_title", "movies", "_design/app", "by_title", BackendClouseau, ""},
+		{"/movies/_design/app/_nouveau/by_title", "movies", "_design/app", "by_title", BackendNouveau, ""},
+		{"/movies/_partition/p1/_design/app/_search/by_title", "movies", "_design/app", "by_title", BackendClouseau, "p1"},
+		{"/movies/_partition/p1/_design/app/_nouveau/by_title", "movies", "_design/app", "by_title", BackendNouveau, "p1"},
+		// Percent-encoded names survive, the way view names do.
+		{"/movies/_design/app/_search/by%20title", "movies", "_design/app", "by title", BackendClouseau, ""},
+	} {
+		got, err := Resolve("/", tc.in)
+		if err != nil {
+			t.Errorf("Resolve(%q) = %v", tc.in, err)
+			continue
+		}
+		if got.Kind != KindSearch {
+			t.Errorf("Resolve(%q).Kind = %v, want KindSearch", tc.in, got.Kind)
+		}
+		if got.Database != tc.db || got.DocID != tc.docID || got.Index != tc.index ||
+			got.Backend != tc.backend || got.Partition != tc.partition {
+			t.Errorf("Resolve(%q) = %#v", tc.in, got)
+		}
+		if got.View != "" {
+			t.Errorf("Resolve(%q).View = %q, want empty: a search target is not a view", tc.in, got.View)
+		}
+	}
+}
+
+func TestKindSearchNames(t *testing.T) {
+	if got := KindSearch.String(); got != "search index" {
+		t.Errorf("KindSearch.String() = %q", got)
+	}
+	if got := KindSearch.Article(); got != "a" {
+		t.Errorf("KindSearch.Article() = %q", got)
+	}
+}
+
+// The fourth segment is now one of three words, and the message has to name
+// all three: an operator who typed "_serach" is told what was expected.
+func TestResolveRejectsAnUnknownDesignDocSegment(t *testing.T) {
+	for _, in := range []string{"/movies/_design/app/_serach/x", "/movies/_partition/p1/_design/app/_serach/x"} {
+		_, err := Resolve("/", in)
+		if err == nil {
+			t.Fatalf("Resolve(%q) succeeded", in)
+		}
+		for _, want := range []string{"_view", "_search", "_nouveau"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("Resolve(%q) error %q is missing %q", in, err, want)
+			}
+		}
+	}
+}
+
+// ".." out of a search index behaves exactly as it does out of a view: one
+// step lands on the separator segment, two on the design document. Pinning it
+// keeps the two path families from drifting apart.
+func TestParentOfASearchPathMatchesAView(t *testing.T) {
+	for _, sep := range []string{"_view", "_search", "_nouveau"} {
+		p := "/movies/_design/app/" + sep + "/x"
+		if got := Parent(p); got != "/movies/_design/app/"+sep {
+			t.Errorf("Parent(%q) = %q", p, got)
+		}
+		up, err := Clean(p, "../..")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if up != "/movies/_design/app" {
+			t.Errorf("Clean(%q, \"../..\") = %q, want the design document", p, up)
+		}
+		t2, err := Resolve("/", up)
+		if err != nil || t2.Kind != KindDesignDoc {
+			t.Errorf("%q resolved to %v, %v; want a design document", up, t2.Kind, err)
+		}
 	}
 }

@@ -19,6 +19,10 @@ const (
 	KindView
 	KindAttachment
 	KindPartition
+	// KindSearch is a full-text index inside a design document, on either
+	// backend. It is appended rather than inserted so no existing constant's
+	// value moves.
+	KindSearch
 )
 
 func (k Kind) String() string {
@@ -37,6 +41,8 @@ func (k Kind) String() string {
 		return "attachment"
 	case KindPartition:
 		return "partition"
+	case KindSearch:
+		return "search index"
 	}
 	return "unknown"
 }
@@ -52,6 +58,17 @@ func (k Kind) Article() string {
 	return "a"
 }
 
+// Backend names which full-text engine serves a search index. CouchDB has two
+// and they are not interchangeable: an index defined under "indexes" is served
+// by Clouseau at _search, one defined under "nouveau" by the Nouveau service at
+// _nouveau, and each answers 404 for the other's path.
+type Backend string
+
+const (
+	BackendClouseau Backend = "clouseau"
+	BackendNouveau  Backend = "nouveau"
+)
+
 // Target is a resolved virtual path.
 type Target struct {
 	Kind Kind
@@ -64,6 +81,10 @@ type Target struct {
 	DocID string
 	// View is the view name. Set only when Kind is KindView.
 	View string
+	// Index is the search index name. Set only when Kind is KindSearch.
+	Index string
+	// Backend is which engine serves Index. Set only when Kind is KindSearch.
+	Backend Backend
 	// Attachment is the attachment file name. Set only when Kind is
 	// KindAttachment.
 	Attachment string
@@ -228,18 +249,24 @@ func Resolve(base, input string) (Target, error) {
 				t.Kind = KindView
 				t.View = rest[3]
 				return t, nil
+			case len(rest) == 4 && rest[2] == "_search":
+				t.Kind, t.Backend, t.Index = KindSearch, BackendClouseau, rest[3]
+				return t, nil
+			case len(rest) == 4 && rest[2] == "_nouveau":
+				t.Kind, t.Backend, t.Index = KindSearch, BackendNouveau, rest[3]
+				return t, nil
 			case len(rest) == 4:
-				return Target{}, &Error{Input: input, Reason: "expected _view after a design document name"}
+				return Target{}, &Error{Input: input, Reason: "expected _view, _search or _nouveau after a design document name"}
 			case len(rest) > 4:
 				return Target{}, &Error{Input: input, Reason: "path has too many segments"}
 			default:
 				// The design document itself, or the document plus one
-				// segment that is not a complete view path. A design document
-				// is not partition-scoped — CouchDB answers 404 for
+				// segment that is not a complete view or search path. A design
+				// document is not partition-scoped — CouchDB answers 404 for
 				// /db/_partition/p1/_design/app — so say where it does live
-				// and how to run its view against this partition.
+				// and how to run its index against this partition.
 				return Target{}, &Error{Input: input, Reason: fmt.Sprintf(
-					"a design document is not partition-scoped; use /%s/_design/%s, or add /_view/<name> to run the view against the partition",
+					"a design document is not partition-scoped; use /%s/_design/%s, or add /_view/<name>, /_search/<name> or /_nouveau/<name> to run it against the partition",
 					segs[0], segs[4])}
 			}
 		}
@@ -275,11 +302,17 @@ func Resolve(base, input string) (Target, error) {
 			t.Attachment = dec[3]
 			return t, nil
 		case 5:
-			if dec[3] != "_view" {
-				return Target{}, &Error{Input: input, Reason: "expected _view after a design document name"}
+			switch dec[3] {
+			case "_view":
+				t.Kind = KindView
+				t.View = dec[4]
+			case "_search":
+				t.Kind, t.Backend, t.Index = KindSearch, BackendClouseau, dec[4]
+			case "_nouveau":
+				t.Kind, t.Backend, t.Index = KindSearch, BackendNouveau, dec[4]
+			default:
+				return Target{}, &Error{Input: input, Reason: "expected _view, _search or _nouveau after a design document name"}
 			}
-			t.Kind = KindView
-			t.View = dec[4]
 			return t, nil
 		default:
 			return Target{}, &Error{Input: input, Reason: "path has too many segments"}
