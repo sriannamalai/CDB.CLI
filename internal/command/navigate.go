@@ -461,7 +461,6 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
-// humanBytes formats a byte count for a table cell.
 // infoValue renders one metadata value for a two-column table: a whole number
 // without JSON's exponent, a string bare, anything else as compact JSON.
 func infoValue(v any) string {
@@ -482,6 +481,7 @@ func infoValue(v any) string {
 	}
 }
 
+// humanBytes formats a byte count for a table cell.
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {

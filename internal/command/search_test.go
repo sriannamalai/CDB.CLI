@@ -332,3 +332,29 @@ func TestLsAndCatOnASearchIndexPointAtSearch(t *testing.T) {
 		}
 	}
 }
+
+// --verbose appends the raw status and reason to every other failure, and the
+// sentences cdb composes itself are no exception: the sentence explains what
+// the operator can do, the bracket says what the server actually answered.
+// Composing it is internal/render's job, so what is pinned here is that the
+// error carries the three fields the suffix is built from.
+func TestSearchSentenceCarriesTheServersOwnWords(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_design/app/_search/by_title", http.StatusServiceUnavailable,
+		`{"error":"service unavailable","reason":"Search is not available"}`)
+	s := connected(t, srv)
+	_, err := invoke(t, Search(), s, "/movies/_design/app/_search/by_title", "*:*")
+	var se *SentenceError
+	if !errors.As(err, &se) {
+		t.Fatalf("err is %T (%v), want a *SentenceError", err, err)
+	}
+	if se.Status != http.StatusServiceUnavailable || se.Name != "service unavailable" || se.Reason != "Search is not available" {
+		t.Errorf("the server's own words were dropped: %#v", se)
+	}
+	// The whole point of not wrapping with %w: the *couch.Error must not be
+	// reachable, or internal/render would print its sentence instead of this
+	// one.
+	if _, ok := couch.AsError(err); ok {
+		t.Error("the couch.Error is still reachable through errors.As")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sriannamalai/CDB.CLI/internal/command"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
 )
@@ -310,5 +311,33 @@ func TestIAMTokenRejectedSentence(t *testing.T) {
 	want := "The server rejected the IAM token at example.cloudantnosqldb.appdomain.cloud."
 	if got := ErrorMessage(e, false); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+// A sentence cdb composed itself still gets the --verbose bracket, built from
+// the status and reason the error carries rather than from a reachable
+// *couch.Error.
+func TestErrorMessageAppendsTheStatusToASentenceError(t *testing.T) {
+	err := &command.SentenceError{
+		Text:   "This server has no search service running; Clouseau must be installed and started for _search indexes.",
+		Status: 503,
+		Name:   "service unavailable",
+		Reason: "Search is not available",
+	}
+	if got := ErrorMessage(err, false); got != err.Text {
+		t.Errorf("plain = %q, want the sentence alone", got)
+	}
+	want := err.Text + " [status 503 service unavailable: Search is not available]"
+	if got := ErrorMessage(err, true); got != want {
+		t.Errorf("verbose = %q\nwant       %q", got, want)
+	}
+}
+
+// A sentence with no server behind it — nothing sets one today, but the type
+// allows it — must not grow an empty bracket.
+func TestErrorMessageOmitsTheBracketWhenThereIsNoStatus(t *testing.T) {
+	err := &command.SentenceError{Text: "Something cdb decided on its own."}
+	if got := ErrorMessage(err, true); got != err.Text {
+		t.Errorf("verbose = %q, want the sentence alone", got)
 	}
 }

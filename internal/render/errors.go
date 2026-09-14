@@ -1,9 +1,11 @@
 package render
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/sriannamalai/CDB.CLI/internal/command"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
 )
 
@@ -20,6 +22,16 @@ const jwtRejectedSentence = "The server rejected the token."
 func ErrorMessage(err error, verbose bool) string {
 	if err == nil {
 		return ""
+	}
+	// A sentence cdb composed itself carries the server's answer in fields of
+	// its own rather than in a wrapped error, precisely so that plainSentence
+	// below cannot overwrite it; the bracket is built from those fields.
+	var se *command.SentenceError
+	if errors.As(err, &se) {
+		if verbose && se.Status != 0 {
+			return fmt.Sprintf("%s [status %d %s: %s]", se.Text, se.Status, se.Name, se.Reason)
+		}
+		return se.Text
 	}
 	ce, ok := couch.AsError(err)
 	if !ok {

@@ -1,6 +1,10 @@
 package command
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/sriannamalai/CDB.CLI/internal/couch"
+)
 
 // UsageError means the caller wrote the command wrong. The front-ends map it
 // to exit code 2 and print the command's usage line.
@@ -46,17 +50,34 @@ func Connectionf(cause error, format string, args ...any) *ConnectionError {
 // SentenceError is a failure cdb phrased itself, where the server's own words
 // would be worse than useless: "service unavailable" says nothing about
 // Clouseau, and "missing" says nothing about Nouveau being switched off.
-type SentenceError struct{ Text string }
+//
+// The cause is carried as three plain fields rather than as a wrapped error,
+// and there is deliberately no Unwrap: a *couch.Error still reachable through
+// errors.As would be re-rendered by internal/render's plainSentence — a 503 by
+// its ">= 500" arm, a 400 by its own — and the sentence composed here would
+// never be seen. Copying the fields keeps what --verbose needs, which is the
+// server's own words in the trailing bracket, without keeping what would
+// overwrite the sentence.
+type SentenceError struct {
+	Text string
+	// Status, Name and Reason are the server's answer, for --verbose to append
+	// as "[status N name: reason]". Status is 0 when the sentence stands on
+	// nothing a server said, and then there is no bracket to print.
+	Status int
+	Name   string
+	Reason string
+}
 
 func (e *SentenceError) Error() string { return e.Text }
 
-// Errorf builds one. It is neither a usage error nor a connection failure, so
-// internal/cli.ExitCode gives it exit 1 — the code every other server-side
-// refusal uses. cause is deliberately not wrapped with %w: a *couch.Error that
-// stayed reachable through errors.As would be re-rendered by internal/render's
-// plainSentence — a 503 by its ">= 500" arm, a 400 by its own — and the
-// sentence composed here would never be seen.
+// Errorf builds one, copying the status, error name and reason out of cause
+// when it is a *couch.Error. It is neither a usage error nor a connection
+// failure, so internal/cli.ExitCode gives it exit 1 — the code every other
+// server-side refusal uses.
 func Errorf(cause error, format string, args ...any) error {
-	_ = cause
-	return &SentenceError{Text: fmt.Sprintf(format, args...)}
+	e := &SentenceError{Text: fmt.Sprintf(format, args...)}
+	if ce, ok := couch.AsError(cause); ok {
+		e.Status, e.Name, e.Reason = ce.Status, ce.Name, ce.Reason
+	}
+	return e
 }
