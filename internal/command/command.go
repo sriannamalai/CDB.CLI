@@ -152,6 +152,11 @@ type Command struct {
 	NeedsClient bool
 	// ShellOnly hides the command from the cobra tree.
 	ShellOnly bool
+	// StopAtFirstArg stops flag parsing at the first positional argument, so
+	// that a flag written after it is an argument too. Only a command that
+	// hands its later arguments to something else wants it: "run job.cdb
+	// --limit 5" gives the script "--limit" and "5".
+	StopAtFirstArg bool
 	// Destructive marks a command as dangerous, for help and completion. It is
 	// informational only: neither front-end acts on it. A command that needs a
 	// confirmation calls Confirm or ConfirmPhrase from inside its own Run, so
@@ -268,6 +273,9 @@ func NewFlagSet(c Command) *pflag.FlagSet {
 	fs.String("replication-url", "", "address the server should use to reach itself for replication")
 	if c.Flags != nil {
 		c.Flags(fs)
+	}
+	if c.StopAtFirstArg {
+		fs.SetInterspersed(false)
 	}
 	return fs
 }

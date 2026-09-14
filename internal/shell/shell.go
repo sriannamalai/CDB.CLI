@@ -38,6 +38,8 @@ type Shell struct {
 	// args are the positional arguments "$1" to "$9" expand to. They are set
 	// only while a script runs; an interactive line has none.
 	args []string
+	// depth is how many scripts are running, for the nesting limit.
+	depth int
 }
 
 // filteredHistory wraps a readline history source so that only lines cdb could
@@ -301,6 +303,7 @@ func (sh *Shell) initHistory() error {
 	}}
 	install(sh.reg, command.HistoryFrom(func() []string { return historyLines(sh.hist) }))
 	install(sh.reg, command.SetFrom(sh.Capture))
+	install(sh.reg, command.RunFrom(sh.RunScript))
 	return nil
 }
 
