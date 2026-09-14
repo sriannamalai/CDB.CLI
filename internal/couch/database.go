@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/sriannamalai/CDB.CLI/internal/path"
 )
@@ -310,7 +311,10 @@ func (c *Client) DestroyDatabase(ctx context.Context, db string) error {
 // The credential is always a header. CouchDB's per-endpoint "auth" object
 // arrived in 3.2 and is ignored by 3.0 and 3.1, which then run the job
 // unauthenticated and fail it with 401; a Basic header is understood by every
-// 3.x, so it is the only form cdb writes.
+// 3.x, so it is the form cdb writes for session, JWT and userinfo
+// credentials. Proxy authentication writes its own three X-Auth-CouchDB-*
+// headers instead, for the same reason: they are headers, so every 3.x
+// forwards them.
 //
 // The URL is ReplicationURL, not the client URL: the server dials this address
 // itself, and the two disagree whenever cdb reaches CouchDB by an address
@@ -345,6 +349,12 @@ func (c *Client) ReplicationEndpointFor(base, db string) map[string]any {
 		endpoint["headers"] = BasicAuthHeader(c.cfg.Username, c.cfg.Secret)
 	case AuthJWT:
 		endpoint["headers"] = map[string]any{"Authorization": "Bearer " + c.cfg.Secret}
+	case AuthProxy:
+		// The replicator cannot compute an HMAC of its own, so the same three
+		// headers the transport stamps on every request are written into the
+		// document. CouchDB forwards a per-endpoint headers object verbatim,
+		// which is what makes this work on 3.0 as well as 3.5.
+		endpoint["headers"] = proxyHeaders(c.cfg.Username, strings.Join(c.cfg.Roles, ","), proxyToken(c.cfg.Secret, c.cfg.Username, c.ProxyHash()))
 	default:
 		// AuthNone still authenticates when the raw URL carried userinfo
 		// (e.g. "cdb http://admin:pw@host"); c.base keeps that userinfo,

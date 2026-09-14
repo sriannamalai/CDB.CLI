@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sriannamalai/CDB.CLI/internal/config"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
@@ -95,4 +97,53 @@ func TestIntegrationProxyWrongSecretIsAnAuthFailure(t *testing.T) {
 func stripUserinfo(raw string) string {
 	clean, _, _ := splitURLCredentials(raw)
 	return clean
+}
+
+// A same-server replication under proxy authentication: the credential the
+// server uses is the one cdb wrote into the document, so this is the only
+// check that proves the headers survive the round trip through _replicator.
+func TestIntegrationProxyReplicates(t *testing.T) {
+	base, secret := proxyTestEnv(t)
+	repl := os.Getenv("CDB_TEST_REPLICATION_URL")
+	if repl == "" {
+		t.Skip("set CDB_TEST_REPLICATION_URL to run the proxy replication test")
+	}
+	s := proxySession(t, secret)
+	s.Prefs.ReplicationURL = repl
+	s.Prefs.Yes = true
+	if _, err := invoke(t, Connect(), s, stripUserinfo(base), "--auth", "proxy", "--roles", "_admin"); err != nil {
+		t.Fatalf("connect --auth proxy = %v", err)
+	}
+	ctx := context.Background()
+	src := "cdbproxysrc" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	dst := "cdbproxydst" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	for _, db := range []string{src, dst} {
+		if err := s.Client.CreateDatabase(ctx, db, false, 0); err != nil {
+			t.Fatalf("create %s: %v", db, err)
+		}
+		defer func(db string) { _ = s.Client.DestroyDatabase(context.Background(), db) }(db)
+	}
+	docFile := filepath.Join(t.TempDir(), "doc.json")
+	if err := os.WriteFile(docFile, []byte(`{"hello":"proxy"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invoke(t, Put(), s, "/"+src+"/one", docFile); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if _, err := invoke(t, Replicate(), s, "/"+src, "/"+dst, "--yes"); err != nil {
+		t.Fatalf("replicate under proxy auth: %v", err)
+	}
+	// Poll rather than sleep: a one-document job finishes in well under a
+	// second, and a fixed sleep is either slower than it needs to be or flaky.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		info, err := s.Client.DatabaseInfo(ctx, dst)
+		if err == nil && info.DocCount > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the document never arrived in %s (last err %v)", dst, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }

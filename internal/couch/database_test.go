@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"reflect"
 	"testing"
 
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
@@ -286,5 +287,46 @@ func assertJSONEqual(t *testing.T, got, want any) {
 	}
 	if string(g) != string(w) {
 		t.Errorf("got %s, want %s", g, w)
+	}
+}
+
+func TestReplicationEndpointForProxyEmitsTheThreeHeaders(t *testing.T) {
+	c, err := New(Config{
+		URL: "http://localhost:5984", Auth: AuthProxy,
+		Username: "ops", Secret: "proxysecret", Roles: []string{"_admin", "editor"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := c.ReplicationEndpointFor("", "mydb")
+	want := map[string]any{
+		"url": "http://localhost:5984/mydb",
+		"headers": map[string]any{
+			"X-Auth-CouchDB-UserName": "ops",
+			"X-Auth-CouchDB-Roles":    "_admin,editor",
+			"X-Auth-CouchDB-Token":    "9fd98e6f0b43d9a40402668112d5bc133a04ffffdba3051d8cb68f1bd1945929",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("endpoint =\n%#v\nwant\n%#v", got, want)
+	}
+	// v1.2's rule: the credential is a header, never CouchDB's 3.2-only "auth"
+	// object, because 3.0 and 3.1 ignore that and run the job unauthenticated.
+	if _, ok := got["auth"]; ok {
+		t.Error(`the endpoint carries an "auth" key; 3.0 and 3.1 ignore it`)
+	}
+}
+
+func TestReplicationEndpointForProxyOmitsEmptyRoles(t *testing.T) {
+	c, err := New(Config{URL: "http://localhost:5984", Auth: AuthProxy, Username: "ops", Secret: "proxysecret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := c.ReplicationEndpointFor("", "mydb")["headers"].(map[string]any)
+	if _, ok := headers["X-Auth-CouchDB-Roles"]; ok {
+		t.Errorf("the roles header is present with no roles: %#v", headers)
+	}
+	if len(headers) != 2 {
+		t.Errorf("headers = %#v, want exactly the user name and the token", headers)
 	}
 }
