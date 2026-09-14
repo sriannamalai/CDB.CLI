@@ -392,6 +392,20 @@ attachments are uploaded in a separate step afterwards, which bumps the
 revision — `restore` names which documents changed revision when this
 happens.
 
+### Administration
+
+| Command | What it does |
+| --- | --- |
+| `cdb tasks` | What the server is working on right now: replications, compactions, index builds. `--watch` keeps it up to date. |
+| `cdb config` | Read and change `_node/<node>/_config`. Credentials print as `****` unless you pass `--reveal`, and a setting CouchDB only reads at start-up says so. |
+| `cdb users` | List, add, remove and re-password both `_users` accounts and `[admins]` server admins. Passwords are prompted or read from stdin, never typed on the command line. |
+| `cdb security` | Show or edit a database's `_security` document: who may read it, who may administer it. |
+| `cdb compact` | Compact a database or a design document's views, optionally following it to the end with `--watch`. |
+| `cdb cluster` | Report the cluster state and node membership, and configure a fresh server as a single node. |
+
+Multi-node cluster setup (`enable_cluster`, `add_node`, `finish_cluster`) is
+not supported; use Fauxton or `curl` for that.
+
 ## Development
 
 ```
@@ -481,6 +495,21 @@ fixtures rather than a live server.
 The Cloudant IAM tests need a real Cloudant instance and are never run in CI.
 Set `CDB_TEST_CLOUDANT_URL` and `CDB_TEST_CLOUDANT_API_KEY` from your own
 credentials; both tests skip when either is unset.
+
+`CDB_TEST_FRESH_URL` names a CouchDB the test suite may **reconfigure**: the
+single-node cluster-setup test posts to `_cluster_setup` and creates the
+system databases. Leave it unset — it is unset in CI — unless you have started
+a throwaway server for it:
+
+```
+docker run -d --name cdb-test-fresh -p 15988:5984 \
+  -e COUCHDB_USER=admin -e COUCHDB_PASSWORD=password couchdb:3.5
+CDB_TEST_FRESH_URL=http://localhost:15988/ go test ./internal/command/ -run ClusterSetup
+docker rm -f cdb-test-fresh
+```
+
+`CDB_TEST_FRESH_USER` and `CDB_TEST_FRESH_PASSWORD` override the credentials,
+which default to `admin`/`password`.
 
 CI pins `CDB_KEYRING_BACKEND=file` so tests never touch a real OS keychain, and
 runs `gofmt -l .`, `go vet ./...` and `GOOS=windows go vet ./...` as gates.
