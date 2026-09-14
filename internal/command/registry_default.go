@@ -12,6 +12,7 @@ func Default() *Registry {
 	r.Register(Info())
 	r.Register(ConfigCmd())
 	r.Register(Users())
+	r.Register(SecurityCmd())
 	r.Register(Cat())
 	r.Register(Put())
 	r.Register(Rm())
