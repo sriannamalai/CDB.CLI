@@ -246,3 +246,67 @@ func TestConfigForbiddenNamesTheAction(t *testing.T) {
 		}
 	}
 }
+
+func TestMembershipListsNodes(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_membership", 200,
+		`{"all_nodes":["node1@127.0.0.1","node2@127.0.0.1"],"cluster_nodes":["node1@127.0.0.1"]}`)
+	c := mustClient(t, srv)
+	m, err := c.Membership(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.AllNodes) != 2 || m.AllNodes[1] != "node2@127.0.0.1" || len(m.ClusterNodes) != 1 {
+		t.Errorf("membership = %#v", m)
+	}
+}
+
+func TestClusterSetupStateAndItsAbsence(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_cluster_setup", 200, `{"state":"cluster_enabled"}`)
+	c := mustClient(t, srv)
+	state, err := c.ClusterSetupState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != "cluster_enabled" {
+		t.Errorf("state = %q", state)
+	}
+
+	missing := couchtest.New(t)
+	missing.JSON("GET", "/_cluster_setup", 404, `{"error":"not_found","reason":"missing"}`)
+	c2 := mustClient(t, missing)
+	if _, err := c2.ClusterSetupState(context.Background()); err == nil {
+		t.Fatal("a 404 was swallowed; the command decides what unavailable means")
+	} else if e, ok := AsError(err); !ok || e.Status != 404 {
+		t.Fatalf("error = %#v", e)
+	}
+}
+
+func TestEnableSingleNodePostsTheDocumentedBody(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/_cluster_setup", 201, `{"ok":true}`)
+	c := mustClient(t, srv)
+	err := c.EnableSingleNode(context.Background(), SingleNodeSetup{
+		Username: "admin", Password: "password", BindAddress: "0.0.0.0", Port: 5984,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(srv.Last("POST", "/_cluster_setup").Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"action": "enable_single_node", "username": "admin", "password": "password",
+		"bind_address": "0.0.0.0", "port": float64(5984),
+	}
+	for k, v := range want {
+		if body[k] != v {
+			t.Errorf("body[%q] = %v, want %v", k, body[k], v)
+		}
+	}
+	if len(body) != len(want) {
+		t.Errorf("body has %d members, want %d: %v", len(body), len(want), body)
+	}
+}

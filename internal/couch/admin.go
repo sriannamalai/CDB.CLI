@@ -250,3 +250,67 @@ func (c *Client) ReloadConfig(ctx context.Context, node string) error {
 	err := c.DoJSON(ctx, "POST", configPath(node, "", "")+"/_reload", struct{}{}, nil, "write", "configuration of "+node)
 	return AsAdmin(err, "changing configuration")
 }
+
+// Membership is the response of GET /_membership: every node the cluster knows
+// about, and the subset of them that is in the cluster.
+type Membership struct {
+	AllNodes     []string
+	ClusterNodes []string
+}
+
+// Membership reads GET /_membership.
+func (c *Client) Membership(ctx context.Context) (Membership, error) {
+	var body struct {
+		AllNodes     []string `json:"all_nodes"`
+		ClusterNodes []string `json:"cluster_nodes"`
+	}
+	if err := c.DoJSON(ctx, "GET", "/_membership", nil, &body, "read", "cluster membership of "+c.host); err != nil {
+		return Membership{}, AsAdmin(err, "reading cluster membership")
+	}
+	return Membership{AllNodes: body.AllNodes, ClusterNodes: body.ClusterNodes}, nil
+}
+
+// ClusterSetupState reads GET /_cluster_setup, which answers one of
+// cluster_disabled, single_node_disabled, single_node_enabled, cluster_enabled
+// or cluster_finished.
+//
+// A 404 is returned as it stands rather than translated: whether "this server
+// has no setup endpoint" is a failure or a row reading "unavailable" is the
+// command's decision, not the client's.
+func (c *Client) ClusterSetupState(ctx context.Context) (string, error) {
+	var body struct {
+		State string `json:"state"`
+	}
+	if err := c.DoJSON(ctx, "GET", "/_cluster_setup", nil, &body, "read", "cluster setup of "+c.host); err != nil {
+		return "", AsAdmin(err, "reading cluster setup")
+	}
+	return body.State, nil
+}
+
+// SingleNodeSetup is the POST /_cluster_setup body for the enable_single_node
+// action. Password is a credential: it is in a request body, never in a URL,
+// never in a log line, and never in an error message.
+type SingleNodeSetup struct {
+	Username    string
+	Password    string
+	BindAddress string
+	Port        int
+}
+
+// EnableSingleNode posts action=enable_single_node. CouchDB sets [cluster] n to
+// 1, binds the given address, and creates the system databases (_users,
+// _replicator, _global_changes), which is what turns a fresh node into a
+// working single-node install.
+//
+// https://docs.couchdb.org/en/stable/api/server/common.html#cluster-setup
+func (c *Client) EnableSingleNode(ctx context.Context, req SingleNodeSetup) error {
+	body := map[string]any{
+		"action":       "enable_single_node",
+		"username":     req.Username,
+		"password":     req.Password,
+		"bind_address": req.BindAddress,
+		"port":         req.Port,
+	}
+	err := c.DoJSON(ctx, "POST", "/_cluster_setup", body, nil, "write", "cluster setup of "+c.host)
+	return AsAdmin(err, "cluster setup")
+}
