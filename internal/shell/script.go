@@ -88,7 +88,13 @@ func (sh *Shell) RunScript(ctx context.Context, r io.Reader, name string, args [
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return err
+		if errors.Is(err, bufio.ErrTooLong) {
+			err = command.Errorf(err, "the line is longer than %d bytes.", scriptScanBuffer)
+		}
+		// The scanner stopped at the line it could not hold, which is the one
+		// after the last it read. It is named the way a failing line is.
+		fmt.Fprintf(sh.sess.Stderr, "%s:%d: %s\n", name, lineNo+1, render.ErrorMessage(err, sh.sess.Prefs.Verbose))
+		return command.Reported(err)
 	}
 	if strings.TrimSpace(buf.String()) != "" {
 		return command.Usagef("run", "%s:%d: the last line is unfinished", name, start)

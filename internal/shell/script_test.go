@@ -206,3 +206,20 @@ func TestScriptTakesACommentAfterACommand(t *testing.T) {
 		t.Errorf("output = %q, want the words before each \"#\" only", out.String())
 	}
 }
+
+func TestScriptOverlongLineIsReportedWithItsNumber(t *testing.T) {
+	var out bytes.Buffer
+	sh := scriptShell(t, &out)
+	err := runText(t, sh, "say one\nsay "+strings.Repeat("x", scriptScanBuffer)+"\n")
+	if err == nil {
+		t.Fatal("the overlong line did not fail")
+	}
+	var ue *command.UsageError
+	if errors.As(err, &ue) {
+		t.Errorf("error = %v, want a plain failure (exit 1), not a usage error", err)
+	}
+	stderr := out.String()
+	if i := strings.Index(stderr, "script.cdb:2:"); i < 0 {
+		t.Errorf("stderr = %.120q, want a \"script.cdb:2:\" line", stderr)
+	}
+}
