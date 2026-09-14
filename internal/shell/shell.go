@@ -77,6 +77,14 @@ func (h *filteredHistory) Write(line string) (int, error) {
 		if _, known := h.resolve(word); !known {
 			return h.src.Len(), nil
 		}
+		// Every later stage is read the same way: `ls | st api_token hunter2`
+		// hides the typo two stages down, where it files the credential away
+		// just as well.
+		for _, stage := range splitStages(line)[1:] {
+			if !stageResolves(stage, h.resolve) {
+				return h.src.Len(), nil
+			}
+		}
 	}
 	// Redact before the dedup check, so what is compared is what is stored.
 	line = redactLine(line, h.resolve)
@@ -142,6 +150,29 @@ func redactStage(stage string, schemeless bool, resolve func(string) (string, bo
 		}
 	}
 	return b.String()
+}
+
+// commandShape is what a later stage's first word looks like when it was meant
+// to be a command: a lowercase name with something after it. A jq expression
+// never takes that shape — ".id", "select(.x)" and "map(.a) | .b" all fail it —
+// which is how a stage with no command word of its own is left alone.
+var commandShape = regexp.MustCompile(`^[a-z][a-z0-9-]*[ \t]`)
+
+// stageResolves reports whether a later stage is one the redactor understands:
+// a jq expression, or a stage whose command word names a command. A word that
+// looks like a command and names none is a typo, and the line it is in cannot
+// be redacted on a guess.
+func stageResolves(stage string, resolve func(string) (string, bool)) bool {
+	text := strings.TrimLeft(stage, " \t")
+	if !commandShape.MatchString(text) {
+		return true
+	}
+	word, ok := commandWord(text)
+	if !ok {
+		return true
+	}
+	_, known := resolve(word)
+	return known
 }
 
 // splitStages cuts a line at every "|" that is not quoted or escaped, keeping

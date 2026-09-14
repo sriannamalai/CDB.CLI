@@ -276,3 +276,33 @@ func TestAnUnknownCommandStillReportsItself(t *testing.T) {
 		t.Fatalf("error = %v, want the unknown-command sentence", err)
 	}
 }
+
+// The rule reads every stage, not only the first: a typo two stages down is as
+// good at filing a credential away as one at the head of the line. A jq stage
+// has no command word, and nothing that looks like a jq expression is read as
+// one.
+func TestHistoryDropsALineWhoseLaterStageIsUnknown(t *testing.T) {
+	for _, tc := range []struct{ line, want string }{
+		{"ls | st api_token hunter2", ""},
+		{"ls | set api_token hunter2", "ls | set api_token ****"},
+		{"ls | .id", "ls | .id"},
+		{"ls | select(.x)", "ls | select(.x)"},
+		{"ls | cat", "ls | cat"},
+	} {
+		var out bytes.Buffer
+		sh, _ := testShell(t, &out)
+		if _, err := sh.hist.Write(tc.line); err != nil {
+			t.Fatal(err)
+		}
+		got := historyLines(sh.hist)
+		if tc.want == "" {
+			if len(got) != 0 {
+				t.Errorf("history after %q = %q, want nothing recorded", tc.line, got)
+			}
+			continue
+		}
+		if len(got) != 1 || got[0] != tc.want {
+			t.Errorf("history after %q = %q, want [%q]", tc.line, got, tc.want)
+		}
+	}
+}
