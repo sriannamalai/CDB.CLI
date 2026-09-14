@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Homebrew cask no longer trips Homebrew 6's deprecation warning on
+  every command. Its post-install step, which clears the macOS quarantine
+  attribute from the downloaded binary, is now written as the declarative
+  `postflight_steps` stanza instead of the retired Ruby `postflight` block.
+
 ## [1.2.0] - 2026-09-09
 
 ### Added
