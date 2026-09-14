@@ -414,3 +414,45 @@ func TestConfigRefusesAKeyWithoutASection(t *testing.T) {
 		t.Errorf("a request was sent anyway: %v", srv.Requests())
 	}
 }
+
+func TestSecurityReadsAndWritesTheWholeDocument(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_security", 200,
+		`{"admins":{"names":["alice"],"roles":["ops"]},"members":{"names":[],"roles":["reader"]},"cloudant":{"x":1}}`)
+	srv.JSON("PUT", "/movies/_security", 200, `{"ok":true}`)
+	c := mustClient(t, srv)
+	ctx := context.Background()
+
+	sec, err := c.Security(ctx, "movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sec.Admins.Names) != 1 || sec.Admins.Names[0] != "alice" || sec.Admins.Roles[0] != "ops" {
+		t.Errorf("admins = %#v", sec.Admins)
+	}
+	if len(sec.Members.Names) != 0 || sec.Members.Roles[0] != "reader" {
+		t.Errorf("members = %#v", sec.Members)
+	}
+
+	sec.Members.Names = append(sec.Members.Names, "bob")
+	if err := c.SetSecurity(ctx, "movies", sec); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(srv.Last("PUT", "/movies/_security").Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["cloudant"]; !ok {
+		t.Error("a member of the document cdb does not understand was dropped")
+	}
+	var members SecurityLevel
+	if err := json.Unmarshal(body["members"], &members); err != nil {
+		t.Fatal(err)
+	}
+	if len(members.Names) != 1 || members.Names[0] != "bob" {
+		t.Errorf("members = %#v", members)
+	}
+	if members.Roles == nil {
+		t.Error("an empty list was written as null; CouchDB wants an array")
+	}
+}

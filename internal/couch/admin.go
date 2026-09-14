@@ -346,3 +346,69 @@ func (c *Client) ViewCleanup(ctx context.Context, db string) error {
 	err := c.DoJSON(ctx, "POST", dbBase(db, "")+"/_view_cleanup", struct{}{}, nil, "write", fmt.Sprintf("database %q", db))
 	return AsAdmin(err, fmt.Sprintf("cleaning up views in %q", db))
 }
+
+// SecurityLevel is one half of a database's security object: the names and the
+// roles at that level. Both are always marshalled as arrays, never as null,
+// because CouchDB reads a null as "no such member" on some paths.
+type SecurityLevel struct {
+	Names []string `json:"names"`
+	Roles []string `json:"roles"`
+}
+
+// Security is a database's _security document.
+type Security struct {
+	Admins  SecurityLevel
+	Members SecurityLevel
+	// Raw is the document as it was read. SetSecurity writes admins and members
+	// back into it rather than building a fresh object, so that a member cdb
+	// does not understand — a hosting provider's own key — survives an edit.
+	Raw json.RawMessage
+}
+
+// Security reads GET /{db}/_security.
+//
+// https://docs.couchdb.org/en/stable/api/database/security.html
+func (c *Client) Security(ctx context.Context, db string) (Security, error) {
+	var raw json.RawMessage
+	if err := c.DoJSON(ctx, "GET", dbBase(db, "")+"/_security", nil, &raw,
+		"read", fmt.Sprintf("security of %q", db)); err != nil {
+		return Security{}, AsAdmin(err, fmt.Sprintf("reading the security of %q", db))
+	}
+	var body struct {
+		Admins  SecurityLevel `json:"admins"`
+		Members SecurityLevel `json:"members"`
+	}
+	// An empty _security document is "{}" on a database nobody has restricted,
+	// which decodes to two empty levels — the right answer.
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return Security{}, Wrap(err, "read", fmt.Sprintf("security of %q", db))
+	}
+	return Security{Admins: body.Admins, Members: body.Members, Raw: raw}, nil
+}
+
+// SetSecurity writes PUT /{db}/_security, keeping every member of the document
+// it does not manage.
+func (c *Client) SetSecurity(ctx context.Context, db string, sec Security) error {
+	doc := map[string]json.RawMessage{}
+	if len(sec.Raw) > 0 {
+		if err := json.Unmarshal(sec.Raw, &doc); err != nil {
+			return Wrap(err, "write", fmt.Sprintf("security of %q", db))
+		}
+	}
+	for key, level := range map[string]SecurityLevel{"admins": sec.Admins, "members": sec.Members} {
+		if level.Names == nil {
+			level.Names = []string{}
+		}
+		if level.Roles == nil {
+			level.Roles = []string{}
+		}
+		b, err := json.Marshal(level)
+		if err != nil {
+			return Wrap(err, "write", fmt.Sprintf("security of %q", db))
+		}
+		doc[key] = b
+	}
+	err := c.DoJSON(ctx, "PUT", dbBase(db, "")+"/_security", doc, nil,
+		"write", fmt.Sprintf("security of %q", db))
+	return AsAdmin(err, fmt.Sprintf("changing the security of %q", db))
+}
