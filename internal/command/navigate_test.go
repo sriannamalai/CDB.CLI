@@ -296,3 +296,40 @@ func TestCdNamesTheDesignDocumentForAMissingAttachment(t *testing.T) {
 		t.Errorf("target = %s, want %s", e.Target, want)
 	}
 }
+
+func TestLsDesignDocListsSearchIndexes(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_design/app", 200, `{
+		"_id":"_design/app",
+		"views":{"by_year":{"map":"function(doc){}"}},
+		"indexes":{"by_title":{"index":"function(doc){}"}},
+		"nouveau":{"by_body":{"index":"function(doc){}"}},
+		"filters":{"recent":"function(doc){}"}}`)
+	s := connected(t, srv)
+	res, err := invoke(t, Ls(), s, "/movies/_design/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, ok := res.(Rows)
+	if !ok {
+		t.Fatalf("result is %T, want Rows", res)
+	}
+	if len(rows.Columns) != 3 || rows.Columns[2].Title != "backend" {
+		t.Fatalf("columns = %#v, want kind, name, backend", rows.Columns)
+	}
+	got := map[string][2]string{}
+	for _, r := range rows.Items {
+		got[r.Cells[1]] = [2]string{r.Cells[0], r.Cells[2]}
+	}
+	want := map[string][2]string{
+		"by_year":  {"view", ""},
+		"by_title": {"search", "clouseau"},
+		"by_body":  {"search", "nouveau"},
+		"recent":   {"filter", ""},
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("row %q = %v, want %v", name, got[name], w)
+		}
+	}
+}

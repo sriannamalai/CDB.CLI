@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"testing"
 
 	"github.com/sriannamalai/CDB.CLI/internal/couch/couchtest"
@@ -25,5 +26,45 @@ func TestCompleteFieldsSplitsAtTheLastComma(t *testing.T) {
 	}
 	if got[0].Display != "year" {
 		t.Errorf("display = %q, want year", got[0].Display)
+	}
+}
+
+func TestCompleteOffersSearchSegmentsUnderADesignDoc(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_design/app", 200,
+		`{"_id":"_design/app","views":{"by_year":{}},"indexes":{"by_title":{}},"nouveau":{"by_body":{}}}`)
+	s := connected(t, srv)
+	got := map[string]bool{}
+	for _, c := range CompletePath(context.Background(), s, nil, "/movies/_design/app/_") {
+		got[c.Display] = true
+	}
+	for _, want := range []string{"_view", "_search", "_nouveau"} {
+		if !got[want] {
+			t.Errorf("completion does not offer %q; got %v", want, got)
+		}
+	}
+}
+
+func TestCompleteListsSearchIndexNames(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/movies/_design/app", 200,
+		`{"_id":"_design/app","views":{"by_year":{}},"indexes":{"by_title":{},"by_actor":{}},"nouveau":{"by_body":{}}}`)
+	s := connected(t, srv)
+
+	clouseau := CompletePath(context.Background(), s, nil, "/movies/_design/app/_search/by_")
+	var names []string
+	for _, c := range clouseau {
+		names = append(names, c.Display)
+	}
+	if len(names) != 2 || names[0] != "by_actor" || names[1] != "by_title" {
+		t.Errorf("clouseau candidates = %v, want the two sorted index names", names)
+	}
+	if clouseau[0].Value != "/movies/_design/app/_search/by_actor" {
+		t.Errorf("candidate value = %q", clouseau[0].Value)
+	}
+
+	nouveau := CompletePath(context.Background(), s, nil, "/movies/_design/app/_nouveau/")
+	if len(nouveau) != 1 || nouveau[0].Display != "by_body" {
+		t.Errorf("nouveau candidates = %#v, want only by_body", nouveau)
 	}
 }

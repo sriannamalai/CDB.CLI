@@ -261,28 +261,38 @@ func lsDesignDoc(ctx context.Context, s *session.Session, t path.Target) (Result
 	}
 	var ddoc struct {
 		Views   map[string]json.RawMessage `json:"views"`
+		Indexes map[string]json.RawMessage `json:"indexes"`
+		Nouveau map[string]json.RawMessage `json:"nouveau"`
 		Filters map[string]json.RawMessage `json:"filters"`
 		Updates map[string]json.RawMessage `json:"updates"`
 	}
 	if err := json.Unmarshal(raw, &ddoc); err != nil {
 		return nil, err
 	}
-	rows := Rows{Columns: []Column{{Title: "kind"}, {Title: "name"}}}
-	add := func(kind string, m map[string]json.RawMessage) {
+	// Both search backends are the one kind "search": what the operator does
+	// with either is run "search" against it. Which engine serves it decides
+	// the path, so it gets a column of its own rather than a second kind.
+	rows := Rows{Columns: []Column{{Title: "kind"}, {Title: "name"}, {Title: "backend"}}}
+	add := func(kind, backend string, m map[string]json.RawMessage) {
 		names := make([]string, 0, len(m))
 		for n := range m {
 			names = append(names, n)
 		}
 		sort.Strings(names)
 		for _, n := range names {
-			rows.Items = append(rows.Items, Row{Cells: []string{kind, n}, JSON: jsonObject("kind", kind, "name", n)})
+			rows.Items = append(rows.Items, Row{
+				Cells: []string{kind, n, backend},
+				JSON:  jsonObject("kind", kind, "name", n, "backend", backend),
+			})
 		}
 	}
-	add("view", ddoc.Views)
-	add("filter", ddoc.Filters)
-	add("update", ddoc.Updates)
+	add("view", "", ddoc.Views)
+	add("search", string(path.BackendClouseau), ddoc.Indexes)
+	add("search", string(path.BackendNouveau), ddoc.Nouveau)
+	add("filter", "", ddoc.Filters)
+	add("update", "", ddoc.Updates)
 	if len(rows.Items) == 0 {
-		return Message{Text: fmt.Sprintf("%s defines no views, filters or updates.", t.Path)}, nil
+		return Message{Text: fmt.Sprintf("%s defines no views, search indexes, filters or updates.", t.Path)}, nil
 	}
 	return rows, nil
 }

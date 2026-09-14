@@ -59,14 +59,26 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 		return dir + "/" + name
 	}
 
-	// "/db/_design/app/_view/" is not a resolvable path on its own, so trim the
-	// trailing _view/ and complete view names against the design document.
-	if trimmed := strings.TrimSuffix(dir, "_view/"); trimmed != dir {
+	// "/db/_design/app/_view/" and its two search siblings are not resolvable
+	// paths on their own, so the trailing separator is trimmed and the names
+	// are completed against the design document behind it.
+	for _, sep := range []struct {
+		suffix string
+		member string
+	}{
+		{"_view/", "views"},
+		{"_search/", "indexes"},
+		{"_nouveau/", "nouveau"},
+	} {
+		trimmed := strings.TrimSuffix(dir, sep.suffix)
+		if trimmed == dir {
+			continue
+		}
 		base, err := resolveDesignDoc(s.Path(), trimmed)
 		if err != nil {
 			return nil
 		}
-		return viewCandidates(ctx, s, base, partial, func(n string) string { return dir + path.Encode(n) })
+		return ddocMemberCandidates(ctx, s, base, sep.member, partial, func(n string) string { return dir + path.Encode(n) })
 	}
 
 	base, err := path.Resolve(s.Path(), dir)
@@ -135,42 +147,63 @@ func CompletePath(ctx context.Context, s *session.Session, _ []string, cur strin
 		return out
 
 	case path.KindDesignDoc:
-		// Offer the _view segment before the view names themselves.
-		if partial != "_view" && strings.HasPrefix("_view", partial) {
-			return []Candidate{{Value: join("_view"), Display: "_view", Tag: "views"}}
+		// Offer the three separator segments before any names: which one is
+		// typed decides which member of the design document is listed next.
+		var out []Candidate
+		for _, sep := range []string{"_view", "_search", "_nouveau"} {
+			if partial != sep && strings.HasPrefix(sep, partial) {
+				out = append(out, Candidate{Value: join(sep), Display: sep, Tag: "views"})
+			}
 		}
-		return viewCandidates(ctx, s, base, partial, join)
+		if len(out) > 0 {
+			return out
+		}
+		return ddocMemberCandidates(ctx, s, base, "views", partial, join)
 
 	default:
 		return nil
 	}
 }
 
-// viewCandidates lists the view names of a design document that start with
+// ddocMemberCandidates lists the names under one top-level object of a design
+// document — "views", "indexes" (Clouseau) or "nouveau" — that start with
 // partial, mapping each through join to build the completion value.
-func viewCandidates(ctx context.Context, s *session.Session, base path.Target, partial string, join func(string) string) []Candidate {
+func ddocMemberCandidates(ctx context.Context, s *session.Session, base path.Target, member, partial string, join func(string) string) []Candidate {
 	raw, err := s.Client.DesignDoc(ctx, base.Database, base.DocID)
 	if err != nil {
 		return nil
 	}
-	var ddoc struct {
-		Views map[string]json.RawMessage `json:"views"`
+	tag := "views"
+	if member != "views" {
+		tag = "search indexes"
 	}
-	if err := json.Unmarshal(raw, &ddoc); err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(ddoc.Views))
-	for n := range ddoc.Views {
-		names = append(names, n)
-	}
-	sort.Strings(names)
 	var out []Candidate
-	for _, n := range names {
+	for _, n := range searchIndexNames(raw, member) {
 		if strings.HasPrefix(n, partial) {
-			out = append(out, Candidate{Value: join(path.Encode(n)), Display: n, Tag: "views"})
+			out = append(out, Candidate{Value: join(path.Encode(n)), Display: n, Tag: tag})
 		}
 	}
 	return out
+}
+
+// searchIndexNames returns the sorted keys of one top-level object of a design
+// document. A missing or malformed member is no names rather than an error:
+// completion is a convenience and must never fail a command.
+func searchIndexNames(raw json.RawMessage, member string) []string {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(top[member], &members); err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(members))
+	for n := range members {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // resolveDesignDoc resolves a path that names a design document, including the
