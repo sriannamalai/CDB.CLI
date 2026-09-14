@@ -102,7 +102,7 @@ func TestALastJQStageOverALiveSourceStaysLive(t *testing.T) {
 func TestAConsumingLastStageOverAFiniteSourceIsNotLive(t *testing.T) {
 	var out bytes.Buffer
 	sh := pipeShell(t, &out, liveConsumer("sink"))
-	st := Stage{Argv: []string{"sink"}, Literal: []bool{false}}
+	st := Stage{Argv: []string{"sink"}}
 	res, err := sh.lastResult(context.Background(), st, closedSource(`{"id":"a"}`), func() bool { return false })
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestAConsumingLastStageOverAFiniteSourceIsNotLive(t *testing.T) {
 func TestAConsumingLastStageOverALiveSourceStaysLive(t *testing.T) {
 	var out bytes.Buffer
 	sh := pipeShell(t, &out, liveConsumer("sink"))
-	st := Stage{Argv: []string{"sink"}, Literal: []bool{false}}
+	st := Stage{Argv: []string{"sink"}}
 	res, err := sh.lastResult(context.Background(), st, closedSource(`{"id":"a"}`), func() bool { return true })
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestAConsumingLastStageOverALiveSourceStaysLive(t *testing.T) {
 func TestAOneCommandLineKeepsItsOwnLiveness(t *testing.T) {
 	var out bytes.Buffer
 	sh := pipeShell(t, &out, liveEmitter("feed", `{"id":"a"}`))
-	st := Stage{Argv: []string{"feed"}, Literal: []bool{false}}
+	st := Stage{Argv: []string{"feed"}}
 	res, err := sh.lastResult(context.Background(), st, nil, func() bool { return false })
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +161,7 @@ func TestFeedStageReportsWhetherItsResultIsLive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dst := make(chan json.RawMessage, stageBuffer)
 			var got, reported bool
-			st := Stage{Argv: []string{tc.name}, Literal: []bool{false}}
+			st := Stage{Argv: []string{tc.name}}
 			err := sh.feedStage(context.Background(), st, nil, dst, func(live bool) {
 				got, reported = live, true
 			})

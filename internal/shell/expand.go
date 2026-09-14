@@ -11,14 +11,11 @@ import (
 )
 
 // expandStage returns the stage's words with every variable reference
-// replaced. A word any part of which was single-quoted is returned untouched.
+// replaced. The "$" runes the parser marked literal — single-quoted, escaped,
+// or a Mango operator's own — are left as they were typed.
 func expandStage(st Stage, vars *session.Vars, args []string) ([]string, error) {
 	out := make([]string, len(st.Argv))
 	for i, word := range st.Argv {
-		if i < len(st.Literal) && st.Literal[i] {
-			out[i] = word
-			continue
-		}
 		var dollars []int
 		if i < len(st.LiteralDollar) {
 			dollars = st.LiteralDollar[i]
@@ -36,8 +33,8 @@ func expandStage(st Stage, vars *session.Vars, args []string) ([]string, error) 
 // reference inside the word and the word is never re-split, so a variable
 // holding a space is still one argument. "$$" is a literal "$", and a "$" that
 // begins no reference is left as it was. dollars holds the offsets the parser
-// marked literal — every "$" written right after a double quote, which is how
-// a Mango selector spells "$gt".
+// marked literal: every "$" written right after a double quote, which is how a
+// Mango selector spells "$gt", inside single quotes, or after a backslash.
 func expandWord(word string, dollars []int, vars *session.Vars, args []string) (string, error) {
 	var b strings.Builder
 	for i := 0; i < len(word); i++ {

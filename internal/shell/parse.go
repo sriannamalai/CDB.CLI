@@ -22,16 +22,14 @@ var ErrTrailingPipe = errors.New("a line cannot end with |")
 // a jq stage carries one gojq expression, taken verbatim.
 type Stage struct {
 	Argv []string
-	// Literal[i] reports that some part of word i was written inside single
-	// quotes, or that a backslash there protected a "$". Such a word is never
-	// variable-expanded: single quotes are literal, and that is how a Mango
-	// selector or a jq expression keeps a "$" of its own.
-	Literal []bool
-	// LiteralDollar[i] holds the byte offsets inside word i of every "$"
-	// written immediately after a double quote. That "$" is left alone: it is
-	// how Mango spells its operators ("$gt", "$and"), in a bare word
-	// {"year":{"$gt":2000}} and in a double-quoted word with escaped quotes
-	// alike. A word-opening quote is not part of the word, so "$doc" still
+	// LiteralDollar[i] holds the byte offsets inside word i of every "$" that
+	// expansion must leave alone: one written immediately after a double
+	// quote, which is how Mango spells its operators ("$gt", "$and") in a bare
+	// word {"year":{"$gt":2000}} and in a double-quoted word with escaped
+	// quotes alike; one written inside single quotes; and one a backslash
+	// protected. The mark is per rune, not per word, so `"\$literal and $var"`
+	// keeps the first and expands the second, and '$a'$b expands $b. A
+	// word-opening double quote is not part of the word, so "$doc" still
 	// expands.
 	LiteralDollar [][]int
 	Expr          string
@@ -114,21 +112,17 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 		return Line{Stages: []Stage{{Argv: argv, Capture: capture}}}, nil
 	}
 	var (
-		line      Line
-		cur       strings.Builder
-		argv      []string
-		literalOf []bool
-		dollarOf  [][]int
-		dollars   []int
-		hasWord   bool
-		// wasLiteral records that the word being built has a single-quoted
-		// part, which is what keeps it out of variable expansion.
-		wasLiteral bool
+		line     Line
+		cur      strings.Builder
+		argv     []string
+		dollarOf [][]int
+		dollars  []int
+		hasWord  bool
 		// quotedDollar says the last rune added to the word was a double
 		// quote, so a "$" added next is a Mango operator's own "$".
 		quotedDollar bool
-		// anyDollar says the stage marked at least one such "$", which is the
-		// only reason to hand LiteralDollar to the stage at all.
+		// anyDollar says the stage marked at least one "$" literal, which is
+		// the only reason to hand LiteralDollar to the stage at all.
 		anyDollar bool
 		quote     rune
 		escaped   bool
@@ -137,10 +131,12 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 	// start is where the current stage's raw text begins, so that a jq stage
 	// can be handed to gojq exactly as it was typed.
 	start := 0
-	// write adds one rune to the word being built, recording a "$" that follows
-	// a double quote so that expansion leaves it alone.
-	write := func(r rune) {
-		if r == '$' && quotedDollar {
+	// write adds one rune to the word being built. literal says the rune was
+	// written inside single quotes or after a backslash; a "$" that is literal,
+	// or that follows a double quote, has its offset recorded so that
+	// expansion leaves that one rune alone.
+	write := func(r rune, literal bool) {
+		if r == '$' && (literal || quotedDollar) {
 			dollars = append(dollars, cur.Len())
 			anyDollar = true
 		}
@@ -151,11 +147,10 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 	flush := func() {
 		if hasWord {
 			argv = append(argv, cur.String())
-			literalOf = append(literalOf, wasLiteral)
 			dollarOf = append(dollarOf, dollars)
 			cur.Reset()
 			dollars = nil
-			hasWord, wasLiteral, quotedDollar = false, false, false
+			hasWord, quotedDollar = false, false
 		}
 	}
 	// closeStage ends the stage that began at start and runs to end.
@@ -175,29 +170,25 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 			if !anyDollar {
 				marked = nil
 			}
-			line.Stages = append(line.Stages, Stage{Argv: argv, Literal: literalOf, LiteralDollar: marked})
+			line.Stages = append(line.Stages, Stage{Argv: argv, LiteralDollar: marked})
 		}
-		argv, literalOf, dollarOf, anyDollar = nil, nil, nil, false
+		argv, dollarOf, anyDollar = nil, nil, false
 		return nil
 	}
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
 		switch {
 		case escaped:
-			write(r)
+			// A backslash protects the rune after it and nothing else, so
+			// `"\$literal and $var"` keeps the first "$" and expands the
+			// second.
+			write(r, true)
 			escaped = false
-			// A backslash protects a dollar the way single quotes do. The
-			// whole word is marked rather than the one rune: the mark is one
-			// bool per word, and not expanding is the direction that cannot
-			// corrupt what the operator escaped on purpose.
-			if r == '$' {
-				wasLiteral = true
-			}
 		case quote == '\'':
 			if r == '\'' {
 				quote, quotedDollar = 0, false
 			} else {
-				write(r)
+				write(r, true)
 			}
 		case quote == '"':
 			switch r {
@@ -206,7 +197,7 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 			case '\\':
 				escaped = true
 			default:
-				write(r)
+				write(r, false)
 			}
 		case r == '\\':
 			escaped = true
@@ -217,9 +208,6 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 			// inside the word is the quote a Mango operator is written after.
 			quotedDollar = r == '"' && cur.Len() > 0
 			hasWord = true
-			if r == '\'' {
-				wasLiteral = true
-			}
 		case r == '#' && !hasWord:
 			// A "#" that begins a token starts a comment, which runs to the
 			// end of its own physical line: the rest of a continued line is
@@ -237,7 +225,7 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 		case r == ' ' || r == '\t' || r == '\n':
 			flush()
 		default:
-			write(r)
+			write(r, false)
 		}
 	}
 	if quote != 0 || escaped {

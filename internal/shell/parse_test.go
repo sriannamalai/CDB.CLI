@@ -62,9 +62,9 @@ func TestParse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse(%q) returned error: %v", tc.input, err)
 			}
-			// Only Argv and Expr are compared: Literal is the parser's own
-			// record of which words were single-quoted and has a case of its
-			// own below.
+			// Only Argv and Expr are compared: LiteralDollar is the
+			// parser's own record of which "$" runes are literal and has a
+			// case of its own below.
 			if len(got.Stages) != len(tc.want) {
 				t.Fatalf("Parse(%q).Stages = %#v, want %#v", tc.input, got.Stages, tc.want)
 			}
@@ -84,7 +84,7 @@ func TestParseWithoutAClassifierMakesEveryLaterStageJQ(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Stage{{Argv: []string{"ls"}, Literal: []bool{false}}, {Expr: "cat"}}
+	want := []Stage{{Argv: []string{"ls"}}, {Expr: "cat"}}
 	if !reflect.DeepEqual(got.Stages, want) {
 		t.Errorf("Stages = %#v, want %#v", got.Stages, want)
 	}
@@ -206,14 +206,16 @@ func TestNeedsMore(t *testing.T) {
 	}
 }
 
-func TestParseRecordsSingleQuotedWords(t *testing.T) {
-	line, err := Parse(`find '{"a":1}' "b" c`, nil)
+func TestParseRecordsEveryLiteralDollar(t *testing.T) {
+	line, err := Parse(`find '$a' "$b" \$c $d`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []bool{false, true, false, false}
-	if !reflect.DeepEqual(line.Stages[0].Literal, want) {
-		t.Errorf("Literal = %v, want %v", line.Stages[0].Literal, want)
+	// Word 1 is single-quoted, word 2 opens with a quote that is not part of
+	// the word, word 3 is escaped and word 4 is an ordinary reference.
+	want := [][]int{nil, {0}, nil, {0}, nil}
+	if !reflect.DeepEqual(line.Stages[0].LiteralDollar, want) {
+		t.Errorf("LiteralDollar = %v, want %v", line.Stages[0].LiteralDollar, want)
 	}
 }
 
