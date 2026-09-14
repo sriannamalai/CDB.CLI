@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-14
+
+### Added
+
+- **Proxy authentication.** `connect --auth proxy` authenticates to a CouchDB
+  configured with `proxy_authentication_handler`, with `cdb` acting as the
+  trusted proxy: it sends the user name, the roles from the new `--roles` flag
+  and profile key, and an `X-Auth-CouchDB-Token` computed as an HMAC-SHA256 of
+  the user name keyed by the server's shared secret, which is kept in the OS
+  keychain like any password. Because a wrong secret yields an anonymous
+  session rather than an error, `connect` verifies `GET /_session` and refuses
+  anything that is not a `proxy` session for the user asked for. Replication
+  jobs carry the same three headers, so they work on CouchDB 3.0 as well as
+  3.5.
+- **IBM Cloudant with an IAM API key.** `connect --auth iam`, or
+  `CDB_IAM_API_KEY`, exchanges the key for a bearer token and refreshes it
+  before it expires, so a long-running command outlives the one-hour token
+  lifetime. `CDB_IAM_URL` and the profile's `iam_url` override the token
+  endpoint. The key never leaves the keychain, and no token reaches the config
+  file, an error message, or the shell history.
+- **`search`.** A full-text query against a Clouseau (`_search`) or Nouveau
+  (`_nouveau`) index, with `--limit`, `--bookmark`, `--sort`, `--include-docs`,
+  `--counts`, `--ranges` and a repeatable `--drilldown`. Both backends'
+  answers are normalised into one result, paging is by bookmark the way `find`
+  pages, `ls` on a design document lists search indexes beside views with
+  their backend, `info` on an index path reports its statistics, and Tab
+  completes the `_search`/`_nouveau` segments and the index names. A server
+  with neither backend running says which one is missing instead of repeating
+  its own wording.
+
+### Changed
+
+- CI runs the proxy tests on both CouchDB 3.0 and 3.5, and the search tests on
+  a 3.5 leg wired to a Nouveau service container.
+- The path refusal for a third separator under a design document, and for a
+  member that is not `_view`, now covers `_search` and `_nouveau` as well:
+  both read *"expected _view, _search or _nouveau after a design document
+  name"* instead of naming `_view` alone.
+- `ls --json` rows for a design document's members carry a new `backend`
+  field (empty for a view, `clouseau` or `nouveau` for a search index); the
+  table gains a matching column.
+
 ## [1.2.1] - 2026-09-14
 
 ### Fixed
@@ -153,7 +195,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `info /` may show a `replication url` row, and `resolve`'s chooser shows
   diffs rather than body previews.
 
-[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/sriannamalai/CDB.CLI/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/sriannamalai/CDB.CLI/compare/v1.1.0...v1.1.1

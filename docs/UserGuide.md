@@ -117,6 +117,49 @@ otherwise can only be typed at a terminal.
 | `config.toml` | `$XDG_CONFIG_HOME/cdb/`, else `~/.config/cdb/` | `%APPDATA%\cdb\` |
 | shell history | `$XDG_STATE_HOME/cdb/`, else `~/.local/state/cdb/` | `%LOCALAPPDATA%\cdb\` |
 
+**Proxy authentication.** `connect --auth proxy` is for a CouchDB that has
+been put behind a trusted front end and configured with
+`proxy_authentication_handler`, with `cdb` itself standing in as that front
+end. It asks for the user name, an optional comma-separated list of roles
+(blank means a real user with none, not "unknown"), and a shared secret; the
+secret is kept in the OS keychain exactly like a password, never in
+`config.toml`, and `--roles` on the command line or `roles` in the profile
+sets the roles outside the prompt. On every request `cdb` sends the user
+name, the roles, and an `X-Auth-CouchDB-Token` header it computes itself, an
+HMAC of the user name keyed by the shared secret. CouchDB 3.3.2 and later
+verify that HMAC as SHA-256; CouchDB 3.0 through 3.3.1 expect SHA-1, and
+`connect` probes the server once to find out which, then pins the answer in
+the profile's `proxy_hash` so later commands do not have to probe again. The
+secret itself lives under `[chttpd_auth] secret` on 3.3.2 and later and under
+`[couch_httpd_auth] secret` on 3.0 through 3.3.1; either way, the handler
+that reads it is named in `[chttpd] authentication_handlers`, and CouchDB
+only reads that list at start-up, so enabling it needs a restart. A secret
+that disagrees with the server's does not come back as an error: the server
+just treats the request as anonymous, so `connect` checks `GET /_session`
+itself and refuses to save or use a profile whose session is not a `proxy`
+session for the user it asked for. Replication jobs started under a proxy
+profile carry the same three headers, so a job started against a CouchDB 3.0
+server works the same way it would against 3.5.
+
+**IBM Cloudant with an IAM API key.** `connect --auth iam`, or the
+environment variable `CDB_IAM_API_KEY`, authenticates to Cloudant with an IBM
+Cloud IAM API key instead of a CouchDB user name and password. The key is
+asked for once and kept in the keychain like a password; `cdb` exchanges it
+for a bearer token before the first request and refreshes it in the
+background well before the token's one-hour lifetime runs out, so a
+long-running command or an open shell session does not fail partway through.
+`CDB_IAM_URL`, or `iam_url` in the profile, points the exchange at a token
+endpoint other than IBM's public one; the exchange itself is subject to the
+same `ca_file` and `insecure_tls` profile settings as every other request, so
+it also works behind a TLS-inspecting proxy. Neither the API key nor the
+bearer token it becomes is ever written to `config.toml`, logged, or printed
+in an error message, verbose or not. Cloudant accepts the API key natively
+when `cdb` writes it into a replication document's own `auth.iam.api_key`, so
+a continuous job keeps working without `cdb` having to refresh anything on
+its behalf; `replicate` still only writes the job document, and does not
+create the `_replicator` database itself, so one must already exist on the
+Cloudant instance before the first job is started there.
+
 ## The virtual filesystem
 
 Every path names something on the connected server:
@@ -296,6 +339,41 @@ for the map rows. Paging is by key:
 
 ```
 more rows: query /movies/_design/app/_view/by_year --startkey "2016"
+```
+
+`search` runs a full-text query against a Clouseau or Nouveau index. The path
+names the backend as its second-to-last segment, `_search` for Clouseau or
+`_nouveau` for Nouveau, with the index name last:
+
+```
+$ cdb search /movies/_design/app/_search/by_title 'title:arrival'
+ ID | SCORE | FIELDS
+----+-------+---------------------------
+ m1 | 1.25  | {"title":"Arrival"}
+
+$ cdb search /movies/_design/app/_nouveau/by_body 'alien AND linguist' --include-docs
+```
+
+A partitioned database takes the partition as a third path segment ahead of
+`_design`, the same way `query` does. The query itself is Lucene syntax, sent
+to the server exactly as typed; `--sort` and `--ranges` are passed through
+verbatim too, because their grammar belongs to whichever backend answers.
+Paging is by bookmark, the same shape as `find`'s:
+
+```
+$ cdb search /movies/_design/app/_search/by_title 'title:a*' --limit 10
+more results: search /movies/_design/app/_search/by_title "title:a*" --bookmark "g1AAAAF9eJ…"
+```
+
+`--counts field` (repeatable) returns facet counts for a field, `--ranges`
+takes a JSON object of named ranges, and `--drilldown field:value`
+(repeatable) restricts to a facet value; all three are printed as a hint line
+alongside the rows. `info` on an index path — the same command used for a
+database or a view — reports the index's own statistics instead of running a
+query:
+
+```
+$ cdb info /movies/_design/app/_search/by_title
 ```
 
 ## Watching changes
@@ -680,6 +758,33 @@ later; this server is 3.0.1." — the JWT handler does not exist before 3.1, so
 no token can work there; switch that profile to `session` auth. On 3.1 or
 later, the token has likely expired or was signed with a key the server does
 not have configured.
+
+**"The server did not accept the proxy credentials for … . Check the shared
+secret and that proxy authentication is enabled on the server."** Either the
+secret disagrees with the server's `[chttpd_auth] secret`, or
+`proxy_authentication_handler` is not in `[chttpd] authentication_handlers`.
+`cdb` cannot tell the two apart: a proxy token CouchDB will not accept does not
+produce an error, it produces an anonymous session, which is why `connect`
+checks `GET /_session` rather than trusting the status code. Check the handler
+chain with `curl .../_node/_local/_config/chttpd/authentication_handlers`, and
+remember it is read at start-up only — a change needs a restart.
+
+**"IBM IAM did not issue a token for the API key. Check the key."** Nothing
+reached Cloudant at all: IBM refused the key. Re-run with `--verbose` to see
+IBM's own message, which usually says whether the key is unknown, disabled, or
+belongs to another account.
+
+**"The server rejected the IAM token at … ."** A token was issued and Cloudant
+refused it twice, once before and once after a refresh, so a stale token is not
+the problem. The service id the key belongs to has no access to that instance,
+or the URL names a different instance.
+
+**"This server has no search service running …"** and **"Nouveau is not enabled
+on this server …"** Neither search backend runs inside CouchDB: Clouseau and
+Nouveau are separate services an operator deploys and wires up, and the stock
+`couchdb` image enables neither. `_search` needs Clouseau; `_nouveau` needs the
+Nouveau service and `[nouveau] enable = true` with `[nouveau] url` pointing at
+it. `ls` on the design document shows which backend each index belongs to.
 
 **"Could not reach …. Is CouchDB running?"** Nothing answered on that host and
 port. Check the port in `cdb profiles list` against the one the server is
