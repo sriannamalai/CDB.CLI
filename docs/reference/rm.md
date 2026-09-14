@@ -7,18 +7,27 @@ Delete a document or an attachment
 ## Synopsis
 
 ```
-cdb rm <path> [flags]
+cdb rm [<path>] [flags]
 ```
 
 ## Description
 
 Delete a document or an attachment.
 
+In a later stage of a shell pipeline, rm deletes every document the stage above
+named, in batches of 100, after one confirmation for the whole pipeline. A
+document that is not there is a row with the status "not_found", not a failure.
+The path may then be left out, and the ids are deleted from the database the
+current directory is in.
+
 Destructive: asks for confirmation unless `--yes` is given.
+
+Reads a pipeline: references. In a later stage of a shell pipeline this
+command consumes the previous stage's values.
 
 ## Arguments
 
-Takes exactly 1 argument.
+Takes at most 1 argument.
 
 ## Flags
 

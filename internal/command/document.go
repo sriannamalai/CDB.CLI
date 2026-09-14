@@ -197,16 +197,28 @@ Deleted /movies/tt0211915-copy. The tombstone revision is 2-42584260d2245a1e54d9
 
 $ cdb rm /movies/tt0211915/poster.txt --yes
 Deleted poster.txt. tt0211915 is now at revision 3-8a9d317e2f0198d879b64162545127b8.`,
-		Usage:       "<path>",
-		MinArgs:     1,
+		Usage:       "[<path>]",
+		MinArgs:     0,
 		MaxArgs:     1,
 		NeedsClient: true,
 		Destructive: true,
 		Complete:    completePath,
+		Pipe:        PipeReferences,
 		Flags: func(fs *pflag.FlagSet) {
 			fs.String("rev", "", "revision to delete")
 		},
+		Details: `In a later stage of a shell pipeline, rm deletes every document the stage above
+named, in batches of 100, after one confirmation for the whole pipeline. A
+document that is not there is a row with the status "not_found", not a failure.
+The path may then be left out, and the ids are deleted from the database the
+current directory is in.`,
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+			if inv.Pipe != nil {
+				return rmPipeline(ctx, s, inv)
+			}
+			if inv.Arg(0) == "" {
+				return nil, Usagef("rm", "expected at least 1 argument(s), got 0\nusage: rm [<path>]")
+			}
 			t, err := s.Resolve(inv.Arg(0))
 			if err != nil {
 				return nil, err

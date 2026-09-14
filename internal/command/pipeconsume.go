@@ -199,3 +199,196 @@ func putPipeline(ctx context.Context, s *session.Session, inv Invocation) (Resul
 		},
 	}, nil
 }
+
+// ref is one reference read off a pipeline, resolved against the stage's own
+// database. Rev is set only when the reference carried one.
+type ref struct {
+	DB  string
+	ID  string
+	Rev string
+}
+
+// referenceRev reads a revision out of a piped value, for the two shapes that
+// carry one: a document's own "_rev", and the "value":{"rev":…} of an _all_docs
+// or view row. It returns "" when the value names none, and the consumer looks
+// the current revision up.
+func referenceRev(v json.RawMessage) string {
+	var obj struct {
+		Rev   string `json:"_rev"`
+		Value struct {
+			Rev string `json:"rev"`
+		} `json:"value"`
+	}
+	if err := json.Unmarshal(v, &obj); err != nil {
+		return ""
+	}
+	if obj.Rev != "" {
+		return obj.Rev
+	}
+	return obj.Value.Rev
+}
+
+// nextRefs reads up to pipeBatch references off the pipe, each defaulting to
+// db unless it named its own database with an absolute "/db/id" path.
+func nextRefs(ctx context.Context, p *Pipe, seen *int, db string) ([]ref, bool, error) {
+	var refs []ref
+	_, more, err := nextBatch(ctx, p, seen, func(n int, v json.RawMessage) (json.RawMessage, error) {
+		refDB, id, rerr := ParseReference(v)
+		if rerr != nil {
+			return nil, Errorf(nil, "value %d is not a document reference", n)
+		}
+		if refDB == "" {
+			refDB = db
+		}
+		refs = append(refs, ref{DB: refDB, ID: id, Rev: referenceRev(v)})
+		return v, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return refs, more, nil
+}
+
+// byDatabase groups a batch of references, keeping the databases in the order
+// they first appeared so that the rows come back in pipeline order as far as
+// one batch can preserve it.
+func byDatabase(refs []ref) ([]string, map[string][]ref) {
+	var order []string
+	groups := map[string][]ref{}
+	for _, r := range refs {
+		if _, seen := groups[r.DB]; !seen {
+			order = append(order, r.DB)
+		}
+		groups[r.DB] = append(groups[r.DB], r)
+	}
+	return order, groups
+}
+
+// fillRevisions looks up the current revision of every reference in one
+// database that did not carry one. A reference the database does not hold is
+// left with an empty Rev, which rmBatch reports as "not_found".
+func fillRevisions(ctx context.Context, s *session.Session, db string, refs []ref) ([]ref, error) {
+	var keys []string
+	for _, r := range refs {
+		if r.Rev == "" {
+			keys = append(keys, r.ID)
+		}
+	}
+	if len(keys) == 0 {
+		return refs, nil
+	}
+	rows, err := s.Client.AllDocsByKeys(ctx, db, keys, false)
+	if err != nil {
+		return nil, err
+	}
+	revs := make(map[string]string, len(rows))
+	for _, row := range rows {
+		if row.Error == "" {
+			revs[row.ID] = row.Rev
+		}
+	}
+	out := make([]ref, len(refs))
+	copy(out, refs)
+	for i := range out {
+		if out[i].Rev == "" {
+			out[i].Rev = revs[out[i].ID]
+		}
+	}
+	return out, nil
+}
+
+// rmBatch deletes one database's worth of references and returns one result
+// per reference, in the order they were given. A reference with no revision is
+// one the database does not hold, and is reported rather than sent.
+func rmBatch(ctx context.Context, s *session.Session, db string, refs []ref) ([]couchBulkResult, error) {
+	refs, err := fillRevisions(ctx, s, db, refs)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		docs []json.RawMessage
+		out  []couchBulkResult
+		at   = map[string]int{}
+	)
+	for _, r := range refs {
+		if r.Rev == "" {
+			out = append(out, couchBulkResult{ID: r.ID, Status: "not_found"})
+			continue
+		}
+		at[r.ID] = len(out)
+		out = append(out, couchBulkResult{ID: r.ID, Rev: r.Rev, Status: "ok"})
+		docs = append(docs, jsonDeleted(r.ID, r.Rev))
+	}
+	if len(docs) == 0 {
+		return out, nil
+	}
+	written, err := s.Client.BulkWrite(ctx, db, docs)
+	if err != nil {
+		return nil, err
+	}
+	for _, w := range written {
+		if i, ok := at[w.ID]; ok {
+			out[i] = w
+		}
+	}
+	return out, nil
+}
+
+// jsonDeleted is the tombstone _bulk_docs wants for a deletion.
+func jsonDeleted(id, rev string) json.RawMessage {
+	b, err := json.Marshal(map[string]any{"_id": id, "_rev": rev, "_deleted": true})
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return b
+}
+
+// rmPipeline deletes every document a pipeline names. It confirms once, before
+// it reads anything, so a script needs --yes exactly once too.
+func rmPipeline(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+	db, err := pipeDatabase(s, "rm", inv.Arg(0))
+	if err != nil {
+		return nil, err
+	}
+	if err := Confirm(ctx, s, fmt.Sprintf("Delete the piped documents from %s?", db)); err != nil {
+		return nil, err
+	}
+	var (
+		seen    int
+		pending []couchBulkResult
+		done    bool
+	)
+	return Stream{
+		Live:    true,
+		Columns: []Column{{Title: "id"}, {Title: "rev"}, {Title: "status"}},
+		Next: func() (Row, bool, error) {
+			for len(pending) == 0 {
+				if done {
+					return Row{}, false, nil
+				}
+				refs, more, err := nextRefs(ctx, inv.Pipe, &seen, db)
+				if err != nil {
+					return Row{}, false, err
+				}
+				if !more {
+					done = true
+					return Row{}, false, nil
+				}
+				order, groups := byDatabase(refs)
+				for _, name := range order {
+					res, err := rmBatch(ctx, s, name, groups[name])
+					if err != nil {
+						return Row{}, false, err
+					}
+					pending = append(pending, res...)
+				}
+			}
+			r := pending[0]
+			pending = pending[1:]
+			return Row{
+				Cells: []string{r.ID, r.Rev, r.Status},
+				JSON:  jsonObject("id", r.ID, "rev", r.Rev, "status", r.Status),
+			}, true, nil
+		},
+	}, nil
+}

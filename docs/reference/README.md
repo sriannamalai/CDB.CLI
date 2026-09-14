@@ -39,7 +39,7 @@ before it acts, unless `--yes` is given.
 | [`replications`](replications.md) |  | List, inspect and cancel replications |  |
 | [`resolve`](resolve.md) |  | Keep one revision of a conflicted document and delete the rest | destructive |
 | [`restore`](restore.md) |  | Load a dump file into a database |  |
-| [`rm`](rm.md) |  | Delete a document or an attachment | destructive |
+| [`rm`](rm.md) |  | Delete a document or an attachment | destructive, reads a pipeline |
 | [`rmdir`](rmdir.md) |  | Delete a database and everything in it | destructive |
 | [`search`](search.md) |  | Run a full-text query against a search index |  |
 | [`security`](security.md) |  | Show and change who may read and write a database |  |
