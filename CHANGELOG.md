@@ -15,7 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error. Both flags were read only by the lazy auto-connect the other commands
   take, and `connect` opens its own connection. They are resolved alongside
   every other target now, so a flag that disagrees with `connect`'s own
-  argument is reported rather than quietly dropped.
+  argument is reported rather than quietly dropped, and a first run on a
+  terminal connects to the target the flag names instead of walking the
+  operator through a question they have already answered.
+- `--url` wins over `--profile` when both are given, as `--url`'s own
+  description — "overriding the profile and `CDB_URL`" — has always said.
+  `--profile` quietly took precedence before.
 - The Homebrew cask no longer trips Homebrew 6's deprecation warning on
   every command. Its post-install step, which clears the macOS quarantine
   attribute from the downloaded binary, is now written as the declarative

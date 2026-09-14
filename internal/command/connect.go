@@ -154,19 +154,27 @@ func Open(ctx context.Context, s *session.Session, nameOrURL string) error {
 // the only place the two can disagree. docs/reference/connect.md says what
 // --url overrides — the profile and CDB_URL — and says nothing about the
 // argument, so a disagreement is reported rather than resolved by an invented
-// precedence. --profile still wins over --url, which is what the front-end did
-// before.
+// precedence.
+//
+// Between the two flags, --url wins: its help text has always called it
+// "server URL, overriding the profile and CDB_URL", and a profile named by
+// --profile is still a profile. The front-end used to prefer --profile without
+// saying so anywhere, which is the same silent drop #36 is about.
 func resolveTarget(s *session.Session, nameOrURL string) (string, error) {
-	flag, which := s.Prefs.Profile, "--profile"
+	flag, which := s.Prefs.URL, "--url"
 	if flag == "" {
-		flag, which = s.Prefs.URL, "--url"
+		flag, which = s.Prefs.Profile, "--profile"
 	}
 	if flag == "" || flag == nameOrURL {
 		return nameOrURL, nil
 	}
 	if nameOrURL != "" {
-		// Neither value is echoed: a URL argument may carry a password.
-		return "", Usagef("connect", "%s and the argument name different servers; pass one of them", which)
+		// Both values are named, because either of them may be a profile name
+		// rather than a URL and the operator cannot otherwise tell which of
+		// the two the message means. Both go through RedactURL first: either
+		// may carry userinfo.
+		return "", Usagef("connect", "%s names %q but the argument names %q; pass one of them",
+			which, couch.RedactURL(flag), couch.RedactURL(nameOrURL))
 	}
 	return flag, nil
 }
@@ -504,7 +512,13 @@ Connected to CouchDB 3.5.2 at localhost:5984 as admin.`,
 			var conn connection
 			var err error
 			guided := false
-			if arg == "" && !hasAnyProfile() && s.Prefs.Interactive {
+			// --url and --profile are a target, so they belong in this guard
+			// as much as the argument does: a first run is exactly when an
+			// operator passes one, and walking them through a question they
+			// have already answered on the command line drops the flag the
+			// same way #36 did. openProfile handles both, including asking a
+			// bare --url for credentials.
+			if arg == "" && s.Prefs.URL == "" && s.Prefs.Profile == "" && !hasAnyProfile() && s.Prefs.Interactive {
 				// Spec 6.1: ask, verify, and only then offer to save. Nothing
 				// reaches config.toml or the keyring until the server has
 				// accepted the answers, so a mistyped password leaves no

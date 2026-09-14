@@ -131,11 +131,16 @@ func TestExecuteAutoConnectsForACommandThatNeedsAClient(t *testing.T) {
 	}
 }
 
-func TestExecuteAutoConnectPrefersTheProfileFlagOverTheURLFlag(t *testing.T) {
+// --url wins over --profile, and this test used to assert the opposite. The
+// flags' own descriptions settle it: --url is "server URL, overriding the
+// profile and CDB_URL", and a profile named by --profile is still a profile.
+// The old order was never written down anywhere an operator could read it, and
+// a flag that loses silently is the bug #36 is about.
+func TestExecuteAutoConnectPrefersTheURLFlagOverTheProfileFlag(t *testing.T) {
 	wanted := couchtest.New(t)
 	ignored := couchtest.New(t)
 	cfg := config.Defaults()
-	cfg.SetProfile(config.Profile{Name: "local", URL: wanted.URL(), Auth: "none"})
+	cfg.SetProfile(config.Profile{Name: "local", URL: ignored.URL(), Auth: "none"})
 	withCommandDeps(t, cfg)
 	spy := &connectionSpy{}
 	reg := testRegistry()
@@ -143,18 +148,18 @@ func TestExecuteAutoConnectPrefersTheProfileFlagOverTheURLFlag(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	s := session.New(strings.NewReader(""), &out, &errOut)
-	code := Execute(context.Background(), reg, s, BuildInfo{}, []string{"--profile", "local", "--url", ignored.URL(), "needs-conn"})
+	code := Execute(context.Background(), reg, s, BuildInfo{}, []string{"--profile", "local", "--url", wanted.URL(), "--anonymous", "needs-conn"})
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, ExitOK, errOut.String())
 	}
 	if spy.url != wanted.URL() {
-		t.Errorf("client URL = %q, want the profile's %q rather than --url %q", spy.url, wanted.URL(), ignored.URL())
+		t.Errorf("client URL = %q, want --url's %q rather than the profile's %q", spy.url, wanted.URL(), ignored.URL())
 	}
-	if spy.profile != "local" {
-		t.Errorf("session profile = %q, want local", spy.profile)
+	if spy.profile != "" {
+		t.Errorf("session profile = %q, want no profile: --url names a server, not a profile", spy.profile)
 	}
 	if len(ignored.Requests()) != 0 {
-		t.Errorf("the --url server received %d requests, want none", len(ignored.Requests()))
+		t.Errorf("the --profile server received %d requests, want none", len(ignored.Requests()))
 	}
 }
 

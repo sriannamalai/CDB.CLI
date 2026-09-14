@@ -174,3 +174,85 @@ func isUsage(err error) bool {
 	var ue *UsageError
 	return errors.As(err, &ue)
 }
+
+// The flags' own help text settles which of the two wins: --url is "server
+// URL, overriding the profile and CDB_URL", and a profile named by --profile
+// is still a profile. The front-end preferred --profile and said so nowhere,
+// which is the silent drop #36 is about.
+func TestURLFlagBeatsProfileFlag(t *testing.T) {
+	wanted, other := couchtest.New(t), couchtest.New(t)
+	cfg := config.Defaults()
+	cfg.SetProfile(config.Profile{Name: "far", URL: other.URL(), Auth: "none"})
+	withDeps(t, cfg, nil)
+	s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	s.Prefs.Profile, s.Prefs.URL = "far", wanted.URL()
+
+	if _, err := invoke(t, Connect(), s, "--anonymous"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if got := s.Client.URL(); got != wanted.URL() {
+		t.Errorf("connected to %s, want the --url server (%s)", got, wanted.URL())
+	}
+	if other.Last("GET", "/") != nil {
+		t.Error("the --profile server was contacted although --url named another")
+	}
+}
+
+// A first run on a terminal takes the guided walk-through, which used to run
+// before the target was resolved at all: "connect --url X" asked the operator
+// for a server URL they had just typed, and "--profile nosuch" asked the same
+// question instead of saying the profile does not exist. A flag is an answer
+// to that question.
+func TestFirstRunWalkthroughYieldsToATargetFlag(t *testing.T) {
+	t.Run("--url connects without asking anything", func(t *testing.T) {
+		srv := couchtest.New(t)
+		withDeps(t, config.Defaults(), nil)
+		var out, errOut bytes.Buffer
+		// An empty stdin: any prompt fails at EOF rather than hanging, so a
+		// walk-through that still runs cannot pass this test by accident.
+		s := session.New(strings.NewReader(""), &out, &errOut)
+		s.Prefs.Interactive = true
+		s.Prefs.URL = srv.URL()
+
+		if _, err := invoke(t, Connect(), s, "--anonymous"); err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		if got := s.Client.URL(); got != srv.URL() {
+			t.Errorf("connected to %s, want the --url server (%s)", got, srv.URL())
+		}
+		if out.Len() != 0 || errOut.Len() != 0 {
+			t.Errorf("connect asked something: %q %q", out.String(), errOut.String())
+		}
+	})
+
+	t.Run("--profile names an unknown profile", func(t *testing.T) {
+		withDeps(t, config.Defaults(), nil)
+		s := session.New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+		s.Prefs.Interactive = true
+		s.Prefs.Profile = "nosuch"
+
+		_, err := invoke(t, Connect(), s)
+		if !isUsage(err) {
+			t.Fatalf("err = %v, want a usage error", err)
+		}
+		if !strings.Contains(err.Error(), "nosuch") {
+			t.Errorf("err = %v, want it to name the profile", err)
+		}
+	})
+
+	// With no flag and no profile, the walk-through is still what a first run
+	// gets: this guard must not have switched it off.
+	t.Run("with no target the walk-through still runs", func(t *testing.T) {
+		withDeps(t, config.Defaults(), nil)
+		var out bytes.Buffer
+		s := session.New(strings.NewReader(""), &out, &bytes.Buffer{})
+		s.Prefs.Interactive = true
+
+		if _, err := invoke(t, Connect(), s); err == nil {
+			t.Fatal("connect succeeded with no target and an empty stdin")
+		}
+		if !strings.Contains(out.String(), "Server URL") {
+			t.Errorf("the walk-through did not ask for a URL: %q", out.String())
+		}
+	})
+}
