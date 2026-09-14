@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/sriannamalai/CDB.CLI/internal/session"
@@ -67,6 +68,18 @@ func (i Invocation) Int(name string) int {
 		return 0
 	}
 	v, err := i.Flags.GetInt(name)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// Duration reads a duration flag, defaulting to 0 when the flag is undeclared.
+func (i Invocation) Duration(name string) time.Duration {
+	if i.Flags == nil {
+		return 0
+	}
+	v, err := i.Flags.GetDuration(name)
 	if err != nil {
 		return 0
 	}

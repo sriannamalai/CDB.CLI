@@ -27,6 +27,7 @@ func Default() *Registry {
 	r.Register(Resolve())
 	r.Register(Replicate())
 	r.Register(Replications())
+	r.Register(Tasks())
 	r.Register(Backup())
 	r.Register(Restore())
 	r.Register(History())
