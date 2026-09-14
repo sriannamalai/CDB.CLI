@@ -412,3 +412,21 @@ func (c *Client) SetSecurity(ctx context.Context, db string, sec Security) error
 		"write", fmt.Sprintf("security of %q", db))
 	return AsAdmin(err, fmt.Sprintf("changing the security of %q", db))
 }
+
+// SessionCredentials are the user name and password this client logs in with,
+// and ok reports whether it has any. Only a session login has a password at
+// all: a JWT client has a token, a proxy client has a shared secret, an IAM
+// client has an API key, and none of the three is a CouchDB password.
+//
+// It exists for one caller: "cluster setup --single-node" has to put a user
+// name and password in the request body, because that is what the endpoint
+// takes, and asking the operator to retype the password they just connected
+// with would be theatre. The value is passed straight into a request body and
+// must not be printed, logged, stored, or put in an error message — the same
+// rule that governs Config.Secret, which is where it comes from.
+func (c *Client) SessionCredentials() (string, string, bool) {
+	if c.cfg.Auth != AuthSession || c.cfg.Username == "" || c.cfg.Secret == "" {
+		return "", "", false
+	}
+	return c.cfg.Username, c.cfg.Secret, true
+}

@@ -456,3 +456,28 @@ func TestSecurityReadsAndWritesTheWholeDocument(t *testing.T) {
 		t.Error("an empty list was written as null; CouchDB wants an array")
 	}
 }
+
+func TestSessionCredentialsOnlyAnswerForASessionLogin(t *testing.T) {
+	srv := couchtest.New(t)
+	sessionClient, err := New(Config{URL: srv.URL(), Auth: AuthSession, Username: "admin", Secret: "password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, pass, ok := sessionClient.SessionCredentials()
+	if !ok || user != "admin" || pass != "password" {
+		t.Errorf("session credentials = %q, %t (the password is deliberately not printed)", user, ok)
+	}
+	for _, cfg := range []Config{
+		{URL: srv.URL(), Auth: AuthNone},
+		{URL: srv.URL(), Auth: AuthJWT, Secret: "token"},
+		{URL: srv.URL(), Auth: AuthProxy, Username: "ops", Secret: "proxysecret"},
+	} {
+		c, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, ok := c.SessionCredentials(); ok {
+			t.Errorf("%s handed out credentials it does not have", cfg.Auth)
+		}
+	}
+}
