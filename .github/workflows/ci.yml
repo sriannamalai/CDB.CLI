@@ -28,6 +28,22 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # Nouveau is a separate JVM service; the couchdb:*-nouveau image is only
+      # that service, not a CouchDB. The CouchDB service above is pointed at it
+      # by the configuration step below. Started on every leg — a container
+      # nothing talks to costs a pull — and only wired up on 3.5, because
+      # _nouveau does not exist before CouchDB 3.4.
+      #
+      # No health-cmd here: couchdb:3.5-nouveau's admin port (5988) has no
+      # /ready endpoint (confirmed locally — GET /ready answers 404, not the
+      # readiness probe its own admin servlet otherwise implies). The
+      # configuration step's own curl retry loop against CouchDB's /_up is
+      # the readiness gate instead.
+      nouveau:
+        image: couchdb:${{ matrix.couchdb == '3.0' && '3.5' || matrix.couchdb }}-nouveau
+        ports:
+          - 5987:5987
+          - 5988:5988
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -52,29 +68,51 @@ jobs:
           curl -fsS -X PUT http://admin:password@localhost:5984/_users
           curl -fsS -X PUT http://admin:password@localhost:5984/_replicator
 
-      - name: Enable the JWT handler
-        # CouchDB gained jwt_authentication_handler in 3.1; on 3.0 there is no
-        # handler to put in the chain, and the JWT test skips itself after
-        # reading the version from GET /.
-        if: matrix.couchdb != '3.0'
+      - name: Configure authentication handlers and Nouveau
         env:
           CDB_TEST_JWT_SECRET: ci-jwt-secret
+          CDB_TEST_PROXY_SECRET: ci-proxy-secret
         run: |
           set -euo pipefail
-          # The key is the base64 of the raw shared secret.
-          b64=$(printf %s "$CDB_TEST_JWT_SECRET" | base64 | tr -d '\n')
-          curl -fsS -X PUT -H 'Content-Type: application/json' \
-            "http://admin:password@localhost:5984/_node/_local/_config/jwt_keys/hmac:_default" \
-            -d "\"$b64\""
+          base=http://admin:password@localhost:5984
+          put() {
+            curl -fsS -X PUT -H 'Content-Type: application/json' \
+              "$base/_node/_local/_config/$1" -d "$2"
+          }
+
+          # Proxy authentication works on every 3.x, so both legs get it. The
+          # token is a keyed HMAC of the user name; proxy_use_secret makes the
+          # server check it, without which any client could claim any identity.
+          # Written to both config sections: 3.0 verifies via
+          # [couch_httpd_auth], 3.5 via [chttpd_auth].
+          put chttpd_auth/secret '"'"$CDB_TEST_PROXY_SECRET"'"'
+          put chttpd_auth/proxy_use_secret '"true"'
+          put couch_httpd_auth/secret '"'"$CDB_TEST_PROXY_SECRET"'"'
+          put couch_httpd_auth/proxy_use_secret '"true"'
+
+          # CouchDB gained jwt_authentication_handler in 3.1; on 3.0 there is
+          # no handler to put in the chain, and the JWT test skips itself after
+          # reading the version from GET /.
+          handlers='{chttpd_auth, proxy_authentication_handler}, {chttpd_auth, cookie_authentication_handler}, {chttpd_auth, default_authentication_handler}'
+          if [ "${{ matrix.couchdb }}" != "3.0" ]; then
+            b64=$(printf %s "$CDB_TEST_JWT_SECRET" | base64 | tr -d '\n')
+            put 'jwt_keys/hmac:_default' "\"$b64\""
+            handlers='{chttpd_auth, jwt_authentication_handler}, '"$handlers"
+            # Nouveau is a runtime setting, not a start-up one, but it is
+            # written here so the whole set-up is one step and one restart.
+            # The URL is the service container's network alias, not localhost:
+            # CouchDB dials Nouveau itself, from inside its own container.
+            put nouveau/enable '"true"'
+            put nouveau/url '"http://nouveau:5987"'
+          fi
           # authentication_handlers lives under [chttpd] — a value written to
           # [chttpd_auth] is stored and ignored. The cookie and default
           # handlers are kept so every existing session-auth test still passes.
-          curl -fsS -X PUT -H 'Content-Type: application/json' \
-            "http://admin:password@localhost:5984/_node/_local/_config/chttpd/authentication_handlers" \
-            -d '"{chttpd_auth, jwt_authentication_handler}, {chttpd_auth, cookie_authentication_handler}, {chttpd_auth, default_authentication_handler}"'
+          put chttpd/authentication_handlers "\"$handlers\""
+
           # Verified on CouchDB 3.5.2: [chttpd] authentication_handlers is read
           # at start-up and never re-read, so the node has to be restarted
-          # before the handler is in the chain. A restart is not a re-create:
+          # before the handlers are in the chain. A restart is not a re-create:
           # the container keeps its filesystem, so local.d/docker.ini and
           # /opt/couchdb/data survive it — the databases created by the step
           # before this one are still there afterwards — and it keeps its
@@ -87,11 +125,16 @@ jobs:
           # here but not in the services block.
           docker restart "${{ job.services.couchdb.id }}"
           for _ in $(seq 1 60); do
-            curl -fsS http://admin:password@localhost:5984/_up >/dev/null 2>&1 && break
+            curl -fsS $base/_up >/dev/null 2>&1 && break
             sleep 1
           done
-          # Fail loudly rather than letting the test skip or assert nothing.
-          curl -fsS http://admin:password@localhost:5984/_session | grep -q '"jwt"'
+
+          # Fail loudly rather than letting a test skip or assert nothing.
+          curl -fsS $base/_session | grep -q '"proxy"'
+          if [ "${{ matrix.couchdb }}" != "3.0" ]; then
+            curl -fsS $base/_session | grep -q '"jwt"'
+            curl -fsS "$base/_node/_local/_config/nouveau/url" | grep -q 5987
+          fi
 
       - name: Unit and integration tests
         env:
@@ -102,6 +145,16 @@ jobs:
           # the version it reads — belt and braces, since a JWT test that
           # silently asserted nothing is what the gate exists to prevent.
           CDB_TEST_JWT_SECRET: ${{ matrix.couchdb == '3.0' && '' || 'ci-jwt-secret' }}
+          # Proxy authentication is configured on both legs, so the secret is
+          # set on both. The tests skip when it is empty.
+          CDB_TEST_PROXY_SECRET: ci-proxy-secret
+          # Nouveau is only wired up on the leg that has a CouchDB new enough
+          # to speak to it. Empty on 3.0, so the search tests skip there.
+          CDB_TEST_NOUVEAU: ${{ matrix.couchdb == '3.0' && '' || '1' }}
+          # The service container reaches itself at the same address; this is
+          # also what makes the tombstone/replication test's source and
+          # target the same node.
+          CDB_TEST_REPLICATION_URL: http://localhost:5984/
           CDB_KEYRING_BACKEND: file
         run: go test ./... -race -count=1
 
