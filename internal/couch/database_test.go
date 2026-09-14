@@ -330,3 +330,27 @@ func TestReplicationEndpointForProxyOmitsEmptyRoles(t *testing.T) {
 		t.Errorf("headers = %#v, want exactly the user name and the token", headers)
 	}
 }
+
+// Unlike every other kind, IAM writes CouchDB's per-endpoint "auth" object
+// rather than a header. That object is 3.2-and-later, which is fine here: the
+// only server that understands an "iam" auth object at all is Cloudant, and
+// Cloudant reports 3.5.2+cloudant. Handing the replicator the key rather than a
+// token is what lets a continuous job outlive the hour a bearer lasts.
+func TestReplicationEndpointForIAMEmitsTheAuthObject(t *testing.T) {
+	c, err := New(Config{URL: "https://x.cloudantnosqldb.appdomain.cloud", Auth: AuthIAM, Secret: "an-api-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	got := c.ReplicationEndpointFor("", "mydb")
+	want := map[string]any{
+		"url":  "https://x.cloudantnosqldb.appdomain.cloud/mydb",
+		"auth": map[string]any{"iam": map[string]any{"api_key": "an-api-key"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("endpoint =\n%#v\nwant\n%#v", got, want)
+	}
+	if _, ok := got["headers"]; ok {
+		t.Error("the IAM endpoint also carries headers; one credential is enough")
+	}
+}

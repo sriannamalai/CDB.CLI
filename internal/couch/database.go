@@ -355,6 +355,13 @@ func (c *Client) ReplicationEndpointFor(base, db string) map[string]any {
 		// document. CouchDB forwards a per-endpoint headers object verbatim,
 		// which is what makes this work on 3.0 as well as 3.5.
 		endpoint["headers"] = proxyHeaders(c.cfg.Username, strings.Join(c.cfg.Roles, ","), proxyToken(c.cfg.Secret, c.cfg.Username, c.ProxyHash()))
+	case AuthIAM:
+		// The raw API key, not a bearer: Cloudant's replicator exchanges it
+		// itself, so a continuous job keeps running after the hour a token
+		// lasts. This is the one endpoint form cdb writes that is an "auth"
+		// object rather than a header, and it is safe because the only server
+		// that understands it is Cloudant.
+		endpoint["auth"] = map[string]any{"iam": map[string]any{"api_key": c.cfg.Secret}}
 	default:
 		// AuthNone still authenticates when the raw URL carried userinfo
 		// (e.g. "cdb http://admin:pw@host"); c.base keeps that userinfo,

@@ -3,11 +3,14 @@ package command
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sriannamalai/CDB.CLI/internal/config"
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
@@ -98,5 +101,81 @@ func TestIntegrationIAMWrongKeyIsAnAuthFailure(t *testing.T) {
 	}
 	if ce.Name != couch.IAMExchangeFailed {
 		t.Errorf("name = %q, want %q", ce.Name, couch.IAMExchangeFailed)
+	}
+}
+
+// The §4.3 check: a same-account replication whose credential is the auth
+// object cdb wrote. It creates two databases, replicates one into the other,
+// reads the job back through "replications show" — which must print neither the
+// key nor a token — and deletes both databases.
+func TestIntegrationIAMReplicates(t *testing.T) {
+	url, key := cloudantTestEnv(t)
+	s := iamSession(t, key)
+	s.Prefs.Yes = true
+	if err := Open(context.Background(), s, url); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	ctx := context.Background()
+	stamp := strconv.FormatInt(time.Now().UnixNano(), 36)
+	src, dst := "cdbtest-iamsrc"+stamp, "cdbtest-iamdst"+stamp
+	for _, db := range []string{src, dst} {
+		if err := s.Client.CreateDatabase(ctx, db, false, 0); err != nil {
+			t.Fatalf("create %s: %v", db, err)
+		}
+		defer func(db string) { _ = s.Client.DestroyDatabase(context.Background(), db) }(db)
+	}
+	doc := filepath.Join(t.TempDir(), "one.json")
+	if err := os.WriteFile(doc, []byte(`{"hello":"iam"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invoke(t, Put(), s, "/"+src+"/one", doc); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	jobID := "cdbtest-iam" + stamp
+	if _, err := invoke(t, Replicate(), s, "/"+src, "/"+dst, "--id", jobID, "--yes"); err != nil {
+		t.Fatalf("replicate under IAM: %v", err)
+	}
+	// The document that is cancelled here carries the API key, so a cleanup
+	// that quietly failed would leave a credential behind in _replicator.
+	// The document that is cancelled here carries the API key, so a cleanup
+	// that quietly failed would leave a credential behind in _replicator. The
+	// scheduler writes its own state back into that document while the job
+	// runs, so a delete can lose a revision race; retrying is what makes the
+	// cleanup reliable rather than usually-fine.
+	defer func() {
+		var cerr error
+		for attempt := 0; attempt < 5; attempt++ {
+			if _, cerr = invoke(t, Replications(), s, "cancel", jobID, "--yes"); cerr == nil {
+				return
+			}
+			time.Sleep(time.Second)
+		}
+		t.Errorf("cancel left the replication document behind: %v", cerr)
+	}()
+
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		info, err := s.Client.DatabaseInfo(ctx, dst)
+		if err == nil && info.DocCount > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			// Read the job's own error back; it is what tells the auth form
+			// apart from an unrelated failure.
+			res, serr := invoke(t, Replications(), s, "show", jobID)
+			t.Fatalf("the document never arrived in %s (db err %v; job %v, %v)", dst, err, res, serr)
+		}
+		time.Sleep(time.Second)
+	}
+
+	res, err := invoke(t, Replications(), s, "show", jobID)
+	if err != nil {
+		t.Fatalf("replications show: %v", err)
+	}
+	rendered := fmt.Sprintf("%v", res)
+	for _, forbidden := range []string{key, "api_key", "Bearer"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("replications show leaked a credential")
+		}
 	}
 }

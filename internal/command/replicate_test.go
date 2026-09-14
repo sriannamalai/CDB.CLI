@@ -584,3 +584,49 @@ func TestDefaultRegistersTheReplicationCommands(t *testing.T) {
 		}
 	}
 }
+
+// The IAM form of the same guard. A Cloudant endpoint carries the API key in
+// an "auth": {"iam": {"api_key": …}} object rather than a header, and Cloudant
+// redacts it in _scheduler/docs — but "replications show" must not depend on
+// the server doing that, because the document cdb wrote does contain the key.
+func TestReplicationsShowRedactsAnIAMAuthObject(t *testing.T) {
+	const key = "an-api-key"
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_scheduler/docs/_replicator/job1", 200, `{
+		"database":"_replicator","doc_id":"job1","id":"abc","state":"completed",
+		"source":{"url":"https://x.cloudantnosqldb.appdomain.cloud/src","auth":{"iam":{"api_key":"`+key+`"}}},
+		"target":{"url":"https://x.cloudantnosqldb.appdomain.cloud/dst","auth":{"iam":{"api_key":"`+key+`"}}},
+		"node":"n1","error_count":0,"last_updated":"2026-09-14T00:00:00Z"}`)
+	srv.JSON("GET", "/_scheduler/jobs/abc", 404, `{"error":"not_found","reason":"missing"}`)
+
+	s := connected(t, srv)
+	res, err := invoke(t, Replications(), s, "show", "job1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, ok := res.(Rows)
+	if !ok {
+		t.Fatalf("got %T, want Rows", res)
+	}
+	for _, banned := range []string{key, "api_key", "\"auth\"", "\"iam\""} {
+		for _, item := range rows.Items {
+			for _, cell := range item.Cells {
+				if strings.Contains(cell, banned) {
+					t.Errorf("rendered cell %q contains %q", cell, banned)
+				}
+			}
+			if strings.Contains(string(item.JSON), banned) {
+				t.Errorf("row JSON %s contains %q", item.JSON, banned)
+			}
+		}
+	}
+	var target string
+	for _, item := range rows.Items {
+		if len(item.Cells) == 2 && item.Cells[0] == "target" {
+			target = item.Cells[1]
+		}
+	}
+	if target != "https://x.cloudantnosqldb.appdomain.cloud/dst" {
+		t.Errorf("target = %q, want the bare URL", target)
+	}
+}
