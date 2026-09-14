@@ -310,3 +310,34 @@ func TestEnableSingleNodePostsTheDocumentedBody(t *testing.T) {
 		t.Errorf("body has %d members, want %d: %v", len(body), len(want), body)
 	}
 }
+
+func TestCompactionEndpoints(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_compact", 202, `{"ok":true}`)
+	srv.JSON("POST", "/movies/_compact/by_year", 202, `{"ok":true}`)
+	srv.JSON("POST", "/movies/_view_cleanup", 202, `{"ok":true}`)
+	c := mustClient(t, srv)
+	ctx := context.Background()
+	if err := c.Compact(ctx, "movies"); err != nil {
+		t.Fatal(err)
+	}
+	if ct := srv.Last("POST", "/movies/_compact").Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q; CouchDB refuses _compact without it", ct)
+	}
+	if err := c.CompactView(ctx, "movies", "_design/by_year"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ViewCleanup(ctx, "movies"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompactForbiddenNamesTheDatabase(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_compact", 403, `{"error":"unauthorized","reason":"You are not a server admin."}`)
+	c := mustClient(t, srv)
+	e, ok := AsError(c.Compact(context.Background(), "movies"))
+	if !ok || e.Op != AdminOp || e.Target != `compacting "movies"` {
+		t.Fatalf("error = %#v", e)
+	}
+}

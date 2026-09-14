@@ -3,6 +3,7 @@ package couch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -313,4 +314,29 @@ func (c *Client) EnableSingleNode(ctx context.Context, req SingleNodeSetup) erro
 	}
 	err := c.DoJSON(ctx, "POST", "/_cluster_setup", body, nil, "write", "cluster setup of "+c.host)
 	return AsAdmin(err, "cluster setup")
+}
+
+// Compact starts a whole-database compaction. CouchDB answers 202 Accepted and
+// does the work in the background; _active_tasks reports the progress.
+func (c *Client) Compact(ctx context.Context, db string) error {
+	// The empty object is deliberate: DoJSON only sets Content-Type when there
+	// is a body, and CouchDB answers _compact without it with 415.
+	err := c.DoJSON(ctx, "POST", dbBase(db, "")+"/_compact", struct{}{}, nil, "write", fmt.Sprintf("database %q", db))
+	return AsAdmin(err, fmt.Sprintf("compacting %q", db))
+}
+
+// CompactView starts a compaction of one design document's view indexes. ddoc
+// may be given with or without the "_design/" prefix.
+func (c *Client) CompactView(ctx context.Context, db, ddoc string) error {
+	name := strings.TrimPrefix(ddoc, "_design/")
+	err := c.DoJSON(ctx, "POST", dbBase(db, "")+"/_compact/"+url.PathEscape(name), struct{}{}, nil,
+		"write", fmt.Sprintf("design document %q in %q", name, db))
+	return AsAdmin(err, fmt.Sprintf("compacting %q", db))
+}
+
+// ViewCleanup removes view index files left behind by design documents that
+// have changed or gone.
+func (c *Client) ViewCleanup(ctx context.Context, db string) error {
+	err := c.DoJSON(ctx, "POST", dbBase(db, "")+"/_view_cleanup", struct{}{}, nil, "write", fmt.Sprintf("database %q", db))
+	return AsAdmin(err, fmt.Sprintf("compacting %q", db))
 }
