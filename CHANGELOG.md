@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changed by someone else". The revision is re-read and the delete retried up
   to three times now, and a conflict that survives all three says the job is
   being updated faster than `cdb` can cancel it and to try again in a moment.
+- A server URL that carries a user name and no password logs in as that user.
+  `cdb --url http://alice@localhost:5984 ls /` read the name out of the URL,
+  wrote it down as the connection's user and then connected anonymously, so
+  every command failed with a message about credentials for a user `cdb` had
+  been told about. The password is now taken from `CDB_PASSWORD`, then the
+  profile's keyring entry, then a prompt for that user — the order every other
+  credential follows — and a run with no password anywhere and no terminal to
+  ask on still connects anonymously rather than sending an empty one.
 
 ## [1.3.0] - 2026-09-14
 

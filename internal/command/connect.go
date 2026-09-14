@@ -216,6 +216,11 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 	// own". Whether that matters is decided below, once the environment has
 	// had its say.
 	bare := false
+	// urlUserOnly records "a server URL was named that carries a user name and
+	// no password". The URL branch below learns it; the code after the keyring
+	// acts on it, the same way bare is learned in one place and acted on in
+	// another.
+	urlUserOnly := false
 
 	switch {
 	case strings.HasPrefix(nameOrURL, "http://"), strings.HasPrefix(nameOrURL, "https://"):
@@ -223,8 +228,23 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 		// auth header. Record the user name it carries so the connection
 		// reports who it is, instead of calling an authenticated session
 		// anonymous.
-		_, urlUser, urlSecret := splitURLCredentials(nameOrURL)
-		profile = config.Profile{Name: "", URL: nameOrURL, Auth: "none", Username: urlUser}
+		clean, urlUser, urlSecret := splitURLCredentials(nameOrURL)
+		urlUserOnly = urlUser != "" && urlSecret == ""
+		switch {
+		case urlUserOnly:
+			// A URL that names a user and no password is a request to log in
+			// as that user, not a request to connect anonymously and remember
+			// a name. The password comes from CDB_PASSWORD, then the keyring,
+			// then the prompt — the order every other credential follows. The
+			// userinfo is cut off the URL, because the credential now travels
+			// as a session login rather than as net/http's Basic header.
+			profile = config.Profile{Name: "", URL: clean, Auth: "session", Username: urlUser}
+		default:
+			// Both halves present: net/http turns the userinfo into a Basic
+			// header, which is how this has always worked. Neither half: an
+			// anonymous URL, and `bare` below decides whether to ask.
+			profile = config.Profile{Name: "", URL: nameOrURL, Auth: "none", Username: urlUser}
+		}
 		bare = urlUser == "" && urlSecret == ""
 	case nameOrURL != "":
 		p, ok := cfg.Profile(nameOrURL)
@@ -341,6 +361,31 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 				"Could not read the password for profile %q from the system keyring: %s. The passphrase or the keychain permission may be wrong; set CDB_PASSWORD to bypass it.",
 				profileName, trimSentence(err))
 		}
+	}
+
+	// #44: a session profile that knows who it is and has no password left to
+	// try. CDB_PASSWORD and the keyring have both had their turn above; the
+	// operator is the last place to look. Only the password is asked for — the
+	// user name is not in doubt, and promptForCredentials would ask for it
+	// again with "admin" offered as the default.
+	if secret == "" && profile.Auth == string(couch.AuthSession) && profile.Username != "" &&
+		s.Prefs.Interactive && !s.Prefs.Anonymous {
+		sec, perr := readSecret(s, "Password for "+profile.Username)
+		if perr != nil {
+			return connection{}, perr
+		}
+		secret = sec
+		bare = false
+	}
+
+	// And nothing supplied one: --anonymous was passed, or there is no
+	// terminal to ask on. A session login with an empty password can only
+	// 401, which would turn "cdb --url http://alice@host ls /" from a working
+	// anonymous connection into a failure. Connect the way the URL alone used
+	// to, with the user name still recorded, and let the anonymous notice say
+	// what happened.
+	if secret == "" && urlUserOnly && profile.Auth == string(couch.AuthSession) {
+		profile.Auth = string(couch.AuthNone)
 	}
 
 	// A proxy profile with no secret anywhere has its own questions: the kind

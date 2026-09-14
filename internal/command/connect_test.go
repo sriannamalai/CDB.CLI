@@ -1391,3 +1391,64 @@ func TestConnectUnderIAMNamesTheServiceID(t *testing.T) {
 		t.Errorf("banner = %q, want no mention of anonymous", msg.Text)
 	}
 }
+
+func TestURLUserNameTakesThePasswordFromTheEnvironment(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2","vendor":{"name":"The Apache Software Foundation"}}`)
+	srv.JSON("POST", "/_session", 200, `{"ok":true,"name":"alice","roles":["_admin"]}`)
+	srv.JSON("GET", "/_session", 200,
+		`{"ok":true,"userCtx":{"name":"alice","roles":["_admin"]},"info":{"authenticated":"cookie"}}`)
+	// The URL names alice and no password; CDB_PASSWORD supplies it.
+	withDeps(t, config.Defaults(), map[string]string{"CDB_PASSWORD": "hunter2"})
+	s := newSession(t)
+	url := strings.Replace(srv.URL(), "http://", "http://alice@", 1)
+	if err := Open(context.Background(), s, url); err != nil {
+		t.Fatal(err)
+	}
+	if s.Client.Username() != "alice" {
+		t.Errorf("username = %q", s.Client.Username())
+	}
+	if srv.Last("POST", "/_session") == nil {
+		t.Fatal("no session login was attempted; the connection was anonymous")
+	}
+	if body := string(srv.Last("POST", "/_session").Body); !strings.Contains(body, `"name":"alice"`) {
+		t.Errorf("login body = %s", body)
+	}
+}
+
+func TestURLUserNameWithNoPasswordAnywhereAsksForOne(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2","vendor":{"name":"The Apache Software Foundation"}}`)
+	srv.JSON("POST", "/_session", 200, `{"ok":true,"name":"alice","roles":["_admin"]}`)
+	srv.JSON("GET", "/_session", 200,
+		`{"ok":true,"userCtx":{"name":"alice","roles":["_admin"]},"info":{"authenticated":"cookie"}}`)
+	withDeps(t, config.Defaults(), nil)
+	s, out := guidedSession("hunter2\n")
+	s.Prefs.Interactive = true
+	url := strings.Replace(srv.URL(), "http://", "http://alice@", 1)
+	if err := Open(context.Background(), s, url); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Password for alice") {
+		t.Errorf("prompt = %q; a URL that names a user must ask for that user's password, not for a user name", out.String())
+	}
+	if strings.Contains(out.String(), "hunter2") {
+		t.Fatal("the password was echoed")
+	}
+}
+
+func TestURLWithUserAndPasswordIsUnchanged(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/", 200, `{"couchdb":"Welcome","version":"3.5.2","vendor":{"name":"The Apache Software Foundation"}}`)
+	srv.JSON("GET", "/_session", 200,
+		`{"ok":true,"userCtx":{"name":"alice","roles":["_admin"]},"info":{"authenticated":"default"}}`)
+	withDeps(t, config.Defaults(), nil)
+	s := newSession(t)
+	url := strings.Replace(srv.URL(), "http://", "http://alice:hunter2@", 1)
+	if err := Open(context.Background(), s, url); err != nil {
+		t.Fatal(err)
+	}
+	if srv.Last("POST", "/_session") != nil {
+		t.Error("a URL carrying both halves now logs in with a cookie; it used to authenticate with Basic through net/http and must still")
+	}
+}
