@@ -844,6 +844,16 @@ func storeProfile(name string, profile config.Profile, secret string) (config.Pr
 			profile.Auth = "session"
 		}
 	}
+	// A profile is stored as what it connected with. "connect --save --url
+	// http://alice@host" on a server that asked for nothing connects
+	// anonymously — openProfileWith drops the user name it had no password
+	// for — and a saved auth = "none" that still names alice reads like a
+	// login that was never made: "profiles list" shows a user the next
+	// connection will not send. The name is kept only where something is sent
+	// under it.
+	if profile.Auth == "none" {
+		profile.Username = ""
+	}
 	// Find the keyring before writing anything. A profile whose secret was
 	// silently dropped is a profile that fails on the next run, so an
 	// unopenable keyring has to stop the save rather than half-complete it.
