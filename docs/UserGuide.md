@@ -849,9 +849,12 @@ expression otherwise.
 
 ```
 admin@localhost:5984:/movies> ls | .id
-admin@localhost:5984:/movies> find '{"year":{"$gt":2000}}' | del(._rev) | put /old
+admin@localhost:5984:/movies> find '{"year":{"$gt":2000}}' | put /old
 admin@localhost:5984:/movies> ls | cat | .title
 ```
+
+Copying needs no `del(._rev)` stage: `put` drops an incoming `_rev` itself and
+writes over whatever revision the target holds.
 
 Values flow from stage to stage as JSON, one at a time, and the stages run at
 the same time. A feed with no end therefore keeps working:
@@ -978,7 +981,7 @@ from the shell, for the shell afterwards. Scripts nest eight deep.
 # nightly.cdb — archive last year's films
 cd /movies
 set rev = cat tt0211915 | ._rev
-find '{"year":{"$lt":2000}}' | del(._rev) | put /archive
+find '{"year":{"$lt":2000}}' | put /archive
 ls | rm --yes
 ```
 
