@@ -98,25 +98,36 @@ func describe(c command.Command) string {
 }
 
 // splitForCompletion returns the settled words before the cursor and the word
-// the cursor is inside.
+// the cursor is inside. It reads the first stage only: completing inside a
+// later stage would need that stage's own command, and the word under the
+// cursor is nearly always in the first.
 func splitForCompletion(head string) ([]string, string) {
-	parsed, err := Parse(head)
+	parsed, err := Parse(head, nil)
 	if err != nil {
 		// An unterminated quote means the last word is still open; complete on
 		// what follows the quote character.
 		if i := strings.LastIndexAny(head, "\"'"); i >= 0 {
-			before, _ := Parse(head[:i])
-			return before.Argv, head[i+1:]
+			before, _ := Parse(head[:i], nil)
+			return firstArgv(before), head[i+1:]
 		}
 		return nil, ""
 	}
+	argv := firstArgv(parsed)
 	if strings.HasSuffix(head, " ") {
-		return parsed.Argv, ""
+		return argv, ""
 	}
-	if len(parsed.Argv) == 0 {
+	if len(argv) == 0 {
 		return nil, ""
 	}
-	return parsed.Argv[:len(parsed.Argv)-1], parsed.Argv[len(parsed.Argv)-1]
+	return argv[:len(argv)-1], argv[len(argv)-1]
+}
+
+// firstArgv is the first stage's words, or nil for a line with no stages.
+func firstArgv(l Line) []string {
+	if len(l.Stages) == 0 {
+		return nil
+	}
+	return l.Stages[0].Argv
 }
 
 // attachedFlagValue splits "--name=value" when name is a declared flag of the

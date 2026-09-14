@@ -47,6 +47,9 @@ func TestRunLineExecutesACommand(t *testing.T) {
 	}
 }
 
+// A one-command-plus-one-jq-stage line behaves exactly as it did before the
+// parser produced stages: RunLine still applies the single filter, using
+// Stages[1].Expr, until Task 3 installs the general stage executor.
 func TestRunLineAppliesAFilter(t *testing.T) {
 	var out bytes.Buffer
 	sh, s := testShell(t, &out)
@@ -56,6 +59,33 @@ func TestRunLineAppliesAFilter(t *testing.T) {
 	}
 	if strings.TrimSpace(out.String()) != `"alice"` {
 		t.Errorf("output = %q, want %q", out.String(), `"alice"`)
+	}
+}
+
+// The line parses into two stages with the expression intact, which is what
+// the filter above relies on.
+func TestRunLineParsesAFilterStage(t *testing.T) {
+	var out bytes.Buffer
+	sh, _ := testShell(t, &out)
+	line, err := Parse("cat doc1 | .name", sh.isCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(line.Stages) != 2 || line.Stages[1].Expr != ".name" {
+		t.Fatalf("stages = %#v", line.Stages)
+	}
+}
+
+// More than two stages is rejected until Task 3 installs the stage executor.
+func TestRunLineRejectsMoreThanOneFilterStage(t *testing.T) {
+	var out bytes.Buffer
+	sh, _ := testShell(t, &out)
+	err := sh.RunLine(context.Background(), "cat doc1 | .name | .")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if !strings.Contains(err.Error(), "pipelines with more than one filter stage arrive in Task 3") {
+		t.Errorf("error = %v", err)
 	}
 }
 

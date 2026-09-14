@@ -55,7 +55,7 @@ func (h *filteredHistory) Write(line string) (int, error) {
 	if line == "" {
 		return h.src.Len(), nil
 	}
-	if _, err := Parse(line); err != nil {
+	if _, err := Parse(line, nil); err != nil {
 		return h.src.Len(), nil
 	}
 	// Redact before the dedup check, so what is compared is what is stored.
@@ -356,20 +356,27 @@ func errorText(err error, verbose bool) string { return render.ErrorMessage(err,
 
 // RunLine parses and runs one line, rendering the result.
 func (sh *Shell) RunLine(ctx context.Context, input string) error {
-	line, err := Parse(input)
+	line, err := Parse(input, sh.isCommand)
 	if err != nil {
 		return err
 	}
-	if len(line.Argv) == 0 {
+	if len(line.Stages) == 0 {
 		return nil
 	}
-	name := line.Argv[0]
+	// The stage executor arrives in Task 3. Until then, a one-command-plus-
+	// one-jq-stage line keeps behaving exactly as it does today (the single
+	// filter below is applied using Stages[1].Expr); anything longer is
+	// rejected with a temporary usage error rather than silently dropped.
+	if len(line.Stages) > 2 {
+		return command.Usagef("", "pipelines with more than one filter stage arrive in Task 3")
+	}
+	name := line.Stages[0].Argv[0]
 	c, ok := sh.reg.Lookup(name)
 	if !ok {
 		return command.Usagef(name, "unknown command. Type \"help\" to see the command list.")
 	}
 	fs := sh.reg.NewFlagSet(c)
-	if err := fs.Parse(line.Argv[1:]); err != nil {
+	if err := fs.Parse(line.Stages[0].Argv[1:]); err != nil {
 		return command.Usagef(c.Name, "%v\nusage: %s %s", err, c.Name, c.Usage)
 	}
 	args := fs.Args()
@@ -420,14 +427,21 @@ func (sh *Shell) RunLine(ctx context.Context, input string) error {
 		return err
 	}
 	forceJSON, _ := fs.GetBool("json")
-	if line.Filter != "" {
-		res, err = applyFilterToResult(line.Filter, res)
+	if len(line.Stages) > 1 {
+		res, err = applyFilterToResult(line.Stages[1].Expr, res)
 		if err != nil {
 			return err
 		}
 		forceJSON = true
 	}
 	return render.New(sh.sess.Stdout, render.OptionsFor(sh.sess.Prefs, sh.sess.Stdout, forceJSON)).Render(res)
+}
+
+// isCommand reports whether a word names a registered command or alias. The
+// parser asks before it reads a stage as a command rather than as jq.
+func (sh *Shell) isCommand(name string) bool {
+	_, ok := sh.reg.Lookup(name)
+	return ok
 }
 
 // applyFilterToResult runs a gojq filter over the JSON side of a result.
