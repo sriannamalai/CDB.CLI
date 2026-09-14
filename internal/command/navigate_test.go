@@ -333,3 +333,47 @@ func TestLsDesignDocListsSearchIndexes(t *testing.T) {
 		}
 	}
 }
+
+// cd checks a view name against the design document, and a search index has to
+// be checked the same way: neither has a URL of its own, so without the check
+// cd would accept any index name at all and every later command would 404.
+func TestCdVerifiesSearchIndexNames(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		wantErr bool
+	}{
+		{"/movies/_design/app/_search/by_title", false},
+		{"/movies/_design/app/_search/nope", true},
+		{"/movies/_design/app/_nouveau/by_body", false},
+		{"/movies/_design/app/_nouveau/nope", true},
+		// Each backend only sees its own object: a Clouseau index is not
+		// reachable at _nouveau, and CouchDB answers 404 for the other's path.
+		{"/movies/_design/app/_nouveau/by_title", true},
+		{"/movies/_design/app/_search/by_body", true},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			srv := couchtest.New(t)
+			srv.JSON("GET", "/movies/_design/app", 200,
+				`{"_id":"_design/app","views":{"by_year":{}},"indexes":{"by_title":{}},"nouveau":{"by_body":{}}}`)
+			s := connected(t, srv)
+			_, err := invoke(t, Cd(), s, tc.path)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("cd %s succeeded, want a refusal", tc.path)
+				}
+				for _, want := range []string{"_design/app", "nope", "by_title", "by_body"} {
+					if strings.Contains(tc.path, want) && !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q does not name %q", err, want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("cd %s = %v", tc.path, err)
+			}
+			if s.Path() != tc.path {
+				t.Errorf("path = %q, want %q", s.Path(), tc.path)
+			}
+		})
+	}
+}

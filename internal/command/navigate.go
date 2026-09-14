@@ -62,12 +62,12 @@ func verifyTarget(ctx context.Context, s *session.Session, t path.Target) error 
 		}
 		return nil
 	default:
-		// Documents, design documents, views and attachments all hang off a
-		// document, so reading it settles whether the database and the document
-		// exist. A view and an attachment live inside that document rather than
-		// at a URL of their own, so the last segment is checked against the
-		// fetched body: without that, cd would accept any view or attachment
-		// name at all.
+		// Documents, design documents, views, search indexes and attachments
+		// all hang off a document, so reading it settles whether the database
+		// and the document exist. A view, a search index and an attachment
+		// live inside that document rather than at a URL of their own, so the
+		// last segment is checked against the fetched body: without that, cd
+		// would accept any view, index or attachment name at all.
 		body, _, err := s.Client.GetDocument(ctx, t.Database, t.DocID, couch.GetOptions{})
 		if err != nil {
 			return err
@@ -78,6 +78,21 @@ func verifyTarget(ctx context.Context, s *session.Session, t path.Target) error 
 				return couch.NewError(404, "not_found",
 					fmt.Sprintf("Design document %q defines no view %q.", t.DocID, t.View),
 					"read", fmt.Sprintf("view %q in %q", t.View, t.Database))
+			}
+		case path.KindSearch:
+			// The two backends are not interchangeable: an index defined under
+			// "indexes" is served at _search and one under "nouveau" at
+			// _nouveau, so each name is checked against its own object and a
+			// Clouseau index typed under _nouveau is refused like a missing
+			// one.
+			member := "indexes"
+			if t.Backend == path.BackendNouveau {
+				member = "nouveau"
+			}
+			if !hasMember(body, member, t.Index) {
+				return couch.NewError(404, "not_found",
+					fmt.Sprintf("Design document %q defines no %s search index %q.", t.DocID, t.Backend, t.Index),
+					"read", fmt.Sprintf("search index %q in %q", t.Index, t.Database))
 			}
 		case path.KindAttachment:
 			if !hasMember(body, "_attachments", t.Attachment) {
@@ -91,8 +106,9 @@ func verifyTarget(ctx context.Context, s *session.Session, t path.Target) error 
 }
 
 // hasMember reports whether doc's top-level field is an object holding key. It
-// is how cd checks a view against a design document's "views" and an attachment
-// against a document's "_attachments".
+// is how cd checks a view against a design document's "views", a search index
+// against its "indexes" or "nouveau", and an attachment against a document's
+// "_attachments".
 func hasMember(doc json.RawMessage, field, key string) bool {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(doc, &top); err != nil {
