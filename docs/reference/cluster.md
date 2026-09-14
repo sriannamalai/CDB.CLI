@@ -21,8 +21,9 @@ state as unavailable; everything else still works.
 
 "cluster setup --single-node" turns a fresh node into a working single-node
 install: CouchDB sets [cluster] n to 1 and creates the _users and _replicator
-databases. A node that is already set up is reported and left alone. Multi-node setup — enable_cluster, add_node, finish_cluster — is not
-supported by cdb; use Fauxton or curl for that.
+databases. A node that is already set up is reported and left alone.
+Multi-node setup — enable_cluster, add_node, finish_cluster — is not supported
+by cdb; use Fauxton or curl for that.
 
 ## Arguments
 

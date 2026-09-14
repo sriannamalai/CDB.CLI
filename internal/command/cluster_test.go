@@ -212,3 +212,42 @@ func sessionAuthenticated(t *testing.T, srv *couchtest.Server, user, password st
 	t.Cleanup(func() { _ = s.Detach() })
 	return s
 }
+
+func TestClusterStatusRefusesANodeTheClusterDoesNotHave(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_cluster_setup", 200, `{"state":"cluster_finished"}`)
+	srv.JSON("GET", "/_membership", 200, `{"all_nodes":["nonode@nohost"],"cluster_nodes":["nonode@nohost"]}`)
+	s := connected(t, srv)
+	_, err := invoke(t, Cluster(), s, "status", "--node", "bogus@nohost")
+	if err == nil {
+		t.Fatal("a node that is not in the cluster was reported as if it were")
+	}
+	if err.Error() != "Node bogus@nohost is not in this cluster." {
+		t.Errorf("error = %q", err.Error())
+	}
+	// The [cluster] read must not have happened: a missing node's _config is a
+	// 404 like an empty section's, which is what hid this.
+	if srv.Last("GET", "/_node/bogus@nohost/_config/cluster") != nil {
+		t.Error("the config of a node that is not in the cluster was read anyway")
+	}
+}
+
+func TestClusterStatusReadsAKnownNonLocalNode(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("GET", "/_cluster_setup", 200, `{"state":"cluster_finished"}`)
+	srv.JSON("GET", "/_membership", 200,
+		`{"all_nodes":["node1@127.0.0.1","node2@127.0.0.1"],"cluster_nodes":["node1@127.0.0.1"]}`)
+	srv.JSON("GET", "/_node/node2@127.0.0.1/_config/cluster", 200, `{"n":"3","q":"8"}`)
+	s := connected(t, srv)
+	res, err := invoke(t, Cluster(), s, "status", "--node", "node2@127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, item := range res.(Rows).Items {
+		got[item.Cells[0]] = item.Cells[1]
+	}
+	if got["cluster n"] != "3" || got["cluster q"] != "8" {
+		t.Errorf("the named node's shape = %v", got)
+	}
+}

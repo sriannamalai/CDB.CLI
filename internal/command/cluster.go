@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/spf13/pflag"
@@ -46,8 +47,9 @@ state as unavailable; everything else still works.
 
 "cluster setup --single-node" turns a fresh node into a working single-node
 install: CouchDB sets [cluster] n to 1 and creates the _users and _replicator
-databases. A node that is already set up is reported and left alone. Multi-node setup — enable_cluster, add_node, finish_cluster — is not
-supported by cdb; use Fauxton or curl for that.`
+databases. A node that is already set up is reported and left alone.
+Multi-node setup — enable_cluster, add_node, finish_cluster — is not supported
+by cdb; use Fauxton or curl for that.`
 
 // Cluster returns the cluster command.
 func Cluster() Command {
@@ -100,6 +102,12 @@ Single-node setup finished; state is single_node_enabled.`,
 // clusterStatus reports the setup state, the node's cluster shape, and the
 // membership. A server with no setup endpoint still has the other two, so the
 // 404 becomes a value rather than a failure.
+//
+// The membership is read before the [cluster] section, because it is what says
+// whether --node names a node at all: a node that does not exist answers its
+// _config with the same 404 an empty section does, and without the check a
+// misspelled name would quietly report "(server default)" for a machine that
+// is not there.
 func clusterStatus(ctx context.Context, s *session.Session, node string) (Result, error) {
 	rows := Rows{Columns: []Column{{Title: "field"}, {Title: "value"}}}
 	add := func(k, v string) {
@@ -118,6 +126,16 @@ func clusterStatus(ctx context.Context, s *session.Session, node string) (Result
 	}
 	add("state", state)
 
+	m, err := s.Client.Membership(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// _local is the alias for "whichever node answered", so it is always
+	// valid and is never in all_nodes under that name.
+	if node != defaultNode && !slices.Contains(m.AllNodes, node) {
+		return nil, Errorf(nil, "Node %s is not in this cluster.", node)
+	}
+
 	shape, err := clusterShape(ctx, s, node)
 	if err != nil {
 		return nil, err
@@ -125,10 +143,6 @@ func clusterStatus(ctx context.Context, s *session.Session, node string) (Result
 	add("cluster n", shape["n"])
 	add("cluster q", shape["q"])
 
-	m, err := s.Client.Membership(ctx)
-	if err != nil {
-		return nil, err
-	}
 	for i, n := range m.AllNodes {
 		add("all_nodes["+strconv.Itoa(i)+"]", n)
 	}

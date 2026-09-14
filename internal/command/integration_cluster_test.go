@@ -31,6 +31,28 @@ func TestClusterStatusAgainstALiveServer(t *testing.T) {
 	if got["all_nodes[0]"] == "" {
 		t.Fatal("no node rows; _membership always names at least this node")
 	}
+
+	// The node the server named is readable under its own name, not only
+	// under the _local alias.
+	named, err := invoke(t, Cluster(), s, "status", "--node", got["all_nodes[0]"])
+	if err != nil {
+		t.Fatalf("--node %s: %v", got["all_nodes[0]"], err)
+	}
+	for _, item := range named.(Rows).Items {
+		if item.Cells[0] == "cluster n" {
+			t.Logf("--node %s: cluster n = %s", got["all_nodes[0]"], item.Cells[1])
+		}
+	}
+
+	// A node that is not in the cluster is a mistake, not an empty section.
+	if _, err := invoke(t, Cluster(), s, "status", "--node", "bogus@nohost"); err == nil {
+		t.Error("a node that is not in the cluster was reported as if it were")
+	} else {
+		t.Logf("--node bogus@nohost: %v", err)
+		if err.Error() != "Node bogus@nohost is not in this cluster." {
+			t.Errorf("error = %q", err.Error())
+		}
+	}
 }
 
 // TestClusterSetupAgainstAFreshServer is the one test in the suite that
