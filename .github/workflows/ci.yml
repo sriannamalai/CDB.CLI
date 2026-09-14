@@ -144,13 +144,19 @@ jobs:
           # Empty on 3.0, so the JWT test skips on the env gate as well as on
           # the version it reads — belt and braces, since a JWT test that
           # silently asserted nothing is what the gate exists to prevent.
-          CDB_TEST_JWT_SECRET: ${{ matrix.couchdb == '3.0' && '' || 'ci-jwt-secret' }}
+          # Written with the positive branch first: GitHub Actions' && and ||
+          # return operands (JS-style), so cond && '' || 'X' always evaluates
+          # to 'X' — the empty-string branch is swallowed by ||. Putting the
+          # non-empty value as the && result avoids that trap.
+          CDB_TEST_JWT_SECRET: ${{ matrix.couchdb != '3.0' && 'ci-jwt-secret' || '' }}
           # Proxy authentication is configured on both legs, so the secret is
           # set on both. The tests skip when it is empty.
           CDB_TEST_PROXY_SECRET: ci-proxy-secret
           # Nouveau is only wired up on the leg that has a CouchDB new enough
-          # to speak to it. Empty on 3.0, so the search tests skip there.
-          CDB_TEST_NOUVEAU: ${{ matrix.couchdb == '3.0' && '' || '1' }}
+          # to speak to it. Empty on 3.0, so the search tests skip there. See
+          # the CDB_TEST_JWT_SECRET comment above for why the non-empty value
+          # is written as the && branch rather than the || fallback.
+          CDB_TEST_NOUVEAU: ${{ matrix.couchdb != '3.0' && '1' || '' }}
           # The service container reaches itself at the same address; this is
           # also what makes the tombstone/replication test's source and
           # target the same node.
