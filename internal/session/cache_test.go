@@ -3,6 +3,9 @@ package session
 import (
 	"bytes"
 	"context"
+	"io"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
@@ -128,5 +131,35 @@ func TestAttachResetsTheCache(t *testing.T) {
 	}
 	if len(names) != 1 || names[0] != "fresh" {
 		t.Errorf("names = %v, want [fresh]", names)
+	}
+}
+
+// The stages of a shell pipeline run concurrently and any of them may be the
+// first to ask for the cache, so its creation, its reads and its invalidations
+// all have to survive being done at once. Run with -race.
+func TestCacheIsSafeForConcurrentUse(t *testing.T) {
+	s := New(strings.NewReader(""), io.Discard, io.Discard)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			c := s.Cache()
+			switch i % 4 {
+			case 0:
+				c.InvalidateDatabases()
+			case 1:
+				c.InvalidateFields("movies")
+			case 2:
+				c.Reset()
+			default:
+				c.setDatabasesForTest([]string{"movies"})
+			}
+			_ = s.Cache()
+		}(i)
+	}
+	wg.Wait()
+	if s.Cache() == nil {
+		t.Fatal("the cache was never created")
 	}
 }

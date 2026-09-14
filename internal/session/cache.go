@@ -21,11 +21,16 @@ type Cache struct {
 	fields    map[string][]string
 }
 
-// Cache returns the session's completion cache, creating it on first use.
+// Cache returns the session's completion cache, creating it on first use. The
+// creation is guarded because the stages of a shell pipeline run concurrently:
+// two stages asking for the cache at once would otherwise race to build it,
+// and one of them would invalidate a cache the other had already replaced.
 func (s *Session) Cache() *Cache {
-	if s.cache == nil {
-		s.cache = &Cache{fields: map[string][]string{}}
-	}
+	s.cacheOnce.Do(func() {
+		if s.cache == nil {
+			s.cache = &Cache{fields: map[string][]string{}}
+		}
+	})
 	return s.cache
 }
 

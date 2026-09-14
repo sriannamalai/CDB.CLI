@@ -5,6 +5,7 @@ package session
 import (
 	"bufio"
 	"io"
+	"sync"
 
 	"github.com/sriannamalai/CDB.CLI/internal/couch"
 	"github.com/sriannamalai/CDB.CLI/internal/path"
@@ -80,8 +81,11 @@ type Session struct {
 
 	cwd string
 
-	// cache backs shell completion. Cache() creates it on first use.
-	cache *Cache
+	// cache backs shell completion. Cache() creates it on first use, once:
+	// the stages of a shell pipeline run concurrently and any of them may be
+	// the first to ask for it.
+	cacheOnce sync.Once
+	cache     *Cache
 }
 
 // New returns a disconnected session at the server root.
