@@ -1027,7 +1027,7 @@ address the server should use to reach itself, as
 | `CDB_PROFILE` | profile to connect with, unless `--profile` is given |
 | `CDB_URL` | server URL, unless `--url` is given |
 | `CDB_REPLICATION_URL` | address the server should use to reach itself for replication, unless `--replication-url` is given |
-| `CDB_USER` | username |
+| `CDB_USER` | username, unless the URL names one |
 | `CDB_PASSWORD` | password, selecting `session` auth |
 | `CDB_TOKEN` | JWT (CouchDB 3.1 or later), selecting `jwt` auth; wins over `CDB_PASSWORD` |
 | `CDB_INSECURE_TLS` | skip TLS certificate verification when true |

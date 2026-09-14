@@ -221,6 +221,9 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 	// acts on it, the same way bare is learned in one place and acted on in
 	// another.
 	urlUserOnly := false
+	// urlUser is the user name the named URL carried, remembered so that the
+	// environment's CDB_USER cannot overwrite it below.
+	urlUser := ""
 
 	switch {
 	case strings.HasPrefix(nameOrURL, "http://"), strings.HasPrefix(nameOrURL, "https://"):
@@ -228,7 +231,8 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 		// auth header. Record the user name it carries so the connection
 		// reports who it is, instead of calling an authenticated session
 		// anonymous.
-		clean, urlUser, urlSecret := splitURLCredentials(nameOrURL)
+		clean, user, urlSecret := splitURLCredentials(nameOrURL)
+		urlUser = user
 		urlUserOnly = urlUser != "" && urlSecret == ""
 		switch {
 		case urlUserOnly:
@@ -304,6 +308,22 @@ func openProfileWith(ctx context.Context, s *session.Session, nameOrURL string, 
 		bare = false
 	}
 	profile = env.Apply(profile)
+	// A user name embedded in the URL is part of the target that was named,
+	// so it wins over CDB_USER, which a shell may have exported for an
+	// entirely different server. Applying the environment's user to a URL that
+	// names its own is the silent redirection #36 fixed for CDB_URL, one field
+	// along: "cdb --url http://alice@host ls /" would log in as bob. CDB_USER
+	// still fills in a URL — or a profile — that names nobody, which is all it
+	// was ever for. The URL is re-read here rather than remembered, because
+	// CDB_URL reaches the profile through Apply above and carries its userinfo
+	// the same way --url does.
+	if env.User != "" {
+		if urlUser != "" {
+			profile.Username = urlUser
+		} else if _, u, _ := splitURLCredentials(profile.URL); u != "" {
+			profile.Username = u
+		}
+	}
 	// A named kind beats the profile and the environment both: it is the most
 	// specific thing the operator said, and the same precedence --url has over
 	// CDB_URL.
