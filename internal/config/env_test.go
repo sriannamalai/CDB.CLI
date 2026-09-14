@@ -72,3 +72,17 @@ func TestEnvTokenWinsOverPasswordWhenBothSet(t *testing.T) {
 		t.Errorf("Secret() = %q, %v, want the token", secret, ok)
 	}
 }
+
+// A profile that names proxy authentication keeps it. A shell exporting
+// CDB_PASSWORD for another server used to flip the kind to "session" and send
+// the shared secret as a password — a silent change of credential, on a
+// profile the operator wrote by hand.
+func TestApplyKeepsProxyAndIAMKindsOverCDBPassword(t *testing.T) {
+	for _, kind := range []string{"proxy", "iam"} {
+		e := Env{Password: "hunter2", Token: "eyJ..."}
+		got := e.Apply(Profile{Name: "ops", URL: "https://couch.example.com", Auth: kind})
+		if got.Auth != kind {
+			t.Errorf("auth = %q, want %q", got.Auth, kind)
+		}
+	}
+}

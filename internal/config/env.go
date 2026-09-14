@@ -51,6 +51,14 @@ func (e Env) Apply(p Profile) Profile {
 		p.InsecureTLS = *e.InsecureTLS
 	}
 	switch {
+	case p.Auth == "proxy" || p.Auth == "iam":
+		// A profile that names proxy or IAM authentication keeps it. Neither
+		// kind takes its credential from CDB_TOKEN, and CDB_PASSWORD — which a
+		// shell may export for an entirely different server — must not turn a
+		// proxy profile into a session one behind the operator's back. The
+		// secret itself still comes from Secret() below, so CDB_PASSWORD can
+		// still supply a proxy profile's shared secret without changing what
+		// the profile is.
 	case e.Token != "":
 		p.Auth = "jwt"
 	case e.Password != "":

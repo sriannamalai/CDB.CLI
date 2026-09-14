@@ -16,7 +16,7 @@ func TestNewRejectsAnUnknownAuthKind(t *testing.T) {
 	if err == nil {
 		t.Fatal("New accepted an unknown authentication kind")
 	}
-	for _, want := range []string{"sesion", "session", "jwt", "none"} {
+	for _, want := range []string{"sesion", "session", "jwt", "proxy", "iam", "none"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q is missing %q", err, want)
 		}
@@ -27,7 +27,7 @@ func TestNewRejectsAnUnknownAuthKind(t *testing.T) {
 // already defaults it to "session" before it gets here. Treat it as "none" so
 // a caller that builds a Config by hand still works.
 func TestNewAcceptsTheKnownAuthKinds(t *testing.T) {
-	for _, kind := range []AuthKind{"", AuthNone, AuthSession, AuthJWT} {
+	for _, kind := range []AuthKind{"", AuthNone, AuthSession, AuthJWT, AuthProxy} {
 		if _, err := New(Config{URL: "http://localhost:5984", Auth: kind, Username: "admin", Secret: "x"}); err != nil {
 			t.Errorf("New with auth %q: %v", kind, err)
 		}

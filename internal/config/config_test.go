@@ -129,3 +129,41 @@ func TestRemoveProfileClearsDefault(t *testing.T) {
 		t.Errorf("Default = %q after removing the default profile, want empty", c.Default)
 	}
 }
+
+// roles is a list, which TOML and koanf both have more than one way to write.
+// Saving and loading it back is the only assertion that pins the pair.
+func TestProfileRolesRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c := Defaults()
+	c.SetProfile(Profile{Name: "ops", URL: "https://couch.example.com", Auth: "proxy", Username: "ops", Roles: []string{"_admin", "editor"}})
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := back.Profile("ops")
+	if !ok {
+		t.Fatal("the profile did not survive the round trip")
+	}
+	if p.Auth != "proxy" {
+		t.Errorf("auth = %q, want proxy", p.Auth)
+	}
+	if len(p.Roles) != 2 || p.Roles[0] != "_admin" || p.Roles[1] != "editor" {
+		t.Errorf("roles = %#v, want [_admin editor]", p.Roles)
+	}
+}
+
+func TestValidAuthKind(t *testing.T) {
+	for _, ok := range []string{"none", "session", "jwt", "proxy", "iam"} {
+		if !ValidAuthKind(ok) {
+			t.Errorf("ValidAuthKind(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", "sesion", "PROXY", "basic", "cookie"} {
+		if ValidAuthKind(bad) {
+			t.Errorf("ValidAuthKind(%q) = true, want false", bad)
+		}
+	}
+}

@@ -3,8 +3,11 @@ package couch
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -186,6 +189,66 @@ func (t *jwtTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // CloseIdleConnections delegates to the base transport; see the session
 // transport's method for why it has to exist.
 func (t *jwtTransport) CloseIdleConnections() { closeIdle(t.base) }
+
+// proxyTransport presents cdb as the trusted proxy CouchDB's
+// proxy_authentication_handler expects. The token proves knowledge of the
+// server's [chttpd_auth] secret; it is computed once, at client construction,
+// because neither the secret nor the user name changes for the life of a
+// client.
+//
+// There is nothing to refresh and nothing to retry: a token the server will not
+// accept does not produce a 401, it produces an anonymous session (verified on
+// 3.0.1 and 3.5.2), which is why internal/command's verifyLogin checks
+// GET /_session rather than trusting a 200.
+type proxyTransport struct {
+	base     http.RoundTripper
+	username string
+	// roles is the comma-joined role list, or "" for none.
+	roles string
+	token string
+}
+
+func (t *proxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	out := req.Clone(req.Context())
+	out.Header.Set("X-Auth-CouchDB-UserName", t.username)
+	out.Header.Set("X-Auth-CouchDB-Token", t.token)
+	if t.roles != "" {
+		out.Header.Set("X-Auth-CouchDB-Roles", t.roles)
+	}
+	return t.base.RoundTrip(out)
+}
+
+// CloseIdleConnections delegates to the base transport; see sessionTransport's
+// method for why it has to exist.
+func (t *proxyTransport) CloseIdleConnections() { closeIdle(t.base) }
+
+// proxyToken is the X-Auth-CouchDB-Token value: lowercase hex HMAC-SHA256 of
+// the user name, keyed by the shared secret. CouchDB 3.5's [chttpd_auth]
+// hash_algorithms defaults to "sha256, sha" and 3.0 verifies both without the
+// key existing, so SHA-256 is the one algorithm cdb needs to emit.
+//
+// The result is derived from the secret and must be treated as the secret is:
+// never printed, logged, or put in an error message.
+func proxyToken(secret, username string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(username))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// proxyHeaders is the same three headers as a map, for a _replicator
+// document's per-endpoint "headers" object. Like every endpoint map, it is for
+// request bodies only and must never be rendered, logged, or surfaced in a
+// command.Result.
+func proxyHeaders(username, roles, token string) map[string]any {
+	h := map[string]any{
+		"X-Auth-CouchDB-UserName": username,
+		"X-Auth-CouchDB-Token":    token,
+	}
+	if roles != "" {
+		h["X-Auth-CouchDB-Roles"] = roles
+	}
+	return h
+}
 
 // closeIdle passes a close down to a transport that supports one. The interface
 // is the same unexported contract net/http itself checks for.

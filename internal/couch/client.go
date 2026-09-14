@@ -18,14 +18,24 @@ const (
 	AuthNone    AuthKind = "none"
 	AuthSession AuthKind = "session"
 	AuthJWT     AuthKind = "jwt"
+	// AuthProxy makes cdb the trusted proxy CouchDB's
+	// proxy_authentication_handler expects: the user name, the roles and a
+	// keyed HMAC of the user name travel as headers on every request. Secret
+	// is the shared secret from the server's [chttpd_auth] secret, never a
+	// password.
+	AuthProxy AuthKind = "proxy"
 )
 
 // Config describes a connection. Secret is never logged or serialised.
 type Config struct {
-	URL         string
-	Auth        AuthKind
-	Username    string
-	Secret      string
+	URL      string
+	Auth     AuthKind
+	Username string
+	Secret   string
+	// Roles are the roles cdb claims for Username under AuthProxy. Empty means
+	// "claim none", which is not the same as claiming one empty role: the
+	// header is then left off entirely.
+	Roles       []string
 	InsecureTLS bool
 	CAFile      string
 	UserAgent   string
@@ -106,6 +116,13 @@ func New(cfg Config) (*Client, error) {
 		tr = &sessionTransport{base: tr, jar: jar, baseURL: base, username: cfg.Username, password: cfg.Secret}
 	case AuthJWT:
 		tr = &jwtTransport{base: tr, token: cfg.Secret}
+	case AuthProxy:
+		tr = &proxyTransport{
+			base:     tr,
+			username: cfg.Username,
+			roles:    strings.Join(cfg.Roles, ","),
+			token:    proxyToken(cfg.Secret, cfg.Username),
+		}
 	case AuthNone, "":
 		// Nothing to add. The empty kind is the zero value, not a mistake:
 		// the config layer defaults an unset auth to "session" before it
@@ -117,7 +134,7 @@ func New(cfg Config) (*Client, error) {
 		// the profile says it will, and dial's anonymous-login guard does not
 		// catch that: the guard fires only when Auth is not "none", which a
 		// typo also is not.
-		return nil, fmt.Errorf("unknown authentication kind %q; expected session, jwt or none", cfg.Auth)
+		return nil, fmt.Errorf("unknown authentication kind %q; expected session, jwt, proxy, iam or none", cfg.Auth)
 	}
 	hc := &http.Client{Transport: tr}
 

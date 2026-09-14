@@ -20,12 +20,16 @@ import (
 // Profile is one saved connection.
 type Profile struct {
 	// Name is the key in the profiles table. It is not stored inside the table.
-	Name        string `koanf:"-"`
-	URL         string `koanf:"url"`
-	Auth        string `koanf:"auth"`
-	Username    string `koanf:"username"`
-	InsecureTLS bool   `koanf:"insecure_tls"`
-	CAFile      string `koanf:"ca_file"`
+	Name     string `koanf:"-"`
+	URL      string `koanf:"url"`
+	Auth     string `koanf:"auth"`
+	Username string `koanf:"username"`
+	// Roles are the roles cdb claims under auth = "proxy". Optional; empty
+	// means none. They are not a secret — the shared secret lives in the
+	// keyring like every other credential — so they belong here beside URL.
+	Roles       []string `koanf:"roles"`
+	InsecureTLS bool     `koanf:"insecure_tls"`
+	CAFile      string   `koanf:"ca_file"`
 	// ReplicationURL is the address the server should use to reach itself for
 	// a replication this profile starts. Optional; empty means "use URL". It
 	// is a plain address and never a secret, so it lives here beside URL.
@@ -110,6 +114,7 @@ func (c *Config) Save(path string) error {
 			"url":             p.URL,
 			"auth":            p.Auth,
 			"username":        p.Username,
+			"roles":           p.Roles,
 			"insecure_tls":    p.InsecureTLS,
 			"ca_file":         p.CAFile,
 			"replication_url": p.ReplicationURL,
@@ -235,4 +240,21 @@ func ApplyOutputPrefs(s *session.Session) {
 	s.Prefs.Color = session.ColorMode(cfg.Output.Color)
 	s.Prefs.Pager = cfg.Output.Pager
 	s.Prefs.Keymap = cfg.Shell.Keymap
+}
+
+// ValidAuthKind reports whether s is an authentication kind cdb understands.
+// It is the single source of truth for the five names: internal/command's
+// connect flag, its guided walk-through and couch.New all answer from this
+// list, so a sixth kind is added in one place.
+//
+// Load deliberately does not call it. A typo in one hand-edited profile would
+// otherwise break "profiles list" and every other command that reads the file,
+// for a profile nobody asked to connect to; couch.New rejects the typo at the
+// point of use instead, where the message can be acted on.
+func ValidAuthKind(s string) bool {
+	switch s {
+	case "none", "session", "jwt", "proxy", "iam":
+		return true
+	}
+	return false
 }
