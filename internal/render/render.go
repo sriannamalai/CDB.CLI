@@ -3,6 +3,7 @@
 package render
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -121,7 +122,20 @@ func (r *Renderer) renderRowsJSON(rows command.Rows) error {
 			return err
 		}
 	}
-	return nil
+	if len(rows.Extra) == 0 {
+		return nil
+	}
+	// A result with members of its own — only search has any — ends with one
+	// more object carrying them. It goes through writeRowJSON like a row, so
+	// it is highlighted under --json and compacted onto one line under --raw,
+	// and encoding/json sorts the keys, so the output is deterministic. The
+	// rows above are written exactly as before, which is why no other
+	// command's output moves.
+	b, err := json.Marshal(rows.Extra)
+	if err != nil {
+		return err
+	}
+	return r.writeRowJSON(r.out, command.Row{JSON: b})
 }
 
 func (r *Renderer) writeRowJSON(w io.Writer, item command.Row) error {

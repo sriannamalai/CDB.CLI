@@ -230,3 +230,38 @@ func TestCompactJSON(t *testing.T) {
 		t.Errorf("CompactJSON = %q", got)
 	}
 }
+
+// Every command but search leaves Extra empty, and their --raw/--json output
+// must stay one object per row, to the byte.
+func TestRowsJSONWithoutExtraIsUnchanged(t *testing.T) {
+	var buf bytes.Buffer
+	r := New(&buf, Options{Format: session.FormatRaw})
+	if err := r.Render(sampleRows()); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("rows with no Extra produced %d lines, want 2:\n%s", len(lines), buf.String())
+	}
+}
+
+// Search's counts and ranges arrive as one closing object after the rows.
+func TestRowsJSONWithExtraAppendsOneClosingObject(t *testing.T) {
+	var buf bytes.Buffer
+	r := New(&buf, Options{Format: session.FormatRaw})
+	rows := sampleRows()
+	rows.Extra = map[string]json.RawMessage{
+		"counts": json.RawMessage(`{"genre":{"scifi":1}}`),
+		"ranges": json.RawMessage(`{"year":{"old":0}}`),
+	}
+	if err := r.Render(rows); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("rows with Extra produced %d lines, want 3:\n%s", len(lines), buf.String())
+	}
+	if lines[2] != `{"counts":{"genre":{"scifi":1}},"ranges":{"year":{"old":0}}}` {
+		t.Errorf("closing object = %q", lines[2])
+	}
+}

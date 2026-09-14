@@ -48,6 +48,14 @@ type Rows struct {
 	Items   []Row
 	// Hint is a trailing line such as a paging suggestion.
 	Hint string
+	// Extra holds members that belong beside the rows in --json and --raw
+	// output but are not rows themselves — search's counts and ranges. When it
+	// is empty, and it is empty for every command but search, the JSON
+	// renderer writes exactly the one-object-per-row stream it has always
+	// written; when it is not, it appends one closing object carrying these
+	// members. Nothing in table mode reads it: the same values ride in Hint
+	// there.
+	Extra map[string]json.RawMessage
 }
 
 // Stream is a lazily produced result set. Next returns the next row; ok is

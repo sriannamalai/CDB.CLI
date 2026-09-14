@@ -42,3 +42,21 @@ func (e *ConnectionError) Unwrap() error { return e.Err }
 func Connectionf(cause error, format string, args ...any) *ConnectionError {
 	return &ConnectionError{Message: fmt.Sprintf(format, args...), Err: cause}
 }
+
+// SentenceError is a failure cdb phrased itself, where the server's own words
+// would be worse than useless: "service unavailable" says nothing about
+// Clouseau, and "missing" says nothing about Nouveau being switched off.
+type SentenceError struct{ Text string }
+
+func (e *SentenceError) Error() string { return e.Text }
+
+// Errorf builds one. It is neither a usage error nor a connection failure, so
+// internal/cli.ExitCode gives it exit 1 — the code every other server-side
+// refusal uses. cause is deliberately not wrapped with %w: a *couch.Error that
+// stayed reachable through errors.As would be re-rendered by internal/render's
+// plainSentence — a 503 by its ">= 500" arm, a 400 by its own — and the
+// sentence composed here would never be seen.
+func Errorf(cause error, format string, args ...any) error {
+	_ = cause
+	return &SentenceError{Text: fmt.Sprintf(format, args...)}
+}

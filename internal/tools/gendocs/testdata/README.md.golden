@@ -38,6 +38,7 @@ before it acts, unless `--yes` is given.
 | [`restore`](restore.md) |  | Load a dump file into a database |  |
 | [`rm`](rm.md) |  | Delete a document or an attachment | destructive |
 | [`rmdir`](rmdir.md) |  | Delete a database and everything in it | destructive |
+| [`search`](search.md) |  | Run a full-text query against a search index |  |
 | [`session`](session.md) |  | Show the current user, roles and server version |  |
 | [`tail`](tail.md) |  | Read a database's changes feed |  |
 

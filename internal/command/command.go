@@ -85,6 +85,20 @@ func (i Invocation) StringSlice(name string) []string {
 	return v
 }
 
+// StringArray reads a repeated string flag whose values are taken whole. It is
+// StringSlice's sibling for values that may contain a comma of their own — a
+// drilldown value, say — which StringSlice would split in two.
+func (i Invocation) StringArray(name string) []string {
+	if i.Flags == nil {
+		return nil
+	}
+	v, err := i.Flags.GetStringArray(name)
+	if err != nil {
+		return nil
+	}
+	return v
+}
+
 // Changed reports whether the caller set the flag explicitly.
 func (i Invocation) Changed(name string) bool {
 	if i.Flags == nil {

@@ -18,6 +18,7 @@ func Default() *Registry {
 	r.Register(Fetch())
 	r.Register(Find())
 	r.Register(Query())
+	r.Register(Search())
 	r.Register(Tail())
 	r.Register(Mkdir())
 	r.Register(Rmdir())
