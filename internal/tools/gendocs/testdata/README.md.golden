@@ -16,6 +16,7 @@ before it acts, unless `--yes` is given.
 | [`cat`](cat.md) |  | Print a document or an attachment |  |
 | [`cd`](cd.md) |  | Change the current path |  |
 | [`clear`](clear.md) |  | Clear the screen | shell only |
+| [`compact`](compact.md) |  | Reclaim space by compacting a database or its view indexes | destructive |
 | [`config`](config.md) |  | Show and change the server configuration |  |
 | [`conflicts`](conflicts.md) |  | List conflicted documents, or the conflicting revisions of one document |  |
 | [`connect`](connect.md) |  | Open a connection to a server |  |
