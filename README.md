@@ -361,6 +361,30 @@ Keeping the cookie and default handlers means username-and-password auth keeps
 working alongside the token. The test skips unless both `CDB_TEST_URL` and
 `CDB_TEST_JWT_SECRET` are set.
 
+The proxy integration test needs a server with
+`proxy_authentication_handler` in its chain and a shared secret, which is not
+CouchDB's default either. Which config section holds the secret is a version
+question: 3.4 and later read `[chttpd_auth]`, everything before it reads
+`[couch_httpd_auth]`, so write both and the same command works on any supported
+server. The handler list is read at start-up, so restart afterwards:
+
+```
+for section in chttpd_auth couch_httpd_auth; do
+  curl -X PUT "http://admin:password@localhost:15984/_node/_local/_config/$section/secret" -d '"proxysecret"'
+  curl -X PUT "http://admin:password@localhost:15984/_node/_local/_config/$section/proxy_use_secret" -d '"true"'
+done
+curl -X PUT "http://admin:password@localhost:15984/_node/_local/_config/chttpd/authentication_handlers" \
+  -d '"{chttpd_auth, proxy_authentication_handler}, {chttpd_auth, cookie_authentication_handler}, {chttpd_auth, jwt_authentication_handler}, {chttpd_auth, default_authentication_handler}"'
+docker restart cdb-test
+CDB_TEST_URL=http://localhost:15984/ CDB_TEST_PROXY_SECRET=proxysecret go test ./internal/command/
+```
+
+The test skips unless both `CDB_TEST_URL` and `CDB_TEST_PROXY_SECRET` are set.
+There is no version gate: the handler exists on every supported server. Which
+digest it verifies differs — 3.4 and later take HMAC-SHA256 or HMAC-SHA1, older
+servers only SHA-1 — and cdb finds that out for itself, saving the answer as
+the profile's `proxy_hash`.
+
 CI pins `CDB_KEYRING_BACKEND=file` so tests never touch a real OS keychain, and
 runs `gofmt -l .`, `go vet ./...` and `GOOS=windows go vet ./...` as gates.
 
