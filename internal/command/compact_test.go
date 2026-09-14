@@ -111,6 +111,24 @@ func TestCompactWatchPostsAndReturnsALiveStream(t *testing.T) {
 	}
 }
 
+func TestCompactWatchWithoutATerminalStartsNothing(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_compact", 202, `{"ok":true}`)
+	s := connected(t, srv)
+	s.Prefs.Yes = true
+	_, err := invoke(t, Compact(), s, "/movies", "--watch")
+	var ue *UsageError
+	if !errors.As(err, &ue) {
+		t.Fatalf("error = %v, want a usage error", err)
+	}
+	if !strings.Contains(err.Error(), "--watch needs a terminal") {
+		t.Errorf("error = %v", err)
+	}
+	if srv.Last("POST", "/movies/_compact") != nil {
+		t.Error("the compaction was started before the terminal check refused")
+	}
+}
+
 func TestCompactWatchFollowsTheTaskAndSaysWhenItEnds(t *testing.T) {
 	srv := couchtest.New(t)
 	srv.JSONSeq("GET", "/_active_tasks", 200,

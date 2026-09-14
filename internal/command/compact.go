@@ -74,6 +74,14 @@ $ cdb compact /movies --ddoc by_year --cleanup --yes`,
 				ddoc = "_design/" + ddoc
 			}
 
+			// The terminal check comes before the confirmation and before
+			// anything is posted, the way "tasks --watch" gates itself
+			// (tasks.go): a usage error means "nothing happened", so it must
+			// not be returned after the compaction has already started.
+			if inv.Bool("watch") && !s.Prefs.Interactive {
+				return nil, Usagef("compact", "--watch needs a terminal; drop it to start the compaction and return")
+			}
+
 			prompt := fmt.Sprintf("Compact %s?", t.Database)
 			if ddoc != "" {
 				prompt = fmt.Sprintf("Compact the views of %s in %s?", ddoc, t.Database)
@@ -99,9 +107,6 @@ $ cdb compact /movies --ddoc by_year --cleanup --yes`,
 			}
 
 			if inv.Bool("watch") {
-				if !s.Prefs.Interactive {
-					return nil, Usagef("compact", "--watch needs a terminal; drop it to start the compaction and return")
-				}
 				return watchCompaction(ctx, s, t.Database, what), nil
 			}
 			text := fmt.Sprintf("Compaction of %s started.", what)
