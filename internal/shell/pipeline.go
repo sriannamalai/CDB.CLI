@@ -326,9 +326,15 @@ func (sh *Shell) connectFor(ctx context.Context, line Line) error {
 }
 
 // feedStage runs one stage that is not the last, writing every value it
-// produces to dst. report is called once with whether this stage's own result
-// is live, before the first value is sent, so that the last stage can decide
-// how to render without waiting for a feed that may never end.
+// produces to dst. report is called once, before the first value is sent, with
+// whether this stage is a live source — a feed with no end — so that the last
+// stage can decide how to render without waiting for a feed that may never
+// end.
+//
+// Only a stage that reads no pipeline can be that source. put, rm and cat
+// answer with a live stream wherever they sit, because the stage above them
+// may be a feed; taken as a source of their own they would make "ls | cat |
+// .id" live, and a line with an end would never be paged.
 func (sh *Shell) feedStage(ctx context.Context, st Stage, src <-chan json.RawMessage, dst chan<- json.RawMessage, report func(live bool)) error {
 	if st.Argv == nil {
 		f, err := compileFilter(st.Expr, sh.bindings())
@@ -336,7 +342,7 @@ func (sh *Shell) feedStage(ctx context.Context, st Stage, src <-chan json.RawMes
 			return err
 		}
 		// A jq stage is never a source of its own: it is live exactly when
-		// something above it is, which the stage above has already said.
+		// the source above it is, which that stage has already said.
 		report(false)
 		for {
 			in, ok, err := receive(ctx, src)
@@ -358,7 +364,7 @@ func (sh *Shell) feedStage(ctx context.Context, st Stage, src <-chan json.RawMes
 	if err != nil {
 		return err
 	}
-	report(isLive(res))
+	report(src == nil && isLive(res))
 	return streamResult(ctx, res, func(v json.RawMessage) error { return send(ctx, dst, v) })
 }
 

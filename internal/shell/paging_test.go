@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/sriannamalai/CDB.CLI/internal/command"
@@ -194,4 +195,92 @@ func TestAJQFeedStageReportsNotLive(t *testing.T) {
 	if !reported || got {
 		t.Errorf("reported %v (reported=%v), want false", got, reported)
 	}
+}
+
+// A middle put, rm or cat answers with a live stream by design, because the
+// stage above it may be a feed. That is not a reason to call the line live:
+// "ls | cat | .id" has an end, and is paged.
+func TestAMiddleConsumerIsNotALiveSource(t *testing.T) {
+	var out bytes.Buffer
+	sh := pipeShell(t, &out, liveConsumer("cat"))
+	dst := make(chan json.RawMessage, stageBuffer)
+	var got, reported bool
+	st := Stage{Argv: []string{"cat"}}
+	err := sh.feedStage(context.Background(), st, closedSource(`{"id":"a"}`), dst, func(live bool) {
+		got, reported = live, true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reported || got {
+		t.Errorf("reported %v (reported=%v), want false: only a source stage is live", got, reported)
+	}
+}
+
+// The three-stage shapes the rule is for, run the way execute runs them: every
+// producer reporting into one liveness, the last stage asking it. A finite
+// source leaves the last stage paged however many consumers sit between it and
+// the end; a feed keeps it live.
+func TestAThreeStageLineTakesItsLivenessFromTheSource(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line string
+		want bool
+	}{
+		// "ls | cat | .id" and "tail --follow | cat | .id" in stub form.
+		{"finite", "emit | cat | .id", false},
+		{"live", "feed | cat | .id", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			emit, _ := emitter("emit", `{"id":"a"}`)
+			sh := pipeShell(t, &out, emit, liveEmitter("feed", `{"id":"a"}`), liveConsumer("cat"))
+			if got := lastStageLiveness(t, sh, tc.line); got != tc.want {
+				t.Errorf("the last stage of %q is live = %v, want %v", tc.line, got, tc.want)
+			}
+		})
+	}
+}
+
+// lastStageLiveness runs every stage of a line but the last exactly as execute
+// does — each producer reporting once into one liveness — and answers whether
+// the last stage would be rendered live.
+func lastStageLiveness(t *testing.T, sh *Shell, input string) bool {
+	t.Helper()
+	line, err := Parse(input, sh.isCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var (
+		sources liveness
+		wg      sync.WaitGroup
+		in      <-chan json.RawMessage
+	)
+	total := len(line.Stages)
+	for i := 0; i < total-1; i++ {
+		out := make(chan json.RawMessage, stageBuffer)
+		src, dst, n := in, out, i
+		wg.Add(1)
+		sources.pending.Add(1)
+		go func() {
+			defer wg.Done()
+			defer close(dst)
+			reported := sync.OnceFunc(sources.pending.Done)
+			defer reported()
+			_ = sh.feedStage(ctx, line.Stages[n], src, dst, func(live bool) {
+				sources.report(live)
+				reported()
+			})
+		}()
+		in = out
+	}
+	res, err := sh.lastResult(ctx, line.Stages[total-1], in, sources.wait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	wg.Wait()
+	return isLive(res)
 }
