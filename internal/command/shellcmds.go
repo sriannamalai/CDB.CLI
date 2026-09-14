@@ -69,6 +69,11 @@ an object carrying "_id" or "id", or an absolute "/db/id" path, which
 overrides the stage's own database. The database may be left out when the
 current directory is inside one.
 
+A reference is not a document: "ls | put /copies" is refused with "value 1 is
+a listing row, not a document; pipe it through cat first", because the rows of
+a listing are ids and revisions, not the documents themselves. "ls | cat | put
+/copies" is the line that copies.
+
 Ctrl-C cancels the whole line. When a stage fails the others stop and the
 sentence says which: "stage 2 (put): ...". "--json", "--yes", "--verbose",
 "--anonymous" and "--replication-url" are read from the first stage and apply

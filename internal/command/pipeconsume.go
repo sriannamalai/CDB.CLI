@@ -78,11 +78,24 @@ func nextBatch(ctx context.Context, p *Pipe, seen *int, check func(n int, v json
 }
 
 // requireObject checks that a piped value is a JSON object, the only thing
-// _bulk_docs can be given.
+// _bulk_docs can be given, and that it is not a listing row.
+//
+// A row of ls, find or a view is an object too — {"id":…,"rev":…} — so
+// "ls | put /dst" used to write the listing itself into the target as junk
+// documents with the ids of the originals. Exactly those two keys and nothing
+// else is a reference, never a document anybody meant to write; the stage that
+// turns one into a document is cat.
 func requireObject(n int, v json.RawMessage) (json.RawMessage, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(v, &obj); err != nil || obj == nil {
 		return nil, Errorf(nil, "value %d is not a JSON object", n)
+	}
+	if len(obj) == 2 {
+		_, hasID := obj["id"]
+		_, hasRev := obj["rev"]
+		if hasID && hasRev {
+			return nil, Errorf(nil, "value %d is a listing row, not a document; pipe it through cat first", n)
+		}
 	}
 	return v, nil
 }

@@ -889,6 +889,11 @@ produce: a document id, an object carrying `_id` or `id`, or an absolute
 left out when the current directory is inside one; at `/` the answer is
 `put needs a database path when the current directory is /`.
 
+A reference is not a document. `ls | put /copies` is refused — `value 1 is a
+listing row, not a document; pipe it through cat first` — because a listing
+row is an id and a revision, not the document itself. `ls | cat | put /copies`
+is the line that copies.
+
 Piping into a command that reads no pipeline is a mistake, not a silent drop:
 `mkdir does not read a pipeline.`
 
