@@ -111,18 +111,27 @@ func requireAbsent(t *testing.T, sh *Shell, path string) {
 	}
 }
 
-// waitForOutput bounded-polls out for substr to appear, in 50ms steps,
-// failing if the pipeline ends first or the deadline passes. No sleep-based
-// race: the caller learns the moment the text shows up, or why it didn't.
-func waitForOutput(t *testing.T, out *bytes.Buffer, done <-chan error, substr string, timeout time.Duration) {
+// pollForDoc bounded-polls the server, in 50ms steps, until path holds a
+// document with id wantID, failing if the pipeline ends first or the
+// deadline passes. It reads through reader — a shell of its own, never the
+// one running the pipeline under test, since a session is not safe for
+// concurrent use — so this is a fresh read of real server state each time,
+// not a check of anything the pipeline printed.
+func pollForDoc(t *testing.T, reader *Shell, done <-chan error, path, wantID string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.After(timeout)
-	for !strings.Contains(out.String(), substr) {
+	for {
+		if vals, err := reader.Capture(context.Background(), "cat "+path); err == nil && len(vals) == 1 {
+			var doc liveDoc
+			if json.Unmarshal(vals[0], &doc) == nil && doc.ID == wantID {
+				return
+			}
+		}
 		select {
 		case err := <-done:
-			t.Fatalf("the pipeline ended before %q arrived: %v; output %q", substr, err, out.String())
+			t.Fatalf("the pipeline ended before %s appeared: %v", path, err)
 		case <-deadline:
-			t.Fatalf("%q did not arrive within %s; output %q", substr, timeout, out.String())
+			t.Fatalf("%s did not appear within %s", path, timeout)
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
@@ -193,7 +202,13 @@ func TestLiveLsIntoRm(t *testing.T) {
 }
 
 func TestLiveTailFollowIntoPut(t *testing.T) {
-	sh, out := liveShell(t)
+	// sh runs the pipeline under test and nothing else touches it or its
+	// output buffer while that pipeline is running in its own goroutine: a
+	// session is not safe for concurrent use, and reading sh's stdout buffer
+	// from the test goroutine while the pipeline writes it would race. The
+	// assertions below poll fresh server state instead, through shells of
+	// their own.
+	sh, _ := liveShell(t)
 	src := liveDatabase(t, sh)
 	dst := src + "-audit"
 	if err := sh.RunLine(context.Background(), "mkdir /"+dst); err != nil {
@@ -204,7 +219,6 @@ func TestLiveTailFollowIntoPut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	out.Reset()
 	go func() {
 		// --since 0 replays src's existing documents (CouchDB answers a bare
 		// integer --since by replaying from the beginning) before following
@@ -214,14 +228,15 @@ func TestLiveTailFollowIntoPut(t *testing.T) {
 		done <- sh.RunLine(ctx, fmt.Sprintf(
 			`tail /%s --follow --since 0 --include-docs | .doc | del(._rev) | put /%s`, src, dst))
 	}()
-	waitForOutput(t, out, done, "m0", 5*time.Second)
+	reader, _ := liveShell(t)
+	pollForDoc(t, reader, done, "/"+dst+"/m0", "m0", 5*time.Second)
 
 	writer, _ := liveShell(t)
 	path := putDocFile(t, `{"_id":"m3","title":"new","year":2010}`)
 	if err := writer.RunLine(context.Background(), fmt.Sprintf(`put /%s/m3 %s`, src, path)); err != nil {
 		t.Fatal(err)
 	}
-	waitForOutput(t, out, done, "m3", 20*time.Second)
+	pollForDoc(t, reader, done, "/"+dst+"/m3", "m3", 20*time.Second)
 
 	cancel()
 	<-done
