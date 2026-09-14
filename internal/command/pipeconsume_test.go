@@ -249,6 +249,39 @@ func TestRmPipelineConfirmsBeforeReadingThePipe(t *testing.T) {
 	}
 }
 
+func TestCatPipelineStreamsTheDocuments(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_all_docs", 200, `{"rows":[
+		{"id":"a","key":"a","value":{"rev":"1-x"},"doc":{"_id":"a","_rev":"1-x","title":"Amelie"}}]}`)
+	s := connected(t, srv)
+	rows, err := piped(t, Cat(), s, []string{"/movies"}, `"a"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0][0], "Amelie") {
+		t.Fatalf("rows = %v", rows)
+	}
+}
+
+func TestCatPipelineNamesAMissingDocument(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_all_docs", 200, `{"rows":[{"key":"gone","error":"not_found"}]}`)
+	s := connected(t, srv)
+	_, err := piped(t, Cat(), s, []string{"/movies"}, `"gone"`)
+	if err == nil || err.Error() != `"gone" is not in movies` {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCatPipelineRejectsAValueThatNamesNoDocument(t *testing.T) {
+	srv := couchtest.New(t)
+	s := connected(t, srv)
+	_, err := piped(t, Cat(), s, []string{"/movies"}, `"a"`, `3`)
+	if err == nil || !strings.Contains(err.Error(), "value 2 is not a document reference") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 // nextBatch caps a batch at pipeBatch (100): 101 references piped into rm
 // must split into two keyed _all_docs lookups and two _bulk_docs deletes,
 // not one of each.

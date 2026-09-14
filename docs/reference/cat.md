@@ -7,16 +7,24 @@ Print a document or an attachment
 ## Synopsis
 
 ```
-cdb cat <path> [flags]
+cdb cat [<path>] [flags]
 ```
 
 ## Description
 
 Print a document or an attachment.
 
+In a later stage of a shell pipeline, cat emits every document the stage above
+named — an id, an object carrying "_id" or "id", or an absolute "/db/id" path —
+fetched in batches of 100. The path may then be left out, and the ids are read
+from the database the current directory is in.
+
+Reads a pipeline: references. In a later stage of a shell pipeline this
+command consumes the previous stage's values.
+
 ## Arguments
 
-Takes exactly 1 argument.
+Takes at most 1 argument.
 
 ## Flags
 

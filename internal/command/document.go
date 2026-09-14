@@ -33,17 +33,28 @@ func Cat() Command {
 
 $ cdb cat /movies/conflicted --conflicts
 $ cdb cat /movies/tt0211915/poster.txt > poster.txt`,
-		Usage:       "<path>",
-		MinArgs:     1,
+		Usage:       "[<path>]",
+		MinArgs:     0,
 		MaxArgs:     1,
 		NeedsClient: true,
 		Complete:    completePath,
+		Pipe:        PipeReferences,
 		Flags: func(fs *pflag.FlagSet) {
 			fs.String("rev", "", "revision to read")
 			fs.Bool("revs", false, "include the revision history")
 			fs.Bool("conflicts", false, "include conflicting revisions")
 		},
+		Details: `In a later stage of a shell pipeline, cat emits every document the stage above
+named — an id, an object carrying "_id" or "id", or an absolute "/db/id" path —
+fetched in batches of 100. The path may then be left out, and the ids are read
+from the database the current directory is in.`,
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+			if inv.Pipe != nil {
+				return catPipeline(ctx, s, inv)
+			}
+			if inv.Arg(0) == "" {
+				return nil, Usagef("cat", "expected at least 1 argument(s), got 0\nusage: cat [<path>]")
+			}
 			t, err := s.Resolve(inv.Arg(0))
 			if err != nil {
 				return nil, err

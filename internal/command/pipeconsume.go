@@ -392,3 +392,56 @@ func rmPipeline(ctx context.Context, s *session.Session, inv Invocation) (Result
 		},
 	}, nil
 }
+
+// catPipeline emits every document a pipeline names. An id the database does
+// not hold ends the stage: "cat" was asked for a document, and there is none.
+func catPipeline(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
+	db, err := pipeDatabase(s, "cat", inv.Arg(0))
+	if err != nil {
+		return nil, err
+	}
+	var (
+		seen    int
+		pending []json.RawMessage
+		done    bool
+	)
+	return Stream{
+		Live:    true,
+		Columns: []Column{{Title: "document"}},
+		Next: func() (Row, bool, error) {
+			for len(pending) == 0 {
+				if done {
+					return Row{}, false, nil
+				}
+				refs, more, err := nextRefs(ctx, inv.Pipe, &seen, db)
+				if err != nil {
+					return Row{}, false, err
+				}
+				if !more {
+					done = true
+					return Row{}, false, nil
+				}
+				order, groups := byDatabase(refs)
+				for _, name := range order {
+					keys := make([]string, 0, len(groups[name]))
+					for _, r := range groups[name] {
+						keys = append(keys, r.ID)
+					}
+					rows, err := s.Client.AllDocsByKeys(ctx, name, keys, true)
+					if err != nil {
+						return Row{}, false, err
+					}
+					for _, row := range rows {
+						if row.Error != "" || len(row.Doc) == 0 {
+							return Row{}, false, Errorf(nil, "%q is not in %s", row.ID, name)
+						}
+						pending = append(pending, row.Doc)
+					}
+				}
+			}
+			doc := pending[0]
+			pending = pending[1:]
+			return Row{Cells: []string{string(doc)}, JSON: doc}, true, nil
+		},
+	}, nil
+}

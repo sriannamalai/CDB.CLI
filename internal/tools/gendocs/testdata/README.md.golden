@@ -13,7 +13,7 @@ before it acts, unless `--yes` is given.
 |---|---|---|---|
 | [`attach`](attach.md) |  | Upload a file as an attachment |  |
 | [`backup`](backup.md) |  | Write a database, with attachments, to a dump file |  |
-| [`cat`](cat.md) |  | Print a document or an attachment |  |
+| [`cat`](cat.md) |  | Print a document or an attachment | reads a pipeline |
 | [`cd`](cd.md) |  | Change the current path |  |
 | [`clear`](clear.md) |  | Clear the screen | shell only |
 | [`cluster`](cluster.md) |  | Report the cluster state and configure a single node |  |
