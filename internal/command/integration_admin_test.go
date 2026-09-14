@@ -2,9 +2,12 @@ package command
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every live test in this file opens its session with integrationSession,
@@ -150,5 +153,66 @@ func TestSecurityRoundTripAgainstALiveServer(t *testing.T) {
 		if strings.Join(item.Cells, "/") == "members/names/alice" {
 			t.Fatal("alice is still a member after --remove-member")
 		}
+	}
+}
+
+// TestCompactAgainstALiveServer compacts a database with a few hundred
+// documents, which is §10's case: big enough that CouchDB has work to do,
+// small enough that the test finishes.
+func TestCompactAgainstALiveServer(t *testing.T) {
+	if os.Getenv("CDB_TEST_URL") == "" {
+		t.Skip("CDB_TEST_URL is not set")
+	}
+	s := integrationSession(t)
+	s.Prefs.Yes = true
+	ctx := context.Background()
+	const db = "cdb-test-compact"
+	if err := s.Client.CreateDatabase(ctx, db, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Client.DestroyDatabase(context.Background(), db) })
+
+	// Write each document twice, so compaction has old revisions to drop.
+	for i := 0; i < 300; i++ {
+		id := fmt.Sprintf("doc-%03d", i)
+		rev, err := s.Client.PutDocument(ctx, db, id, json.RawMessage(`{"n":1}`), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Client.PutDocument(ctx, db, id, json.RawMessage(`{"n":2}`), rev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := invoke(t, Compact(), s, "/"+db, "--cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Compaction of " + db + " started. Orphaned view indexes are being cleaned up as well."
+	if msg := res.(Message).Text; msg != want {
+		t.Errorf("message = %q, want %q", msg, want)
+	}
+
+	// The watch: drive it directly, because --watch needs a terminal and the
+	// test has none. A short window keeps the test bounded whether or not the
+	// compaction is still running by the time the first poll lands.
+	st := watchCompactionWith(ctx, s, db, db, 200*time.Millisecond, 10*time.Second, time.Now)
+	lines := 0
+	for {
+		row, ok, err := st.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			break
+		}
+		lines++
+		t.Logf("watch row: %v", row.Cells)
+		if lines > 200 {
+			t.Fatal("the watch did not end")
+		}
+	}
+	if lines == 0 {
+		t.Fatal("the watch produced no rows at all; it must at least say the compaction finished")
 	}
 }
