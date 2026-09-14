@@ -833,7 +833,9 @@ admin@localhost:5984:/> cat /movies/tt2543164 | .title
 
 A line ending in a backslash continues on the next line, and so does one with
 an unclosed quote or an unbalanced `{` or `[` — which is what makes a long
-Mango selector typeable. Ctrl-C abandons the running command and returns to
+Mango selector typeable. A backslash elsewhere escapes the next character, so
+a Windows path goes in single quotes (`run 'C:\scripts\nightly.cdb'`) or uses
+forward slashes. Ctrl-C abandons the running command and returns to
 the prompt; Ctrl-D at an empty prompt exits, as do `exit` and `quit`; `clear`
 clears the screen. Inside the shell only `--json`, `--yes`, `--verbose`,
 `--anonymous` and `--replication-url` may be typed on a line, each applying to
