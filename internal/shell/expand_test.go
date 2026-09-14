@@ -139,3 +139,17 @@ func TestBindingsReachAJQStage(t *testing.T) {
 		t.Errorf("values = %v", vals)
 	}
 }
+
+func TestExpandBackslashProtectsADollar(t *testing.T) {
+	v := session.NewVars()
+	v.Set("a", session.StringValue("no"))
+	for _, in := range []string{`put \$a`, `put "\$a"`} {
+		got, err := expandLine(t, in, v, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[1] != "$a" {
+			t.Errorf("%s -> %q; a backslash protects a dollar", in, got[1])
+		}
+	}
+}

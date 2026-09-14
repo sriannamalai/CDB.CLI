@@ -23,9 +23,9 @@ var ErrTrailingPipe = errors.New("a line cannot end with |")
 type Stage struct {
 	Argv []string
 	// Literal[i] reports that some part of word i was written inside single
-	// quotes. Such a word is never variable-expanded: single quotes are
-	// literal, and that is how a Mango selector or a jq expression keeps a "$"
-	// of its own.
+	// quotes, or that a backslash there protected a "$". Such a word is never
+	// variable-expanded: single quotes are literal, and that is how a Mango
+	// selector or a jq expression keeps a "$" of its own.
 	Literal []bool
 	Expr    string
 	// Capture is the raw pipeline text of a "set <name> = <pipeline>" line,
@@ -155,6 +155,13 @@ func Parse(input string, isCommand func(name string) bool) (Line, error) {
 			cur.WriteRune(r)
 			hasWord = true
 			escaped = false
+			// A backslash protects a dollar the way single quotes do. The
+			// whole word is marked rather than the one rune: the mark is one
+			// bool per word, and not expanding is the direction that cannot
+			// corrupt what the operator escaped on purpose.
+			if r == '$' {
+				wasLiteral = true
+			}
 		case quote == '\'':
 			if r == '\'' {
 				quote = 0
