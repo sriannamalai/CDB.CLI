@@ -53,6 +53,9 @@ func piped(t *testing.T, c Command, s *session.Session, argv []string, vals ...s
 
 func TestPutPipelineWritesAndReportsEveryDocument(t *testing.T) {
 	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_all_docs", 200, `{"rows":[
+		{"key":"a","error":"not_found"},
+		{"key":"b","error":"not_found"}]}`)
 	srv.JSON("POST", "/movies/_bulk_docs", 201, `[
 		{"ok":true,"id":"a","rev":"1-x"},
 		{"id":"b","error":"conflict","reason":"Document update conflict."}]`)
@@ -75,6 +78,7 @@ func TestPutPipelineWritesAndReportsEveryDocument(t *testing.T) {
 
 func TestPutPipelineTakesTheDatabaseFromTheCurrentDirectory(t *testing.T) {
 	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_all_docs", 200, `{"rows":[{"key":"a","error":"not_found"}]}`)
 	srv.JSON("POST", "/movies/_bulk_docs", 201, `[{"ok":true,"id":"a","rev":"1-x"}]`)
 	s := connected(t, srv)
 	s.SetPath("/movies")
@@ -84,6 +88,57 @@ func TestPutPipelineTakesTheDatabaseFromTheCurrentDirectory(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0][0] != "a" {
 		t.Errorf("rows = %v", rows)
+	}
+}
+
+func TestPutPipelineDropsAnIncomingRevision(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_all_docs", 200, `{"rows":[{"key":"a","error":"not_found"}]}`)
+	srv.JSON("POST", "/movies/_bulk_docs", 201, `[{"ok":true,"id":"a","rev":"1-x"}]`)
+	s := connected(t, srv)
+	s.Prefs.Yes = true
+	rows, err := piped(t, Put(), s, []string{"/movies"}, `{"_id":"a","_rev":"9-stale"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0][2] != "ok" {
+		t.Fatalf("rows = %v", rows)
+	}
+	body := srv.Last("POST", "/movies/_bulk_docs").Body
+	if strings.Contains(string(body), "9-stale") {
+		t.Errorf("request body = %s; an incoming _rev must not reach the target", body)
+	}
+}
+
+func TestPutPipelineOverwritesTheTargetsCurrentRevision(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_all_docs", 200, `{"rows":[{"id":"a","key":"a","value":{"rev":"5-existing"}}]}`)
+	srv.JSON("POST", "/movies/_bulk_docs", 201, `[{"ok":true,"id":"a","rev":"6-new"}]`)
+	s := connected(t, srv)
+	rows, err := piped(t, Put(), s, []string{"/movies"}, `{"_id":"a","name":"alpha"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0][1] != "6-new" || rows[0][2] != "ok" {
+		t.Fatalf("rows = %v", rows)
+	}
+	body := srv.Last("POST", "/movies/_bulk_docs").Body
+	if !strings.Contains(string(body), "5-existing") {
+		t.Errorf("request body = %s; put must write over the target's current revision", body)
+	}
+}
+
+func TestPutPipelineStillReportsAGenuineConflict(t *testing.T) {
+	srv := couchtest.New(t)
+	srv.JSON("POST", "/movies/_all_docs", 200, `{"rows":[{"id":"a","key":"a","value":{"rev":"5-existing"}}]}`)
+	srv.JSON("POST", "/movies/_bulk_docs", 201, `[{"id":"a","error":"conflict","reason":"Document update conflict."}]`)
+	s := connected(t, srv)
+	rows, err := piped(t, Put(), s, []string{"/movies"}, `{"_id":"a"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0][2] != "conflict" {
+		t.Fatalf("rows = %v; a concurrent write racing put is still a conflict row", rows)
 	}
 }
 

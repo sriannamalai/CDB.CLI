@@ -102,8 +102,12 @@ Wrote /movies/_design/app at revision 1-1285d46491b0e663da91773703a00996.`,
 		Details: `In a later stage of a shell pipeline, put writes every document the stage
 above produced, in batches of 100, and reports one row per document with the
 id, the new revision and a status of "ok" or the server's own word for a
-document it refused. The path may then be left out, and the documents go to
-the database the current directory is in.`,
+document it refused. An incoming revision is dropped: put looks up each
+batch's ids in the target database first and writes over the current
+revision when one exists, so a pipeline copies and updates without
+conflicting and without asking to confirm the overwrite. The path may then
+be left out, and the documents go to the database the current directory is
+in.`,
 		Run: func(ctx context.Context, s *session.Session, inv Invocation) (Result, error) {
 			if inv.Pipe != nil {
 				return putPipeline(ctx, s, inv)
