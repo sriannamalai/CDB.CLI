@@ -300,10 +300,11 @@ cdb completion powershell | Out-String | Invoke-Expression
 | `conflicts`, `resolve` | Find and resolve conflicting revisions |
 | `backup`, `restore` | Attachment-safe dump and load, resumable |
 | `replicate`, `replications` | Start and watch replications |
+| `tasks`, `config`, `users`, `security`, `compact`, `cluster` | Administer the server: active tasks, configuration, accounts, database security, compaction, single-node setup |
 | `help`, `history`, `clear`, `exit` | Shell only |
 
-Destructive commands (`rm`, `rmdir`, `resolve`, `replications cancel`) ask
-before acting. Pass `--yes` to skip the prompt in scripts. `rmdir` also asks you
+Destructive commands (`rm`, `rmdir`, `resolve`, `replications cancel`, `users rm`,
+`config unset`, `compact`, `cluster setup`) ask before acting. Pass `--yes` to skip the prompt in scripts. `rmdir` also asks you
 to retype the database name. `resolve` shows how each conflicting revision
 differs from the current one before it asks which to keep; `--diff-full` prints
 each revision in full instead.
