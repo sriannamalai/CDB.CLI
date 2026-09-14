@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,6 +75,59 @@ func liveDatabase(t *testing.T, sh *Shell) string {
 	return name
 }
 
+// liveDoc is the subset of fields liveDatabase's documents carry.
+type liveDoc struct {
+	ID    string `json:"_id"`
+	Title string `json:"title"`
+	Year  int    `json:"year"`
+}
+
+// requireDoc fetches path fresh from the server — never from the pipeline's
+// own "ok" report — and asserts its fields, proving the document actually
+// landed with the right content rather than merely that put ran.
+func requireDoc(t *testing.T, sh *Shell, path, wantID, wantTitle string, wantYear int) {
+	t.Helper()
+	vals, err := sh.Capture(context.Background(), "cat "+path)
+	if err != nil {
+		t.Fatalf("cat %s: %v", path, err)
+	}
+	if len(vals) != 1 {
+		t.Fatalf("cat %s returned %d values, want 1", path, len(vals))
+	}
+	var doc liveDoc
+	if err := json.Unmarshal(vals[0], &doc); err != nil {
+		t.Fatalf("cat %s: %v", path, err)
+	}
+	if doc.ID != wantID || doc.Title != wantTitle || doc.Year != wantYear {
+		t.Errorf("cat %s = %+v, want {%s %s %d}", path, doc, wantID, wantTitle, wantYear)
+	}
+}
+
+// requireAbsent asserts path does not exist on the server, fetched fresh.
+func requireAbsent(t *testing.T, sh *Shell, path string) {
+	t.Helper()
+	if _, err := sh.Capture(context.Background(), "cat "+path); err == nil {
+		t.Errorf("cat %s succeeded; want the document to be absent", path)
+	}
+}
+
+// waitForOutput bounded-polls out for substr to appear, in 50ms steps,
+// failing if the pipeline ends first or the deadline passes. No sleep-based
+// race: the caller learns the moment the text shows up, or why it didn't.
+func waitForOutput(t *testing.T, out *bytes.Buffer, done <-chan error, substr string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for !strings.Contains(out.String(), substr) {
+		select {
+		case err := <-done:
+			t.Fatalf("the pipeline ended before %q arrived: %v; output %q", substr, err, out.String())
+		case <-deadline:
+			t.Fatalf("%q did not arrive within %s; output %q", substr, timeout, out.String())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 func TestLiveFindIntoPut(t *testing.T) {
 	sh, out := liveShell(t)
 	src := liveDatabase(t, sh)
@@ -91,6 +145,9 @@ func TestLiveFindIntoPut(t *testing.T) {
 	if n := strings.Count(out.String(), "ok"); n != 2 {
 		t.Errorf("output = %q; want two written documents", out.String())
 	}
+	requireDoc(t, sh, "/"+dst+"/m1", "m1", "film 1", 2001)
+	requireDoc(t, sh, "/"+dst+"/m2", "m2", "film 2", 2003)
+	requireAbsent(t, sh, "/"+dst+"/m0")
 }
 
 func TestLiveLsCatSelectPut(t *testing.T) {
@@ -110,6 +167,9 @@ func TestLiveLsCatSelectPut(t *testing.T) {
 	if n := strings.Count(out.String(), "ok"); n != 2 {
 		t.Errorf("output = %q; want the two documents before 2002", out.String())
 	}
+	requireDoc(t, sh, "/"+dst+"/m0", "m0", "film 0", 1999)
+	requireDoc(t, sh, "/"+dst+"/m1", "m1", "film 1", 2001)
+	requireAbsent(t, sh, "/"+dst+"/m2")
 }
 
 func TestLiveLsIntoRm(t *testing.T) {
@@ -146,26 +206,23 @@ func TestLiveTailFollowIntoPut(t *testing.T) {
 	done := make(chan error, 1)
 	out.Reset()
 	go func() {
+		// --since 0 replays src's existing documents (CouchDB answers a bare
+		// integer --since by replaying from the beginning) before following
+		// new changes live. Seeing one of liveDatabase's seed documents land
+		// at dst is proof the pipeline is running and consuming — no sleep
+		// needed to "give the feed a moment to be listening".
 		done <- sh.RunLine(ctx, fmt.Sprintf(
-			`tail /%s --follow --include-docs | .doc | del(._rev) | put /%s`, src, dst))
+			`tail /%s --follow --since 0 --include-docs | .doc | del(._rev) | put /%s`, src, dst))
 	}()
-	// Give the feed a moment to be listening, then make exactly one change.
-	time.Sleep(time.Second)
+	waitForOutput(t, out, done, "m0", 5*time.Second)
+
 	writer, _ := liveShell(t)
 	path := putDocFile(t, `{"_id":"m3","title":"new","year":2010}`)
 	if err := writer.RunLine(context.Background(), fmt.Sprintf(`put /%s/m3 %s`, src, path)); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.After(20 * time.Second)
-	for !strings.Contains(out.String(), "m3") {
-		select {
-		case err := <-done:
-			t.Fatalf("the pipeline ended before the change arrived: %v; output %q", err, out.String())
-		case <-deadline:
-			t.Fatalf("no change reached put within 20s; output %q", out.String())
-		case <-time.After(200 * time.Millisecond):
-		}
-	}
+	waitForOutput(t, out, done, "m3", 20*time.Second)
+
 	cancel()
 	<-done
 }
