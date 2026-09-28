@@ -10,7 +10,7 @@ require (
 	github.com/knadh/koanf/parsers/toml v0.1.0
 	github.com/knadh/koanf/providers/confmap v1.0.1
 	github.com/knadh/koanf/providers/file v1.2.1
-	github.com/knadh/koanf/v2 v2.3.6
+	github.com/knadh/koanf/v2 v2.3.7
 	github.com/mattn/go-isatty v0.0.24
 	github.com/reeflective/readline v1.3.1-0.20260802023205-4d8e27a037bd
 	github.com/spf13/cobra v1.10.2
